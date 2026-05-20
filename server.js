@@ -1,0 +1,380 @@
+require('dotenv').config();
+const express         = require('express');
+const session         = require('express-session');
+const passport        = require('passport');
+const DiscordStrategy = require('passport-discord').Strategy;
+const cors            = require('cors');
+const http            = require('http');
+const { Server }      = require('socket.io');
+
+const app    = express();
+const server = http.createServer(app);
+const io     = new Server(server, {
+  cors: { origin: process.env.FRONTEND_URL || 'http://localhost:3000', credentials: true }
+});
+
+const PORT           = process.env.PORT || 3001;
+const FRONTEND_URL   = process.env.FRONTEND_URL || 'http://localhost:3000';
+const SESSION_SECRET = process.env.SESSION_SECRET || 'beanhunt-secret';
+const ADMINS         = (process.env.ADMINS || 'bean,randycabbage,randy cabbage,mcflurry,mihallimou,missingiscool,cuda').toLowerCase().split(',').map(s=>s.trim());
+const VIP_HOSTS      = (process.env.VIP_HOSTS || 'bean,mcflurry,mihallimou,missingiscool,cuda,randycabbage').toLowerCase().split(',').map(s=>s.trim());
+
+function nameOf(user) { return (user?.displayName || user?.username || '').toLowerCase().trim(); }
+function isAdmin(user) { return user ? ADMINS.includes(nameOf(user)) : false; }
+function canEditHunt(user, huntOwnerId) {
+  if (!user) return false;
+  if (isAdmin(user)) return true;
+  if (user.id === huntOwnerId) return true;
+  const hunt = hunts[huntOwnerId];
+  if (!hunt) return false;
+  const name = nameOf(user);
+  const invites = hunt.invitedEditors || [];
+  return invites.includes(name) || invites.includes(user.id);
+}
+function isEquityMember(user, huntOwnerId) {
+  if (!user) return false;
+  const hunt = hunts[huntOwnerId];
+  if (!hunt) return false;
+  const name = nameOf(user);
+  return hunt.equity.some(e => e.name && e.name.toLowerCase().trim() === name);
+}
+
+// ── Middleware ─────────────────────────────────────────────────────
+app.set('trust proxy', 1);
+app.use(cors({ origin: FRONTEND_URL, credentials: true }));
+app.use(express.json());
+app.use(session({
+  secret: SESSION_SECRET, resave: false, saveUninitialized: false,
+  cookie: { secure: true, sameSite: 'none', maxAge: 7 * 24 * 60 * 60 * 1000 }
+}));
+app.use(passport.initialize());
+app.use(passport.session());
+
+// ── Passport ───────────────────────────────────────────────────────
+passport.use(new DiscordStrategy({
+  clientID: process.env.DISCORD_CLIENT_ID,
+  clientSecret: process.env.DISCORD_CLIENT_SECRET,
+  callbackURL: process.env.DISCORD_CALLBACK_URL || `http://localhost:${PORT}/auth/discord/callback`,
+  scope: ['identify']
+}, (access, refresh, profile, done) => done(null, {
+  id: profile.id,
+  username: profile.username,
+  displayName: profile.global_name || profile.username,
+  avatar: profile.avatar
+    ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png`
+    : `https://cdn.discordapp.com/embed/avatars/${parseInt(profile.discriminator||0)%5}.png`
+})));
+passport.serializeUser((u,d) => d(null,u));
+passport.deserializeUser((u,d) => d(null,u));
+
+// ── Auth ───────────────────────────────────────────────────────────
+app.get('/auth/discord', passport.authenticate('discord'));
+app.get('/auth/discord/callback',
+  passport.authenticate('discord', { failureRedirect: `${FRONTEND_URL}/?error=auth` }),
+  (req, res) => {
+    const userData = Buffer.from(JSON.stringify({
+      id: req.user.id, username: req.user.username,
+      displayName: req.user.displayName, avatar: req.user.avatar,
+      isAdmin: isAdmin(req.user)
+    })).toString('base64');
+    res.redirect(`${FRONTEND_URL}/hunt?auth=${encodeURIComponent(userData)}`);
+  }
+);
+app.get('/auth/logout', (req, res) => req.logout(() => res.redirect(FRONTEND_URL)));
+app.get('/auth/me', (req, res) => {
+  if (!req.user) return res.json({ user: null });
+  res.json({ user: { ...req.user, isAdmin: isAdmin(req.user) } });
+});
+
+// ── State ──────────────────────────────────────────────────────────
+const hunts   = {};
+const viewers = {};
+let beanLive  = { isLive: false, title: '', updatedAt: null };
+
+function huntSummary(h) {
+  return {
+    userId: h.user.id, username: h.user.displayName, avatar: h.user.avatar,
+    huntType: h.huntType, isLive: h.isLive, startedAt: h.startedAt, archivedAt: h.archivedAt||null,
+    bonusCount: h.bonuses.length,
+    totalWon: h.bonuses.reduce((s,b)=>s+b.win,0),
+    pot: h.equity.reduce((s,e)=>s+e.amount,0),
+    viewers: viewers[h.user.id]||0,
+    huntMode: h.huntMode||'creating',
+    rolledCount: (h.bonuses||[]).filter(b=>b.win>0).length,
+  };
+}
+function getPublicHunts()  { return Object.values(hunts).filter(h=>h.isLive).map(huntSummary); }
+function getAllHunts()      { return Object.values(hunts).map(huntSummary); }
+function emitHubUpdate()   { io.emit('hub:update', getPublicHunts()); }
+
+function requireAuth(req, res, next)  { if (!req.user) return res.status(401).json({error:'Not authenticated'}); next(); }
+function requireAdmin(req, res, next) { if (!req.user||!isAdmin(req.user)) return res.status(403).json({error:'Admin only'}); next(); }
+
+// ── Public hunt endpoints ──────────────────────────────────────────
+app.get('/api/hunts', (req, res) => res.json(getPublicHunts()));
+
+app.get('/api/hunts/:userId', (req, res) => {
+  const hunt = hunts[req.params.userId];
+  if (!hunt) return res.status(404).json({error:'Hunt not found'});
+  if (!hunt.isLive && !hunt.archivedAt && !(req.user && canEditHunt(req.user, req.params.userId)))
+    return res.status(404).json({error:'Hunt not live'});
+  const canEdit  = req.user ? canEditHunt(req.user, req.params.userId) : false;
+  const canCalls = req.user ? (canEdit || isEquityMember(req.user, req.params.userId)) : false;
+  res.json({ ...hunt, canEdit, canAddCalls: canCalls });
+});
+
+// ── My hunt ────────────────────────────────────────────────────────
+app.get('/api/my-hunt', requireAuth, (req, res) => res.json(hunts[req.user.id] || null));
+
+app.post('/api/my-hunt/start', requireAuth, (req, res) => {
+  const { huntType = 'community' } = req.body;
+  if (huntType === 'vip' && !isAdmin(req.user) && !VIP_HOSTS.includes(nameOf(req.user)))
+    return res.status(403).json({error:'Not authorised for VIP hunts'});
+  hunts[req.user.id] = {
+    user: req.user, isLive: false, startedAt: null, archivedAt: null,
+    huntType, bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating'
+  };
+  res.json({ok:true});
+});
+
+app.post('/api/my-hunt/golive', requireAuth, (req, res) => {
+  if (!hunts[req.user.id]) return res.status(404).json({error:'No hunt'});
+  hunts[req.user.id].isLive    = true;
+  hunts[req.user.id].startedAt = new Date().toISOString();
+  hunts[req.user.id].archivedAt= null;
+  emitHubUpdate();
+  io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
+  res.json({ok:true});
+});
+
+app.post('/api/my-hunt/end', requireAuth, (req, res) => {
+  if (hunts[req.user.id]) {
+    hunts[req.user.id].isLive    = false;
+    hunts[req.user.id].archivedAt= new Date().toISOString();
+    emitHubUpdate();
+    io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
+  }
+  res.json({ok:true});
+});
+
+app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
+  hunts[req.user.id] = { user: req.user, isLive: false, startedAt: null, archivedAt: null,
+    huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating' };
+  emitHubUpdate();
+  res.json({ok:true});
+});
+
+app.put('/api/my-hunt', requireAuth, (req, res) => {
+  if (!hunts[req.user.id]) hunts[req.user.id] = {
+    user: req.user, isLive: false, startedAt: null, archivedAt: null,
+    huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0
+  };
+  const { bonuses, equity, calls, huntType, callLimit, huntMode } = req.body;
+  if (bonuses   !== undefined) hunts[req.user.id].bonuses   = bonuses;
+  if (equity    !== undefined) hunts[req.user.id].equity    = equity;
+  if (calls     !== undefined) hunts[req.user.id].calls     = calls;
+  if (huntType  !== undefined) {
+    if (huntType === 'vip' && !isAdmin(req.user) && !VIP_HOSTS.includes(nameOf(req.user)))
+      return res.status(403).json({error:'Not authorised for VIP hunt'});
+    hunts[req.user.id].huntType = huntType;
+  }
+  if (callLimit !== undefined) hunts[req.user.id].callLimit = callLimit;
+  if (huntMode  !== undefined) hunts[req.user.id].huntMode  = huntMode;
+  io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
+  emitHubUpdate();
+  res.json({ok:true});
+});
+
+// ── Invite editor ──────────────────────────────────────────────────
+app.post('/api/my-hunt/invite', requireAuth, (req, res) => {
+  const { username } = req.body;
+  if (!username) return res.status(400).json({error:'username required'});
+  if (!hunts[req.user.id]) return res.status(404).json({error:'No hunt'});
+  const lower = username.toLowerCase().trim();
+  if (!hunts[req.user.id].invitedEditors) hunts[req.user.id].invitedEditors = [];
+  if (!hunts[req.user.id].invitedEditors.includes(lower))
+    hunts[req.user.id].invitedEditors.push(lower);
+  // Tell everyone watching this hunt to re-fetch their permissions
+  io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
+  res.json({ok:true, invitedEditors: hunts[req.user.id].invitedEditors});
+});
+
+app.delete('/api/my-hunt/invite', requireAuth, (req, res) => {
+  const { username } = req.body;
+  if (!hunts[req.user.id]) return res.status(404).json({error:'No hunt'});
+  hunts[req.user.id].invitedEditors = (hunts[req.user.id].invitedEditors||[])
+    .filter(u => u !== username.toLowerCase().trim());
+  io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
+  res.json({ok:true, invitedEditors: hunts[req.user.id].invitedEditors});
+});
+
+// ── Equity member: add slot call ────────────────────────────────────
+app.post('/api/hunts/:userId/calls', requireAuth, (req, res) => {
+  const hunt = hunts[req.params.userId];
+  if (!hunt) return res.status(404).json({error:'Hunt not found'});
+  if (!canEditHunt(req.user, req.params.userId) && !isEquityMember(req.user, req.params.userId))
+    return res.status(403).json({error:'Not an equity member'});
+
+  const { slot } = req.body;
+  if (!slot?.trim()) return res.status(400).json({error:'Slot name required'});
+
+  // Block equity members (non-editors) from adding calls when rolling
+  if (hunt.huntMode === 'rolling' && !canEditHunt(req.user, req.params.userId))
+    return res.status(403).json({error:'Cannot add calls while the hunt is rolling'});
+
+  // Duplicate check
+  if (hunt.calls.some(c => c.slot.toLowerCase().trim() === slot.toLowerCase().trim()))
+    return res.status(400).json({error:`"${slot}" is already in the queue`});
+
+  // Per-person limit (not applied to hunt owner or admins)
+  const callerName = nameOf(req.user);
+  if (hunt.callLimit > 0 && !canEditHunt(req.user, req.params.userId)) {
+    const myCount = hunt.calls.filter(c => c.user.toLowerCase() === callerName).length;
+    if (myCount >= hunt.callLimit)
+      return res.status(400).json({error:`You've reached the limit of ${hunt.callLimit} calls`});
+  }
+
+  const newCall = { id: Math.random().toString(36).slice(2,8), slot: slot.trim(), user: req.user.displayName||req.user.username, status: 'pending' };
+  // Insert after first 3 pending calls so top 3 stay stable
+  const pendingCalls = hunt.calls.filter(c=>c.status==='pending');
+  const otherCalls   = hunt.calls.filter(c=>c.status!=='pending');
+  const insertAt     = Math.min(3, pendingCalls.length);
+  pendingCalls.splice(insertAt, 0, newCall);
+  hunt.calls = [...pendingCalls, ...otherCalls];
+  io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
+  res.json({ok:true, call: newCall});
+});
+
+// ── Edit any hunt (admin/editor) ───────────────────────────────────
+app.put('/api/hunts/:userId', requireAuth, (req, res) => {
+  if (!canEditHunt(req.user, req.params.userId)) return res.status(403).json({error:'Not authorised'});
+  const hunt = hunts[req.params.userId];
+  if (!hunt) return res.status(404).json({error:'Hunt not found'});
+  const { bonuses, equity, calls, huntType, callLimit, huntMode } = req.body;
+  if (bonuses   !== undefined) hunt.bonuses   = bonuses;
+  if (equity    !== undefined) hunt.equity    = equity;
+  if (calls     !== undefined) hunt.calls     = calls;
+  if (huntType  !== undefined) hunt.huntType  = huntType;
+  if (callLimit !== undefined) hunt.callLimit = callLimit;
+  if (huntMode  !== undefined) hunt.huntMode  = huntMode;
+  io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
+  emitHubUpdate();
+  res.json({ok:true});
+});
+
+// ── Admin ──────────────────────────────────────────────────────────
+app.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts()));
+
+app.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
+  const h = hunts[req.params.userId];
+  if (!h) return res.status(404).json({error:'Not found'});
+  h.isLive = false; h.archivedAt = new Date().toISOString();
+  emitHubUpdate(); io.to(`hunt:${req.params.userId}`).emit('hunt:update', h);
+  res.json({ok:true});
+});
+
+app.delete('/api/admin/hunts/:userId', requireAdmin, (req, res) => {
+  if (!hunts[req.params.userId]) return res.status(404).json({error:'Not found'});
+  delete hunts[req.params.userId]; emitHubUpdate();
+  res.json({ok:true});
+});
+
+// ── Ticket system ──────────────────────────────────────────────────
+// Randy Cabbage's Discord ID
+const RANDY_DISCORD_ID = process.env.RANDY_DISCORD_ID || '135203806676779008';
+
+app.post('/api/tickets', async (req, res) => {
+  const { username, issue, type } = req.body;
+  const botToken = process.env.DISCORD_BOT_TOKEN;
+  if (!botToken) return res.status(500).json({error:'Bot token not configured'});
+  try {
+    // Open DM channel with Randy
+    const dmRes = await fetch('https://discord.com/api/v10/users/@me/channels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bot ${botToken}` },
+      body: JSON.stringify({ recipient_id: RANDY_DISCORD_ID })
+    });
+    const dmData = await dmRes.json();
+    if (!dmData.id) throw new Error('Could not open DM channel');
+
+    // Send message
+    await fetch(`https://discord.com/api/v10/channels/${dmData.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bot ${botToken}` },
+      body: JSON.stringify({
+        embeds: [{
+          title: `🎫 Ticket — ${type||'General'}`,
+          description: issue,
+          color: 0xf5a500,
+          fields: [{ name: 'From', value: username||'Anonymous', inline: true }],
+          timestamp: new Date().toISOString()
+        }]
+      })
+    });
+    res.json({ok:true});
+  } catch(e) { console.error('Ticket error:', e.message); res.status(500).json({error:'Failed to send ticket'}); }
+});
+
+// ── Twitch live check ──────────────────────────────────────────────
+async function checkBeanLive() {
+  const cid = process.env.TWITCH_CLIENT_ID;
+  const sec = process.env.TWITCH_CLIENT_SECRET;
+  if (!cid || !sec) return;
+  try {
+    const tr = await fetch('https://id.twitch.tv/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `client_id=${cid}&client_secret=${sec}&grant_type=client_credentials`
+    });
+    const td = await tr.json();
+    const sr = await fetch('https://api.twitch.tv/helix/streams?user_login=bean', {
+      headers: { 'Client-ID': cid, 'Authorization': `Bearer ${td.access_token}` }
+    });
+    const sd = await sr.json();
+    beanLive = { isLive: !!(sd.data?.length), title: sd.data?.[0]?.title||'', updatedAt: new Date().toISOString() };
+    io.emit('bean:live', beanLive);
+  } catch(e) { console.error('Twitch check error:', e.message); }
+}
+checkBeanLive();
+setInterval(checkBeanLive, 5 * 60 * 1000);
+
+app.get('/api/bean-live', (req, res) => res.json(beanLive));
+
+// ── Health ─────────────────────────────────────────────────────────
+app.get('/api/health', (req, res) => res.json({ok:true}));
+
+// ── Socket.io ─────────────────────────────────────────────────────
+// Track socket → { watchingHuntId, user } for permission-aware updates
+const socketUsers = {};
+
+io.on('connection', socket => {
+  socket.on('watch:hub', () => {
+    socket.join('hub');
+    socket.emit('hub:update', getPublicHunts());
+    socket.emit('bean:live', beanLive);
+  });
+
+  socket.on('watch:hunt', userId => {
+    socket.join(`hunt:${userId}`);
+    socketUsers[socket.id] = { watchingHuntId: userId };
+    viewers[userId] = (viewers[userId]||0) + 1;
+    const h = hunts[userId];
+    if (h) socket.emit('hunt:update', h);
+    emitHubUpdate();
+    socket.on('disconnect', () => {
+      viewers[userId] = Math.max(0,(viewers[userId]||1)-1);
+      delete socketUsers[socket.id];
+      emitHubUpdate();
+    });
+  });
+
+  // Client sends their user id so we can compute canEdit for them
+  socket.on('identify', (userId) => {
+    if (socketUsers[socket.id]) socketUsers[socket.id].userId = userId;
+  });
+
+  // On reinvite, socket re-fetches permissions from the API
+  // (handled client-side in WatchHunt)
+});
+
+server.listen(PORT, () => console.log(`✅ Server on port ${PORT}`));
