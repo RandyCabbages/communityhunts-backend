@@ -435,7 +435,7 @@ app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
     const winners = [];
     const lines = resultsMsg.content.split('\n');
     for (const line of lines) {
-      const match = line.match(/^#(\d+)\s+(.+?)\s+(\d+\.\d+)\s+([+-]\d+)\s+Checked-In/);
+      const match = line.match(/^#(\d+)\s+(.+?)\s+(\d+\.\d+)/);
       if (match) {
         winners.push({
           place: parseInt(match[1]),
