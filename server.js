@@ -35,6 +35,8 @@ function isEquityMember(user, huntOwnerId) {
   const hunt = hunts[huntOwnerId];
   if (!hunt) return false;
   const name = nameOf(user);
+  // Also check callsPermissions (granted via request)
+  if (user?.id && hunt.callsPermissions && hunt.callsPermissions.includes(user.id)) return true;
   // Match on Discord ID first (most reliable), then name fuzzy match
   const userId = user?.id;
   const nameNoSpaces = name.replace(/\s+/g,'');
@@ -480,7 +482,121 @@ app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
   }
 });
 
+
+// ── Slot Autocomplete ─────────────────────────────────────────────
+let slotCache = { games: [], fetchedAt: 0 };
+
+async function getSlotGames() {
+  const ONE_HOUR = 60 * 60 * 1000;
+  if (slotCache.games.length && Date.now() - slotCache.fetchedAt < ONE_HOUR) {
+    return slotCache.games;
+  }
+  try {
+    const res = await fetch('https://slot.report/api/v1/slots.json');
+    const data = await res.json();
+    slotCache.games = (data.results || []).filter(s => s.name);
+    slotCache.fetchedAt = Date.now();
+    console.log(`[slots] Cached ${slotCache.games.length} slots`);
+  } catch(e) {
+    console.error('[slots] Failed to fetch slot list:', e.message);
+  }
+  return slotCache.games;
+}
+
+// Pre-fetch on startup
+getSlotGames().catch(() => {});
+
+app.get('/api/slots/search', async (req, res) => {
+  const q = (req.query.q || '').toLowerCase().trim();
+  if (!q || q.length < 2) return res.json([]);
+  const names = await getSlotNames();
+  const games = await getSlotGames();
+  const results = games
+    .filter(g => g.name.toLowerCase().includes(q))
+    .sort((a, b) => {
+      const aStarts = a.name.toLowerCase().startsWith(q);
+      const bStarts = b.name.toLowerCase().startsWith(q);
+      if (aStarts && !bStarts) return -1;
+      if (!aStarts && bStarts) return 1;
+      return a.name.localeCompare(b.name);
+    })
+    .slice(0, 20)
+    .map(g => ({
+      name: g.name,
+      slug: g.slug,
+      provider: g.provider_slug || g.provider?.toLowerCase().replace(/[^a-z0-9]/g,'') || '',
+      thumb: `https://usercontent.cc/images/games/${g.provider_slug || ''}/${g.slug}.webp`
+    }));
+  res.json(results);
+});
+
 app.get('/api/health', (req, res) => res.json({ok:true}));
+
+// ── Call Permission Requests ─────────────────────────────────────
+// Store pending requests per hunt
+// huntCallRequests[huntOwnerId] = [{id, userId, displayName, avatar, requestedAt}]
+const huntCallRequests = {};
+
+// Request permission to add calls
+app.post('/api/hunts/:userId/request-calls', requireAuth, (req, res) => {
+  const { userId } = req.params;
+  const hunt = hunts[userId];
+  if (!hunt || !hunt.isLive) return res.status(404).json({ error: 'Hunt not found' });
+  if (isEquityMember(req.user, userId)) return res.json({ status: 'already_member' });
+
+  if (!huntCallRequests[userId]) huntCallRequests[userId] = [];
+  const existing = huntCallRequests[userId].find(r => r.userId === req.user.id);
+  if (existing) return res.json({ status: 'pending' });
+
+  const request = {
+    id: uid(),
+    userId: req.user.id,
+    displayName: req.user.displayName || req.user.username,
+    avatar: req.user.avatar ? `https://cdn.discordapp.com/avatars/${req.user.id}/${req.user.avatar}.png` : null,
+    requestedAt: new Date().toISOString(),
+  };
+  huntCallRequests[userId].push(request);
+
+  // Notify the hunt owner
+  io.to(`hunt:${userId}`).emit('calls:request:new', { requests: huntCallRequests[userId] });
+  res.json({ status: 'requested' });
+});
+
+// Get pending requests (hunt owner only)
+app.get('/api/hunts/:userId/call-requests', requireAuth, (req, res) => {
+  if (req.user.id !== req.params.userId && !isAdmin(req.user)) return res.status(403).json({ error: 'Forbidden' });
+  res.json(huntCallRequests[req.params.userId] || []);
+});
+
+// Grant or deny a request
+app.post('/api/hunts/:userId/call-requests/:requestId', requireAuth, (req, res) => {
+  const { userId, requestId } = req.params;
+  const { action } = req.body; // 'grant' or 'deny'
+  if (req.user.id !== userId && !isAdmin(req.user)) return res.status(403).json({ error: 'Forbidden' });
+
+  const requests = huntCallRequests[userId] || [];
+  const reqItem = requests.find(r => r.id === requestId);
+  if (!reqItem) return res.status(404).json({ error: 'Request not found' });
+
+  // Remove from pending
+  huntCallRequests[userId] = requests.filter(r => r.id !== requestId);
+
+  if (action === 'grant') {
+    // Add to invitedEditors as calls-only
+    if (!hunts[userId].callsPermissions) hunts[userId].callsPermissions = [];
+    if (!hunts[userId].callsPermissions.includes(reqItem.userId)) {
+      hunts[userId].callsPermissions.push(reqItem.userId);
+    }
+    // Notify the requester
+    io.to(`hunt:${userId}`).emit('calls:granted', { userId: reqItem.userId });
+  } else {
+    io.to(`hunt:${userId}`).emit('calls:denied', { userId: reqItem.userId });
+  }
+
+  // Update owner's notification count
+  io.to(`hunt:${userId}`).emit('calls:request:update', { requests: huntCallRequests[userId] });
+  res.json({ ok: true });
+});
 
 // ── Socket.io ─────────────────────────────────────────────────────
 // Track socket → { watchingHuntId, user } for permission-aware updates
