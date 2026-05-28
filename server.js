@@ -304,7 +304,7 @@ app.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts()))
 let mitchHunts = [];
 
 // Fetch Mitch hunts from mitchjones.vip API (server-to-server, no CSP)
-app.post('/api/admin/fetch-and-import-mitch-hunts', requireAdmin, async (req, res) => {
+app.post('/api/admin/fetch-and-import-mitch-hunts', async (req, res) => {
   try {
     const allHunts = [];
     
