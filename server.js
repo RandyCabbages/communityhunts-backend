@@ -320,6 +320,9 @@ app.post('/api/admin/fetch-and-import-mitch-hunts', async (req, res) => {
         }
         
         const data = await response.json();
+        console.log(`Page ${page}: Raw data keys:`, Object.keys(data));
+        console.log(`Page ${page}: data.hunts =`, Array.isArray(data.hunts) ? `${data.hunts.length} items` : typeof data.hunts);
+        
         if (!data.hunts || data.hunts.length === 0) {
           console.log(`Page ${page}: No hunts, breaking`);
           break;
