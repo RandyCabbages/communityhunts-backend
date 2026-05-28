@@ -318,10 +318,10 @@ app.post('/api/admin/fetch-and-import-mitch-hunts', async (req, res) => {
       
       // Transform mitchjones format to our format
       const transformed = data.hunts.map(h => ({
-        slot: h.game?.name || h.game || h.slot || 'Unknown',
-        bet: h.bet,
-        win: h.payout,
-        multiplier: h.multiplier ? parseFloat(h.multiplier) : 0,
+        slot: h.game?.name || h.slot?.name || h.slot || h.game || 'Unknown',
+        bet: parseFloat(h.bet) || 0,
+        win: parseFloat(h.payout || h.win || 0) || 0,
+        multiplier: parseFloat(h.multiplier) || 0,
         provider: h.provider || h.game?.provider || '',
         date: h.date || new Date().toISOString()
       }));
