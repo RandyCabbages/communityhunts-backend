@@ -510,14 +510,127 @@ app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
 });
 
 
+// ── Rainbet Game Scraper ──────────────────────────────────────────
+const RAINBET_FILE = path.join(__dirname, 'rainbet_games.json');
+let rainbetGames = []; // scraped from Rainbet via headless Chrome
+
+function loadRainbetCache() {
+  try {
+    if (fs.existsSync(RAINBET_FILE)) {
+      const data = JSON.parse(fs.readFileSync(RAINBET_FILE, 'utf8'));
+      if (data.savedAt && Date.now() - data.savedAt < 24 * 60 * 60 * 1000 && Array.isArray(data.games) && data.games.length > 0) {
+        rainbetGames = data.games;
+        console.log(`[rainbet] Loaded ${rainbetGames.length} games from cache`);
+        return true;
+      }
+    }
+  } catch(e) { console.error('[rainbet] Failed to load cache:', e.message); }
+  return false;
+}
+
+function saveRainbetCache() {
+  try {
+    fs.writeFileSync(RAINBET_FILE, JSON.stringify({ savedAt: Date.now(), games: rainbetGames }, null, 2));
+    console.log(`[rainbet] Saved ${rainbetGames.length} games to cache`);
+  } catch(e) { console.error('[rainbet] Failed to save cache:', e.message); }
+}
+
+async function scrapeRainbetGames() {
+  console.log('[rainbet] Launching headless Chrome to scrape game list...');
+  let puppeteer, browser;
+  try {
+    puppeteer = require('puppeteer-extra');
+    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+    puppeteer.use(StealthPlugin());
+
+    const launchOpts = {
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    };
+    // On Railway, use system Chromium installed via nixpacks
+    if (process.env.CHROMIUM_PATH) launchOpts.executablePath = process.env.CHROMIUM_PATH;
+
+    browser = await puppeteer.launch(launchOpts);
+    const page = await browser.newPage();
+
+    // Intercept all JSON responses and look for the game list
+    const candidates = [];
+    page.on('response', async (res) => {
+      try {
+        const ct = res.headers()['content-type'] || '';
+        if (!ct.includes('json')) return;
+        const json = await res.json();
+        // Accept any response that looks like a list of games
+        const arr = Array.isArray(json) ? json
+          : (json.games || json.data || json.results || json.items || json.list);
+        if (Array.isArray(arr) && arr.length > 10) {
+          const sample = arr[0];
+          if (sample && (sample.name || sample.title || sample.game_name)) {
+            candidates.push({ url: res.url(), games: arr });
+            console.log(`[rainbet] Intercepted candidate: ${res.url()} (${arr.length} items)`);
+          }
+        }
+      } catch {}
+    });
+
+    await page.goto('https://rainbet.com/casino/slots', { waitUntil: 'networkidle2', timeout: 60000 });
+    // Extra wait for lazy-loaded/paginated content
+    await new Promise(r => setTimeout(r, 4000));
+
+    if (candidates.length === 0) {
+      console.warn('[rainbet] No game list intercepted — Cloudflare may have blocked the request');
+      return false;
+    }
+
+    // Use the largest result set
+    const best = candidates.sort((a, b) => b.games.length - a.games.length)[0];
+    console.log(`[rainbet] Using ${best.games.length} games from ${best.url}`);
+
+    const mapped = best.games.map(g => ({
+      name: g.name || g.title || g.game_name || '',
+      slug: g.slug || g.id || g.identifier || g.game_id || '',
+      provider: g.provider || g.provider_name || g.studio || '',
+      thumbUrl: g.image || g.thumbnail || g.img || g.cover || g.icon || g.logo || null,
+    })).filter(g => g.name);
+
+    // Deduplicate by name
+    const seen = new Set();
+    rainbetGames = mapped.filter(g => {
+      const key = g.name.toLowerCase().trim();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    saveRainbetCache();
+    console.log(`[rainbet] Done — ${rainbetGames.length} unique games`);
+    return true;
+  } catch(e) {
+    console.error('[rainbet] Scrape failed:', e.message);
+    return false;
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+}
+
+// Startup: load cache or scrape in background
+if (!loadRainbetCache()) {
+  scrapeRainbetGames().catch(() => {});
+}
+// Daily refresh
+setInterval(() => {
+  console.log('[rainbet] Daily refresh...');
+  scrapeRainbetGames().catch(() => {});
+}, 24 * 60 * 60 * 1000);
+
 // ── Slot Autocomplete ─────────────────────────────────────────────
 const SLOTS_FILE = path.join(__dirname, 'slots_cache.json');
 let slotCache = { games: [], fetchedAt: 0 };
-let validatedGames = []; // only games confirmed to have a working thumbnail
+let validatedGames = []; // all games with resolved thumbUrl (thumb or start fallback, null if neither)
 let thumbValidationDone = false;
 const ONE_DAY = 24 * 60 * 60 * 1000;
 
-const SLOTS_CACHE_VERSION = 3; // bump to force re-validation
+const SLOTS_CACHE_VERSION = 4; // bump to force re-validation
 
 function loadSlotsCache() {
   try {
@@ -569,22 +682,28 @@ async function getSlotGames() {
 async function validateAllThumbs() {
   const games = await getSlotGames();
   console.log(`[slots] Validating thumbnails for ${games.length} slots...`);
+  const BASE = 'https://slot.report/images/slots';
   const BATCH = 50;
   const results = [];
   for (let i = 0; i < games.length; i += BATCH) {
     const batch = games.slice(i, i + BATCH);
     const checked = await Promise.all(batch.map(async g => {
       try {
-        const r = await fetch(`https://slot.report/images/slots/${g.slug}-thumb.webp`, { method: 'HEAD' });
-        return { ...g, hasThumb: r.ok };
-      } catch { return { ...g, hasThumb: false }; }
+        const thumbUrl = `${BASE}/${g.slug}-thumb.webp`;
+        const r = await fetch(thumbUrl, { method: 'HEAD' });
+        if (r.ok) return { ...g, thumbUrl };
+        // Fall back to -start.webp (gameplay screenshot — exists for virtually all slots)
+        const startUrl = `${BASE}/${g.slug}-start.webp`;
+        const r2 = await fetch(startUrl, { method: 'HEAD' });
+        return { ...g, thumbUrl: r2.ok ? startUrl : null };
+      } catch { return { ...g, thumbUrl: null }; }
     }));
     results.push(...checked);
     if (i % 1000 === 0 && i > 0) console.log(`[slots] Validated ${i}/${games.length}...`);
   }
   validatedGames = results;
   thumbValidationDone = true;
-  const withThumb = results.filter(g => g.hasThumb).length;
+  const withThumb = results.filter(g => g.thumbUrl).length;
   saveSlotsCache();
   console.log(`[slots] Done — ${withThumb}/${games.length} slots have thumbnails, ${games.length - withThumb} without`);
 }
@@ -611,8 +730,10 @@ app.get('/api/slots/search', async (req, res) => {
   const q = (req.query.q || '').toLowerCase().trim();
   if (!q || q.length < 2) return res.json([]);
 
-  // Use validated list if ready, otherwise fall back to full list
-  const games = thumbValidationDone ? validatedGames : await getSlotGames();
+  // Prefer Rainbet list (exact casino catalog); fall back to slot.report
+  const useRainbet = rainbetGames.length > 0;
+  const games = useRainbet ? rainbetGames
+    : (thumbValidationDone ? validatedGames : await getSlotGames());
 
   const results = games
     .filter(g => g.name.toLowerCase().includes(q))
@@ -628,7 +749,8 @@ app.get('/api/slots/search', async (req, res) => {
       name: g.name,
       slug: g.slug,
       provider: g.provider_slug || g.provider?.toLowerCase().replace(/[^a-z0-9]/g,'') || '',
-      thumb: (thumbValidationDone ? g.hasThumb : true) ? `https://slot.report/images/slots/${g.slug}-thumb.webp` : null
+      thumb: useRainbet ? g.thumbUrl
+        : (thumbValidationDone ? g.thumbUrl : `https://slot.report/images/slots/${g.slug}-thumb.webp`)
     }));
 
   res.json(results);

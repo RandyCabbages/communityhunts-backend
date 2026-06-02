@@ -7,6 +7,9 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "puppeteer": "^22.0.0",
     "axios": "^1.6.7",
     "connect-pg-simple": "^9.0.1",
     "cors": "^2.8.5",
