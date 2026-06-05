@@ -540,6 +540,19 @@ function toPascal(slug) {
   return slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
 }
 
+// Only show slots from providers available on Rainbet/crypto casinos
+const RELEVANT_PROVIDERS = new Set([
+  'pragmatic-play', 'playngo', 'hacksaw-gaming', 'elk-studios',
+  'red-tiger', 'relax-gaming', 'quickspin', 'blueprint-gaming',
+  'nolimit-city', 'bgaming', 'thunderkick', 'yggdrasil',
+  'push-gaming', 'netent', 'isoftbet', 'gameart', 'wazdan',
+  'big-time-gaming', 'iron-dog-studio', 'spinomenal',
+  // slot.report reviewed providers (hacksaw sub-labels etc.)
+  'bullshark-games', 'backseat-gaming', 'print-studios',
+  'nownow-gaming', 'trusty-gaming', 'kitsune-studios',
+  'ace-roll', 'foxhound-games', 'jinx-gaming', 'pineapple-play',
+]);
+
 async function getSlotGames() {
   const ONE_HOUR = 60 * 60 * 1000;
   if (slotCache.games.length && Date.now() - slotCache.fetchedAt < ONE_HOUR) {
@@ -553,8 +566,9 @@ async function getSlotGames() {
     const gamesData = await gamesRes.json();
     const thumbText = await thumbRes.text();
 
-    // Build verified thumb map from slot.report reviewed slots (549 slots, all confirmed)
+    // Build verified thumb map AND reviewed slug set (these are the popular slots)
     const thumbMap = {};
+    const reviewedSlugs = new Set();
     const thumbMatch = thumbText.match(/var SLOT_DATA=([\s\S]*?]);/);
     if (thumbMatch) {
       try {
@@ -562,16 +576,29 @@ async function getSlotGames() {
         reviewed.forEach(s => {
           if (s.slug && s.thumbnail) {
             thumbMap[s.slug] = `https://slot.report${s.thumbnail.split('?')[0]}`;
+            reviewedSlugs.add(s.slug);
           }
         });
-        console.log(`[slots] Loaded ${Object.keys(thumbMap).length} reviewed thumbnails`);
+        console.log(`[slots] Loaded ${reviewedSlugs.size} reviewed thumbnails`);
       } catch(e) { console.error('[slots] Failed to parse slots-cards.js:', e.message); }
     }
 
-    slotCache.games     = (gamesData.results || []).filter(s => s.name);
+    // Filter to relevant providers only, sort reviewed slots first
+    const allGames = (gamesData.results || []).filter(s => s.name);
+    const relevant = allGames.filter(g =>
+      RELEVANT_PROVIDERS.has(g.provider_slug) || reviewedSlugs.has(g.slug)
+    );
+    relevant.sort((a, b) => {
+      const aR = reviewedSlugs.has(a.slug), bR = reviewedSlugs.has(b.slug);
+      if (aR && !bR) return -1;
+      if (!aR && bR) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    slotCache.games     = relevant;
     slotCache.thumbMap  = thumbMap;
     slotCache.fetchedAt = Date.now();
-    console.log(`[slots] Cached ${slotCache.games.length} slots`);
+    console.log(`[slots] Cached ${relevant.length} relevant slots (from ${allGames.length} total)`);
   } catch(e) {
     console.error('[slots] Failed to fetch slot list:', e.message);
   }
