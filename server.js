@@ -103,10 +103,7 @@ app.get('/auth/discord/callback',
       displayName: req.user.displayName, avatar: req.user.avatar,
       isAdmin: isAdmin(req.user), isVipHost: isAdmin(req.user)||isVipHost(req.user)
     })).toString('base64');
-    const returnTo = req.session?.returnTo || '/hunt';
-    delete req.session?.returnTo;
-    const safePath = returnTo.startsWith('/') ? returnTo : '/hunt';
-    res.redirect(`${FRONTEND_URL}${safePath}?auth=${encodeURIComponent(userData)}`);
+    res.redirect(`${FRONTEND_URL}/?auth=${encodeURIComponent(userData)}`);
   }
 );
 app.get('/auth/logout', (req, res) => req.logout(() => res.redirect(FRONTEND_URL)));
@@ -518,21 +515,26 @@ app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
 // ── Slot Autocomplete ─────────────────────────────────────────────
 let slotCache = { games: [], thumbMap: {}, fetchedAt: 0 };
 
-// Softswiss CDN covers ~3000 slots across these 12 providers
+// Softswiss CDN provider code map — covers ~3800 slots across 17 providers
 // URL pattern: https://cdn.softswiss.net/i/s4/{code}/{PascalCaseSlugName}.webp
 const SOFTSWISS_PROVIDERS = {
   'pragmatic-play':   'pragmatic',
   'playngo':          'playngo',
-  'hacksaw-gaming':   'hacksaw',
-  'elk-studios':      'elk',
   'red-tiger':        'redtiger',
-  'relax-gaming':     'relax',
-  'quickspin':        'quickspin',
+  'bgaming':          'bgaming',
+  'netent':           'evolution',   // NetEnt acquired by Evolution
+  'isoftbet':         'isoftbet',
+  'hacksaw-gaming':   'hacksaw',
   'blueprint-gaming': 'blueprint',
   'nolimit-city':     'nolimit',
-  'bgaming':          'bgaming',
+  'elk-studios':      'elk',
+  'quickspin':        'quickspin',
+  'relax-gaming':     'relax',
   'thunderkick':      'thunderkick',
+  'gameart':          'gameart',
+  'push-gaming':      'pushgaming',
   'yggdrasil':        'yggdrasil',
+  'wazdan':           'wazdan',
 };
 function toPascal(slug) {
   return slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
