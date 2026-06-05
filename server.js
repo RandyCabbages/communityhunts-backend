@@ -5,6 +5,8 @@ const DiscordStrategy = require('passport-discord').Strategy;
 const cors            = require('cors');
 const http            = require('http');
 const { Server }      = require('socket.io');
+const fs              = require('fs');
+const path            = require('path');
 
 const app    = express();
 const server = http.createServer(app);
@@ -114,9 +116,24 @@ app.get('/auth/me', (req, res) => {
 });
 
 // ── State ──────────────────────────────────────────────────────────
+const HUNTS_FILE = path.join(__dirname, 'hunts_data.json');
 const hunts   = {};
 const viewers = {};
 let beanLive  = { isLive: false, title: '', updatedAt: null };
+
+// Load persisted hunts on startup
+try {
+  if (fs.existsSync(HUNTS_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(HUNTS_FILE, 'utf8'));
+    Object.assign(hunts, saved);
+    console.log(`[persist] Loaded ${Object.keys(hunts).length} hunts from disk`);
+  }
+} catch(e) { console.error('[persist] Failed to load hunts:', e.message); }
+
+function persistHunts() {
+  try { fs.writeFileSync(HUNTS_FILE, JSON.stringify(hunts), 'utf8'); }
+  catch(e) { console.error('[persist] Failed to save hunts:', e.message); }
+}
 
 function huntSummary(h) {
   return {
@@ -132,7 +149,8 @@ function huntSummary(h) {
 }
 function getPublicHunts()  { return Object.values(hunts).filter(h=>h.isLive).map(huntSummary); }
 function getAllHunts()      { return Object.values(hunts).map(huntSummary); }
-function emitHubUpdate()   { io.emit('hub:update', getPublicHunts()); }
+function emitHubUpdate()   { persistHunts(); io.emit('hub:update', getPublicHunts()); }
+function emitHuntUpdate(userId) { const h = hunts[userId]; if (h) { persistHunts(); io.to(`hunt:${userId}`).emit('hunt:update', h); } }
 
 function requireAuth(req, res, next)  { if (!req.user) return res.status(401).json({error:'Not authenticated'}); next(); }
 function requireAdmin(req, res, next) { if (!req.user||!isAdmin(req.user)) return res.status(403).json({error:'Admin only'}); next(); }
@@ -215,17 +233,18 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
     user: req.user, isLive: false, startedAt: null, archivedAt: null,
     huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0
   };
-  const { bonuses, equity, calls, huntType, callLimit, huntMode } = req.body;
-  if (bonuses   !== undefined) hunts[req.user.id].bonuses   = bonuses;
-  if (equity    !== undefined) hunts[req.user.id].equity    = equity;
-  if (calls     !== undefined) hunts[req.user.id].calls     = calls;
-  if (huntType  !== undefined) {
+  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin } = req.body;
+  if (bonuses    !== undefined) hunts[req.user.id].bonuses    = bonuses;
+  if (equity     !== undefined) hunts[req.user.id].equity     = equity;
+  if (calls      !== undefined) hunts[req.user.id].calls      = calls;
+  if (huntType   !== undefined) {
     if (huntType === 'vip' && !isAdmin(req.user) && !isVipHost(req.user))
       return res.status(403).json({error:'Not authorised for VIP hunt'});
     hunts[req.user.id].huntType = huntType;
   }
-  if (callLimit !== undefined) hunts[req.user.id].callLimit = callLimit;
-  if (huntMode  !== undefined) hunts[req.user.id].huntMode  = huntMode;
+  if (callLimit  !== undefined) hunts[req.user.id].callLimit  = callLimit;
+  if (huntMode   !== undefined) hunts[req.user.id].huntMode   = huntMode;
+  if (roundRobin !== undefined) hunts[req.user.id].roundRobin = roundRobin;
   io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
   emitHubUpdate();
   res.json({ok:true});
@@ -287,6 +306,7 @@ app.post('/api/hunts/:userId/calls', requireAuth, (req, res) => {
   const insertAt     = Math.min(3, pendingCalls.length);
   pendingCalls.splice(insertAt, 0, newCall);
   hunt.calls = [...pendingCalls, ...otherCalls];
+  persistHunts();
   io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
   res.json({ok:true, call: newCall});
 });
@@ -296,13 +316,14 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
   if (!canEditHunt(req.user, req.params.userId)) return res.status(403).json({error:'Not authorised'});
   const hunt = hunts[req.params.userId];
   if (!hunt) return res.status(404).json({error:'Hunt not found'});
-  const { bonuses, equity, calls, huntType, callLimit, huntMode } = req.body;
-  if (bonuses   !== undefined) hunt.bonuses   = bonuses;
-  if (equity    !== undefined) hunt.equity    = equity;
-  if (calls     !== undefined) hunt.calls     = calls;
-  if (huntType  !== undefined) hunt.huntType  = huntType;
-  if (callLimit !== undefined) hunt.callLimit = callLimit;
-  if (huntMode  !== undefined) hunt.huntMode  = huntMode;
+  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin } = req.body;
+  if (bonuses     !== undefined) hunt.bonuses     = bonuses;
+  if (equity      !== undefined) hunt.equity      = equity;
+  if (calls       !== undefined) hunt.calls       = calls;
+  if (huntType    !== undefined) hunt.huntType    = huntType;
+  if (callLimit   !== undefined) hunt.callLimit   = callLimit;
+  if (huntMode    !== undefined) hunt.huntMode    = huntMode;
+  if (roundRobin  !== undefined) hunt.roundRobin  = roundRobin;
   io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
   emitHubUpdate();
   res.json({ok:true});
@@ -539,7 +560,7 @@ app.get('/api/slots/search', async (req, res) => {
       name: g.name,
       slug: g.slug,
       provider: g.provider_slug || g.provider?.toLowerCase().replace(/[^a-z0-9]/g,'') || '',
-      thumb: `https://usercontent.cc/images/games/${g.provider_slug || ''}/${g.slug}.webp`
+      thumb: `https://slot.report/images/slots/${g.slug}-thumb.webp`
     }));
   res.json(results);
 });
