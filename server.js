@@ -516,23 +516,64 @@ app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
 
 
 // ── Slot Autocomplete ─────────────────────────────────────────────
-let slotCache = { games: [], fetchedAt: 0 };
+let slotCache = { games: [], thumbMap: {}, fetchedAt: 0 };
+
+// Softswiss CDN covers ~3000 slots across these 12 providers
+// URL pattern: https://cdn.softswiss.net/i/s4/{code}/{PascalCaseSlugName}.webp
+const SOFTSWISS_PROVIDERS = {
+  'pragmatic-play':   'pragmatic',
+  'playngo':          'playngo',
+  'hacksaw-gaming':   'hacksaw',
+  'elk-studios':      'elk',
+  'red-tiger':        'redtiger',
+  'relax-gaming':     'relax',
+  'quickspin':        'quickspin',
+  'blueprint-gaming': 'blueprint',
+  'nolimit-city':     'nolimit',
+  'bgaming':          'bgaming',
+  'thunderkick':      'thunderkick',
+  'yggdrasil':        'yggdrasil',
+};
+function toPascal(slug) {
+  return slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+}
 
 async function getSlotGames() {
   const ONE_HOUR = 60 * 60 * 1000;
   if (slotCache.games.length && Date.now() - slotCache.fetchedAt < ONE_HOUR) {
-    return slotCache.games;
+    return slotCache;
   }
   try {
-    const res = await fetch('https://slot.report/api/v1/slots.json');
-    const data = await res.json();
-    slotCache.games = (data.results || []).filter(s => s.name);
+    const [gamesRes, thumbRes] = await Promise.all([
+      fetch('https://slot.report/api/v1/slots.json'),
+      fetch('https://slot.report/data/slots-cards.js')
+    ]);
+    const gamesData = await gamesRes.json();
+    const thumbText = await thumbRes.text();
+
+    // Build verified thumb map from slot.report reviewed slots (549 slots, all confirmed)
+    const thumbMap = {};
+    const thumbMatch = thumbText.match(/var SLOT_DATA=([\s\S]*?]);/);
+    if (thumbMatch) {
+      try {
+        const reviewed = JSON.parse(thumbMatch[1]);
+        reviewed.forEach(s => {
+          if (s.slug && s.thumbnail) {
+            thumbMap[s.slug] = `https://slot.report${s.thumbnail.split('?')[0]}`;
+          }
+        });
+        console.log(`[slots] Loaded ${Object.keys(thumbMap).length} reviewed thumbnails`);
+      } catch(e) { console.error('[slots] Failed to parse slots-cards.js:', e.message); }
+    }
+
+    slotCache.games     = (gamesData.results || []).filter(s => s.name);
+    slotCache.thumbMap  = thumbMap;
     slotCache.fetchedAt = Date.now();
     console.log(`[slots] Cached ${slotCache.games.length} slots`);
   } catch(e) {
     console.error('[slots] Failed to fetch slot list:', e.message);
   }
-  return slotCache.games;
+  return slotCache;
 }
 
 // Pre-fetch on startup
@@ -541,7 +582,7 @@ getSlotGames().catch(() => {});
 app.get('/api/slots/search', async (req, res) => {
   const q     = (req.query.q || '').toLowerCase().trim();
   const limit = parseInt(req.query.limit) || 20;
-  const games = await getSlotGames();
+  const { games, thumbMap } = await getSlotGames();
   const filtered = q.length >= 2
     ? games.filter(g => g.name.toLowerCase().includes(q))
     : games;
@@ -556,12 +597,15 @@ app.get('/api/slots/search', async (req, res) => {
       return a.name.localeCompare(b.name);
     })
     .slice(0, limit)
-    .map(g => ({
-      name: g.name,
-      slug: g.slug,
-      provider: g.provider_slug || g.provider?.toLowerCase().replace(/[^a-z0-9]/g,'') || '',
-      thumb: `https://slot.report/images/slots/${g.slug}-thumb.webp`
-    }));
+    .map(g => {
+      // Priority 1: verified slot.report thumbnail
+      let thumb = thumbMap[g.slug] || null;
+      // Priority 2: softswiss CDN (covers pragmatic, hacksaw, nolimit, relax, bgaming, etc.)
+      if (!thumb && SOFTSWISS_PROVIDERS[g.provider_slug]) {
+        thumb = `https://cdn.softswiss.net/i/s4/${SOFTSWISS_PROVIDERS[g.provider_slug]}/${toPascal(g.slug)}.webp`;
+      }
+      return { name: g.name, slug: g.slug, provider: g.provider_slug || '', thumb };
+    });
   res.json(results);
 });
 
