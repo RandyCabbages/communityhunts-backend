@@ -394,9 +394,44 @@ app.delete('/api/admin/hunts/:userId', requireAdmin, (req, res) => {
   res.json({ok:true});
 });
 
-// ── Ticket system ──────────────────────────────────────────────────
-// Randy Cabbage's Discord ID
-const RANDY_DISCORD_ID = process.env.RANDY_DISCORD_ID || '135203806676779008';
+// ── User Settings ──────────────────────────────────────────────────
+const SETTINGS_FILE = path.join(__dirname, 'user_settings.json');
+let userSettings = {};
+try {
+  if (fs.existsSync(SETTINGS_FILE)) {
+    userSettings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    console.log(`[settings] Loaded settings for ${Object.keys(userSettings).length} users`);
+  }
+} catch(e) { console.error('[settings] Failed to load user_settings.json:', e.message); }
+
+function persistSettings() {
+  try { fs.writeFileSync(SETTINGS_FILE, JSON.stringify(userSettings), 'utf8'); }
+  catch(e) { console.error('[settings] Failed to persist:', e.message); }
+}
+
+// GET /api/settings — get current user's settings
+app.get('/api/settings', requireAuth, (req, res) => {
+  res.json(userSettings[req.user.id] || { rainbetName: '', preferredSlots: [] });
+});
+
+// PUT /api/settings — save current user's settings
+app.put('/api/settings', requireAuth, (req, res) => {
+  const { rainbetName, preferredSlots } = req.body;
+  if (!userSettings[req.user.id]) userSettings[req.user.id] = {};
+  if (rainbetName !== undefined)    userSettings[req.user.id].rainbetName    = String(rainbetName).trim().slice(0, 64);
+  if (preferredSlots !== undefined) userSettings[req.user.id].preferredSlots = (preferredSlots || []).slice(0, 8);
+  persistSettings();
+  res.json({ ok: true, settings: userSettings[req.user.id] });
+});
+
+// GET /api/settings/:userId — get another user's preferred slots (for auto-injection)
+app.get('/api/settings/:userId', requireAuth, (req, res) => {
+  const s = userSettings[req.params.userId] || { rainbetName: '', preferredSlots: [] };
+  // Only return preferred slots publicly, not rainbet name
+  res.json({ preferredSlots: s.preferredSlots || [] });
+});
+
+
 
 app.post('/api/tickets', async (req, res) => {
   const { username, issue, type } = req.body;
