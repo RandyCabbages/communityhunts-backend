@@ -728,10 +728,27 @@ app.get('/api/slots/search', async (req, res) => {
   const q     = (req.query.q || '').toLowerCase().trim();
   const limit = parseInt(req.query.limit) || 20;
   const { games, thumbMap } = await getSlotGames();
+
+  // Build full mapped list once and cache it
+  if (!getSlotGames._mappedCache || getSlotGames._mappedCacheAt !== slotCache.fetchedAt) {
+    getSlotGames._mappedCache = games.map(g => {
+      let thumb = thumbMap[g.slug] || null;
+      if (!thumb) thumb = SOFTSWISS_HITS[g.slug] || null;
+      if (thumb && (thumb.includes('pragmaticplay.com') || thumb.includes('wixstatic.com'))) {
+        thumb = `/api/img-proxy?url=${encodeURIComponent(thumb)}`;
+      }
+      return { name: g.name, slug: g.slug, provider: g.provider_slug || '', thumb };
+    });
+    getSlotGames._mappedCacheAt = slotCache.fetchedAt;
+  }
+
+  const pool = getSlotGames._mappedCache;
   const filtered = q.length >= 2
-    ? games.filter(g => g.name.toLowerCase().includes(q))
-    : games;
+    ? pool.filter(g => g.name.toLowerCase().includes(q))
+    : pool;
+
   const results = filtered
+    .slice()
     .sort((a, b) => {
       if (q.length >= 2) {
         const aStarts = a.name.toLowerCase().startsWith(q);
@@ -741,18 +758,8 @@ app.get('/api/slots/search', async (req, res) => {
       }
       return a.name.localeCompare(b.name);
     })
-    .slice(0, limit)
-    .map(g => {
-      // Priority 1: verified slot.report thumbnail
-      let thumb = thumbMap[g.slug] || null;
-      // Priority 2: pre-verified softswiss/rainbet CDN hit (confirmed working at build time)
-      if (!thumb) thumb = SOFTSWISS_HITS[g.slug] || null;
-      // Wrap CORS-blocked origins through our proxy (e.g. pragmaticplay.com)
-      if (thumb && (thumb.includes('pragmaticplay.com') || thumb.includes('wixstatic.com'))) {
-        thumb = `/api/img-proxy?url=${encodeURIComponent(thumb)}`;
-      }
-      return { name: g.name, slug: g.slug, provider: g.provider_slug || '', thumb };
-    });
+    .slice(0, limit);
+
   res.json(results);
 });
 
