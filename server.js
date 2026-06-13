@@ -945,33 +945,15 @@ app.get('/api/slots/search', async (req, res) => {
 
   // Build full mapped list once and cache it
   if (!getSlotGames._mappedCache) {
-    let combined = [];
-
-    // PRIMARY: Rainbet scraped slots (authoritative; ~6700 with thumbnails)
-    if (RAINBET_SLOTS.length) {
-      combined = RAINBET_SLOTS.map(s => ({
-        name: s.name,
-        slug: s.slug,
-        provider: s.provider,
-        rainbetSlug: s.rainbetSlug,
-        thumb: s.thumb,
-      }));
-    }
-
-    // FALLBACK: slot.report slots not already in Rainbet list (legacy/cross-reference)
-    const { games, thumbMap } = await getSlotGames();
-    const existingNames = new Set(combined.map(s => s.name.toLowerCase()));
-    for (const g of games) {
-      if (existingNames.has(g.name.toLowerCase())) continue;
-      let thumb = thumbMap[g.slug] || SOFTSWISS_HITS[g.slug] || null;
-      if (thumb && (thumb.includes('pragmaticplay.com') || thumb.includes('wixstatic.com'))) {
-        thumb = `/api/img-proxy?url=${encodeURIComponent(thumb)}`;
-      }
-      combined.push({ name: g.name, slug: g.slug, provider: g.provider_slug || '', thumb });
-    }
-
-    getSlotGames._mappedCache = combined;
-    console.log(`[slots] Built mapped cache: ${combined.length} slots (${RAINBET_SLOTS.length} from Rainbet, ${combined.length - RAINBET_SLOTS.length} extra from slot.report)`);
+    // Rainbet scraped slots only (authoritative; ~6700 with thumbnails)
+    getSlotGames._mappedCache = RAINBET_SLOTS.map(s => ({
+      name: s.name,
+      slug: s.slug,
+      provider: s.provider,
+      rainbetSlug: s.rainbetSlug,
+      thumb: s.thumb,
+    }));
+    console.log(`[slots] Built mapped cache: ${getSlotGames._mappedCache.length} Rainbet slots`);
   }
 
   const pool = getSlotGames._mappedCache;
