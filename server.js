@@ -483,20 +483,69 @@ app.get('/api/settings', requireAuth, async (req, res) => {
   res.json(await getSettings(req.user.id));
 });
 
-// PUT /api/settings — save current user's settings
+// PUT /api/settings — save current user's settings (also stores their Discord names for lookup)
 app.put('/api/settings', requireAuth, async (req, res) => {
   const current = await getSettings(req.user.id);
   const { rainbetName, preferredSlots } = req.body;
   if (rainbetName !== undefined)    current.rainbetName    = String(rainbetName).trim().slice(0, 64);
   if (preferredSlots !== undefined) current.preferredSlots = (preferredSlots || []).filter(Boolean);
+  // Always update Discord identity for name-based lookup by other hunt owners
+  current.discordUsername    = req.user.username || '';
+  current.discordDisplayName = req.user.displayName || req.user.username || '';
+  current.discordId          = req.user.id;
   await saveSettings(req.user.id, current);
   res.json({ ok: true, settings: current });
 });
 
-// GET /api/settings/:userId — get another user's preferred slots by Discord ID
+// GET /api/settings/:userId — get another user's preferred slots and rainbet name by Discord ID
 app.get('/api/settings/:userId', requireAuth, async (req, res) => {
   const s = await getSettings(req.params.userId);
-  res.json({ preferredSlots: s.preferredSlots || [] });
+  res.json({ preferredSlots: s.preferredSlots || [], rainbetName: s.rainbetName || '' });
+});
+
+// GET /api/settings/by-name/:name — look up another user's preferred slots & rainbet by their Discord username/displayName
+// Used when a hunt owner adds a member by name and we don't know their Discord ID
+app.get('/api/settings/by-name/:name', requireAuth, async (req, res) => {
+  const search = (req.params.name || '').toLowerCase().trim();
+  if (!search) return res.json({ preferredSlots: [], rainbetName: '' });
+  const searchNoSp = search.replace(/\s+/g,'');
+
+  // Build list of all settings to search
+  let allSettings = [];
+  if (pgPool) {
+    try {
+      const r = await pgPool.query('SELECT user_id, settings FROM user_settings');
+      allSettings = r.rows.map(row => ({ userId: row.user_id, ...row.settings }));
+    } catch(e) { console.error('[settings] by-name pg error:', e.message); }
+  }
+  if (!allSettings.length) {
+    allSettings = Object.entries(userSettings).map(([uid, s]) => ({ userId: uid, ...s }));
+  }
+
+  // Find match by Discord username or displayName (case-insensitive, space-insensitive)
+  const match = allSettings.find(s => {
+    const candidates = [
+      (s.discordUsername    || '').toLowerCase().trim(),
+      (s.discordDisplayName || '').toLowerCase().trim(),
+    ].filter(Boolean);
+    const noSp = candidates.map(c => c.replace(/\s+/g,''));
+    for (const c of candidates.concat(noSp)) {
+      if (!c) continue;
+      if (c === search || c === searchNoSp) return true;
+      // Also match if either starts with the other (handles "walker" vs "WalkerGames")
+      if (c.startsWith(search) || search.startsWith(c)) return true;
+    }
+    return false;
+  });
+
+  if (match) {
+    return res.json({
+      preferredSlots: match.preferredSlots || [],
+      rainbetName:    match.rainbetName    || '',
+      userId:         match.userId         || null,
+    });
+  }
+  res.json({ preferredSlots: [], rainbetName: '' });
 });
 
 
