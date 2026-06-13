@@ -688,6 +688,42 @@ async function getSlotGames() {
 // Pre-fetch on startup
 getSlotGames().catch(() => {});
 
+// Image proxy — serves CORS-blocked thumbnails (e.g. pragmaticplay.com) through our backend
+const imgProxyCache = new Map(); // url -> {buf, ct, at}
+const IMG_PROXY_TTL = 24 * 60 * 60 * 1000; // 24 hours
+const ALLOWED_IMG_HOSTS = ['www.pragmaticplay.com', 'pragmaticplay.com', 'cdn.softswiss.net', 'cdn.rainbet.com', 'slot.report', 'www.thunderkick.com', 'static.wixstatic.com'];
+
+app.get('/api/img-proxy', async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).json({ error: 'Missing url param' });
+  try {
+    const parsed = new URL(url);
+    if (!ALLOWED_IMG_HOSTS.includes(parsed.hostname)) {
+      return res.status(403).json({ error: 'Host not allowed' });
+    }
+    // Check cache
+    const cached = imgProxyCache.get(url);
+    if (cached && Date.now() - cached.at < IMG_PROXY_TTL) {
+      res.set('Content-Type', cached.ct);
+      res.set('Cache-Control', 'public, max-age=86400');
+      res.set('Access-Control-Allow-Origin', '*');
+      return res.send(cached.buf);
+    }
+    const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 Chrome/120' } });
+    if (!resp.ok) return res.status(resp.status).end();
+    const ct = resp.headers.get('content-type') || 'image/jpeg';
+    if (!ct.startsWith('image/')) return res.status(400).json({ error: 'Not an image' });
+    const buf = Buffer.from(await resp.arrayBuffer());
+    imgProxyCache.set(url, { buf, ct, at: Date.now() });
+    res.set('Content-Type', ct);
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.set('Access-Control-Allow-Origin', '*');
+    res.send(buf);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/slots/search', async (req, res) => {
   const q     = (req.query.q || '').toLowerCase().trim();
   const limit = parseInt(req.query.limit) || 20;
@@ -709,8 +745,12 @@ app.get('/api/slots/search', async (req, res) => {
     .map(g => {
       // Priority 1: verified slot.report thumbnail
       let thumb = thumbMap[g.slug] || null;
-      // Priority 2: pre-verified softswiss CDN hit (confirmed working at build time)
+      // Priority 2: pre-verified softswiss/rainbet CDN hit (confirmed working at build time)
       if (!thumb) thumb = SOFTSWISS_HITS[g.slug] || null;
+      // Wrap CORS-blocked origins through our proxy (e.g. pragmaticplay.com)
+      if (thumb && (thumb.includes('pragmaticplay.com') || thumb.includes('wixstatic.com'))) {
+        thumb = `/api/img-proxy?url=${encodeURIComponent(thumb)}`;
+      }
       return { name: g.name, slug: g.slug, provider: g.provider_slug || '', thumb };
     });
   res.json(results);
