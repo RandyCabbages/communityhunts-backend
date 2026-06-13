@@ -648,8 +648,12 @@ async function getSlotGames() {
 
     // Filter to relevant providers only, sort reviewed slots first
     const allGames = (gamesData.results || []).filter(s => s.name);
+
+    // Only include slots that are confirmed on Rainbet:
+    // - Have a confirmed thumbnail (Rainbet CDN, Softswiss CDN, or scraped from provider sites)
+    // - This filters ~2600 confirmed Rainbet slots from the full ~6000 slot list
     const relevant = allGames.filter(g =>
-      RELEVANT_PROVIDERS.has(g.provider_slug) || reviewedSlugs.has(g.slug)
+      thumbMap[g.slug] || SOFTSWISS_HITS[g.slug] || reviewedSlugs.has(g.slug)
     );
 
     // Deduplicate by slug (keep first occurrence)
