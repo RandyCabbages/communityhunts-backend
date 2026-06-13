@@ -718,6 +718,69 @@ app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
 // ── Slot Autocomplete ─────────────────────────────────────────────
 let slotCache = { games: [], thumbMap: {}, fetchedAt: 0 };
 
+// Provider prefixes used in Rainbet slugs (sorted by length desc to match longest first)
+const RAINBET_PROVIDERS = [
+  'big-time-gaming','massive-studios','backseat-gaming','bullshark-games',
+  'foxhound-games','kitsune-studios','pineapple-play','print-studios',
+  'pragmatic-play','nownow-gaming','clutch-gaming','jinx-gaming',
+  'relax-gaming','red-tiger','playn-go','play-n-go','peter-sons',
+  'shady-lady','trusty-gaming','elk-studios','iron-dog','push-gaming',
+  'blueprint','spinomenal','thunderkick','yggdrasil','quickspin',
+  'wazdan','hacksaw','nolimit','playngo','bgaming','popiplay',
+  'voltent','habanero','endorphina','betsoft','1spin4win','pgsoft',
+  'mascot','penguin','amigo','3-oaks','belatra','retro','platipus',
+  'avatarux','zillion','clawbuster','truelab','slotmill','fantasma',
+  'isoftbet','netent','ace-roll','onetouch','gameart','gamomat',
+].sort((a, b) => b.length - a.length);
+
+// Maps internal provider IDs to Rainbet's URL prefix format
+const PROVIDER_URL_MAP = {
+  'pragmatic-play':'pragmatic-play','playngo':'play-n-go','play-n-go':'play-n-go',
+  'hacksaw':'hacksaw','hacksaw-gaming':'hacksaw',
+  'nolimit':'nolimit','nolimit-city':'nolimit',
+  'blueprint':'blueprint','blueprint-gaming':'blueprint',
+  'relax':'relax','relax-gaming':'relax',
+};
+
+function rainbetExtractProvider(rainbetSlug) {
+  for (const p of RAINBET_PROVIDERS) {
+    if (rainbetSlug.startsWith(p + '-')) {
+      return { provider: p, slug: rainbetSlug.slice(p.length + 1) };
+    }
+  }
+  // Couldn't parse — use first segment as provider
+  const idx = rainbetSlug.indexOf('-');
+  if (idx > 0) return { provider: rainbetSlug.slice(0, idx), slug: rainbetSlug.slice(idx + 1) };
+  return { provider: '', slug: rainbetSlug };
+}
+
+// Load pre-scraped Rainbet slot list (authoritative source, ~6700 slots)
+let RAINBET_SLOTS = [];
+const RAINBET_SLOTS_FILE = path.join(__dirname, 'rainbet_slots.json');
+try {
+  if (fs.existsSync(RAINBET_SLOTS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(RAINBET_SLOTS_FILE, 'utf8'));
+    // Expected format: array of {name, rainbetSlug, thumb}
+    // Normalize and URL-encode the path portion of thumb (filenames have spaces)
+    RAINBET_SLOTS = raw.map(s => {
+      const { provider, slug } = rainbetExtractProvider(s.rainbetSlug || '');
+      let thumb = s.thumb || null;
+      if (thumb) {
+        // Re-encode any unsafe characters in the path
+        const match = thumb.match(/^(https?:\/\/[^/]+)(\/.*)$/);
+        if (match) {
+          const [, origin, path] = match;
+          thumb = origin + path.split('/').map(seg => encodeURIComponent(decodeURIComponent(seg))).join('/');
+        }
+      }
+      return { name: s.name, slug, provider, rainbetSlug: s.rainbetSlug, thumb };
+    }).filter(s => s.name && s.thumb);
+    console.log(`[slots] Loaded ${RAINBET_SLOTS.length} slots from rainbet_slots.json`);
+  } else {
+    console.log('[slots] rainbet_slots.json not found, using slot.report only');
+  }
+} catch(e) { console.error('[slots] Failed to load rainbet_slots.json:', e.message); }
+
 // Hardcoded thumbnail overrides for slots with non-standard naming
 const EXTRA_THUMBS = {
   'fire-in-the-hole-xbomb': 'https://cdn.softswiss.net/i/s4/nolimit/FireInTheHolexBomb.webp',
@@ -879,19 +942,36 @@ app.get('/api/img-proxy', async (req, res) => {
 app.get('/api/slots/search', async (req, res) => {
   const q     = (req.query.q || '').toLowerCase().trim();
   const limit = parseInt(req.query.limit) || 20;
-  const { games, thumbMap } = await getSlotGames();
 
   // Build full mapped list once and cache it
-  if (!getSlotGames._mappedCache || getSlotGames._mappedCacheAt !== slotCache.fetchedAt) {
-    getSlotGames._mappedCache = games.map(g => {
-      let thumb = thumbMap[g.slug] || null;
-      if (!thumb) thumb = SOFTSWISS_HITS[g.slug] || null;
+  if (!getSlotGames._mappedCache) {
+    let combined = [];
+
+    // PRIMARY: Rainbet scraped slots (authoritative; ~6700 with thumbnails)
+    if (RAINBET_SLOTS.length) {
+      combined = RAINBET_SLOTS.map(s => ({
+        name: s.name,
+        slug: s.slug,
+        provider: s.provider,
+        rainbetSlug: s.rainbetSlug,
+        thumb: s.thumb,
+      }));
+    }
+
+    // FALLBACK: slot.report slots not already in Rainbet list (legacy/cross-reference)
+    const { games, thumbMap } = await getSlotGames();
+    const existingNames = new Set(combined.map(s => s.name.toLowerCase()));
+    for (const g of games) {
+      if (existingNames.has(g.name.toLowerCase())) continue;
+      let thumb = thumbMap[g.slug] || SOFTSWISS_HITS[g.slug] || null;
       if (thumb && (thumb.includes('pragmaticplay.com') || thumb.includes('wixstatic.com'))) {
         thumb = `/api/img-proxy?url=${encodeURIComponent(thumb)}`;
       }
-      return { name: g.name, slug: g.slug, provider: g.provider_slug || '', thumb };
-    });
-    getSlotGames._mappedCacheAt = slotCache.fetchedAt;
+      combined.push({ name: g.name, slug: g.slug, provider: g.provider_slug || '', thumb });
+    }
+
+    getSlotGames._mappedCache = combined;
+    console.log(`[slots] Built mapped cache: ${combined.length} slots (${RAINBET_SLOTS.length} from Rainbet, ${combined.length - RAINBET_SLOTS.length} extra from slot.report)`);
   }
 
   const pool = getSlotGames._mappedCache;
