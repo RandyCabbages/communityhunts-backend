@@ -562,30 +562,28 @@ app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
 // ── Slot Autocomplete ─────────────────────────────────────────────
 let slotCache = { games: [], thumbMap: {}, fetchedAt: 0 };
 
-// Softswiss CDN provider code map — covers ~3800 slots across 20 providers
-// URL pattern: https://cdn.softswiss.net/i/s4/{code}/{PascalCaseSlugName}.webp
-const SOFTSWISS_PROVIDERS = {
-  'pragmatic-play':   'pragmatic',
-  'playngo':          'playngo',
-  'red-tiger':        'redtiger',
-  'bgaming':          'bgaming',
-  'netent':           'evolution',   // NetEnt acquired by Evolution
-  'isoftbet':         'isoftbet',
-  'hacksaw-gaming':   'hacksaw',
-  'blueprint-gaming': 'blueprint',
-  'nolimit-city':     'nolimit',
-  'elk-studios':      'elk',
-  'quickspin':        'quickspin',
-  'relax-gaming':     'relax',
-  'thunderkick':      'thunderkick',
-  'gameart':          'gameart',
-  'push-gaming':      'pushgaming',
-  'yggdrasil':        'yggdrasil',
-  'wazdan':           'wazdan',
-  'big-time-gaming':  'evolution',   // BTG acquired by Evolution group
-  'iron-dog-studio':  '1x2gaming',   // Iron Dog is 1x2 Gaming on softswiss
-  'backseat-gaming':  'hacksaw',     // Backseat Gaming is a Hacksaw sub-label
+// Hardcoded thumbnail overrides for slots with non-standard naming
+const EXTRA_THUMBS = {
+  'fire-in-the-hole-xbomb': 'https://cdn.softswiss.net/i/s4/nolimit/FireInTheHolexBomb.webp',
+  'dog-house-megaways':      'https://cdn.softswiss.net/i/s4/pragmatic/TheDogHouseMegaways.webp',
+  'book-of-dead':            'https://cdn.softswiss.net/i/s4/playngo/BookofDead.webp',
+  'the-jack-rose':           'https://cdn.softswiss.net/i/s4/hacksaw/TheJackandRose.webp',
+  'junkyard-kings-2':        'https://cdn.softswiss.net/i/s4/hacksaw/JunkyardKings2.webp',
+  'rusty-and-curly':         'https://cdn.softswiss.net/i/s4/hacksaw/RustyAndCurly.webp',
+  'hop-n-pop':               'https://cdn.softswiss.net/i/s4/hacksaw/HopnPop.webp',
+  'san-quentin-xways':       'https://cdn.softswiss.net/i/s4/nolimit/SanQuentinXWays.webp',
 };
+
+// Load pre-verified softswiss CDN hits (tested at build time, ~1900 slots)
+let SOFTSWISS_HITS = {};
+const SOFTSWISS_HITS_FILE = path.join(__dirname, 'softswiss_hits.json');
+try {
+  if (fs.existsSync(SOFTSWISS_HITS_FILE)) {
+    SOFTSWISS_HITS = JSON.parse(fs.readFileSync(SOFTSWISS_HITS_FILE, 'utf8'));
+    console.log(`[slots] Loaded ${Object.keys(SOFTSWISS_HITS).length} pre-verified softswiss thumbs`);
+  }
+} catch(e) { console.error('[slots] Failed to load softswiss hits:', e.message); }
+
 function toPascal(slug) {
   return slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
 }
@@ -633,11 +631,18 @@ async function getSlotGames() {
       } catch(e) { console.error('[slots] Failed to parse slots-cards.js:', e.message); }
     }
 
-    // Hardcoded thumbnails for popular slots not covered by slot.report or softswiss CDN
-    const EXTRA_THUMBS = {
-      'le-pharaoh': 'https://cdn.softswiss.net/i/s4/hacksaw/LePharaoh.webp',
+    // Hardcoded extra thumbs for naming exceptions
+    const EXTRA_THUMBS_LOCAL = {
+      'fire-in-the-hole-xbomb': 'https://cdn.softswiss.net/i/s4/nolimit/FireInTheHolexBomb.webp',
+      'dog-house-megaways':      'https://cdn.softswiss.net/i/s4/pragmatic/TheDogHouseMegaways.webp',
+      'book-of-dead':            'https://cdn.softswiss.net/i/s4/playngo/BookofDead.webp',
+      'the-jack-rose':           'https://cdn.softswiss.net/i/s4/hacksaw/TheJackandRose.webp',
+      'junkyard-kings-2':        'https://cdn.softswiss.net/i/s4/hacksaw/JunkyardKings2.webp',
+      'rusty-and-curly':         'https://cdn.softswiss.net/i/s4/hacksaw/RustyAndCurly.webp',
+      'hop-n-pop':               'https://cdn.softswiss.net/i/s4/hacksaw/HopnPop.webp',
+      'san-quentin-xways':       'https://cdn.softswiss.net/i/s4/nolimit/SanQuentinXWays.webp',
     };
-    Object.entries(EXTRA_THUMBS).forEach(([slug, url]) => {
+    Object.entries(EXTRA_THUMBS_LOCAL).forEach(([slug, url]) => {
       if (!thumbMap[slug]) thumbMap[slug] = url;
     });
 
@@ -696,10 +701,8 @@ app.get('/api/slots/search', async (req, res) => {
     .map(g => {
       // Priority 1: verified slot.report thumbnail
       let thumb = thumbMap[g.slug] || null;
-      // Priority 2: softswiss CDN (covers pragmatic, hacksaw, nolimit, relax, bgaming, etc.)
-      if (!thumb && SOFTSWISS_PROVIDERS[g.provider_slug]) {
-        thumb = `https://cdn.softswiss.net/i/s4/${SOFTSWISS_PROVIDERS[g.provider_slug]}/${toPascal(g.slug)}.webp`;
-      }
+      // Priority 2: pre-verified softswiss CDN hit (confirmed working at build time)
+      if (!thumb) thumb = SOFTSWISS_HITS[g.slug] || null;
       return { name: g.name, slug: g.slug, provider: g.provider_slug || '', thumb };
     });
   res.json(results);
