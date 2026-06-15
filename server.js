@@ -422,7 +422,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
   }
   hunts[req.user.id] = {
     user: req.user, isLive: false, startedAt: null, archivedAt: null,
-    huntType, bonuses: [], equity: huntType==='vip'?[{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}]:[], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating'
+    huntType, bonuses: [], equity: huntType==='vip'?[{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}]:[], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating', roundRobin: true
   };
   persistHunts();
   res.json({ok:true});
@@ -456,7 +456,7 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
     archiveHunt(hunts[req.user.id]);
   }
   hunts[req.user.id] = { user: req.user, isLive: false, startedAt: null, archivedAt: null,
-    huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating' };
+    huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating', roundRobin: true };
   persistHunts();
   emitHubUpdate();
   res.json({ok:true});
