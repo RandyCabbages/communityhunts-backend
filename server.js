@@ -23,6 +23,8 @@ const VIP_HOSTS      = (process.env.VIP_HOSTS || 'bean,mcflurry,mihallimou,missi
 const VIP_IDS        = (process.env.VIP_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
 
 function nameOf(user) { return (user?.displayName || user?.username || '').toLowerCase().trim(); }
+// Normalize slot name for dedup: strip punctuation, collapse whitespace, lowercase
+function normalizeSlot(name) { return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 function isAdmin(user) {
   if (!user) return false;
   if (user.id && ADMIN_IDS.length && ADMIN_IDS.includes(user.id)) return true;
@@ -234,6 +236,23 @@ try {
   if (fs.existsSync(HUNTS_FILE)) {
     const saved = JSON.parse(fs.readFileSync(HUNTS_FILE, 'utf8'));
     Object.assign(hunts, saved);
+    // Strip any duplicate calls that snuck in before normalization was added
+    let totalRemoved = 0;
+    for (const id in hunts) {
+      const h = hunts[id];
+      if (h?.calls?.length) {
+        const seen = new Set();
+        const before = h.calls.length;
+        h.calls = h.calls.filter(c => {
+          const key = (c.slot || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        totalRemoved += before - h.calls.length;
+      }
+    }
+    if (totalRemoved > 0) console.log(`[persist] Removed ${totalRemoved} duplicate calls on startup`);
     console.log(`[persist] Loaded ${Object.keys(hunts).length} hunts from disk`);
   }
 } catch(e) { console.error('[persist] Failed to load hunts:', e.message); }
@@ -248,6 +267,19 @@ try {
 } catch(e) { console.error('[persist] Failed to load archive:', e.message); }
 
 function persistHunts() {
+  // Bulletproof: dedupe call arrays before persisting. Keeps first occurrence of each slot.
+  for (const id in hunts) {
+    const h = hunts[id];
+    if (h?.calls?.length) {
+      const seen = new Set();
+      h.calls = h.calls.filter(c => {
+        const key = normalizeSlot(c.slot);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+  }
   try { fs.writeFileSync(HUNTS_FILE, JSON.stringify(hunts), 'utf8'); }
   catch(e) { console.error('[persist] Failed to save hunts:', e.message); }
 }
@@ -445,8 +477,8 @@ app.post('/api/hunts/:userId/calls', requireAuth, (req, res) => {
   if (hunt.huntMode === 'rolling' && !canEditHunt(req.user, req.params.userId))
     return res.status(403).json({error:'Cannot add calls while the hunt is rolling'});
 
-  // Duplicate check
-  if (hunt.calls.some(c => c.slot.toLowerCase().trim() === slot.toLowerCase().trim()))
+  // Duplicate check (normalized: "CULT" === "CULT.")
+  if (hunt.calls.some(c => normalizeSlot(c.slot) === normalizeSlot(slot)))
     return res.status(400).json({error:`"${slot}" is already in the queue`});
 
   // Per-person limit (not applied to hunt owner or admins)
@@ -712,7 +744,7 @@ app.get('/api/discord/import-calls', requireAuth, async (req, res) => {
     const equityNames = (hunt.equity || []).filter(e => e.name).map(e => e.name.toLowerCase().trim());
 
     const imported = [];
-    const existingSlots = new Set((hunt.calls || []).map(c => (c.slot||'').toLowerCase().trim()));
+    const existingSlots = new Set((hunt.calls || []).map(c => normalizeSlot(c.slot)));
 
     for (const msg of recent) {
       const callerName = msg.member?.nick || msg.author?.global_name || msg.author?.username || '';
@@ -738,7 +770,8 @@ app.get('/api/discord/import-calls', requireAuth, async (req, res) => {
 
       for (const part of parts) {
         const slotName = part.replace(/^[#\-•*\d.]+\s*/, '').trim();
-        if (slotName && !existingSlots.has(slotName.toLowerCase())) {
+        const nsName = normalizeSlot(slotName);
+        if (slotName && nsName && !existingSlots.has(nsName)) {
           imported.push({
             id: `dc_${msg.id}_${imported.length}`,
             slot: slotName,
@@ -746,7 +779,7 @@ app.get('/api/discord/import-calls', requireAuth, async (req, res) => {
             status: 'pending',
             source: 'discord'
           });
-          existingSlots.add(slotName.toLowerCase());
+          existingSlots.add(nsName);
         }
       }
     }
