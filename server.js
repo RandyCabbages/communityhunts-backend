@@ -724,10 +724,10 @@ async function getSettings(userId) {
   if (pgPool) {
     try {
       const r = await pgPool.query('SELECT settings FROM user_settings WHERE user_id=$1', [userId]);
-      return r.rows[0]?.settings || { rainbetName: '', preferredSlots: [] };
+      return r.rows[0]?.settings || { rainbetName: '', twitchName: '', preferredSlots: [] };
     } catch(e) { console.error('[settings] pg getSettings error:', e.message); }
   }
-  return userSettings[userId] || { rainbetName: '', preferredSlots: [] };
+  return userSettings[userId] || { rainbetName: '', twitchName: '', preferredSlots: [] };
 }
 
 async function saveSettings(userId, data) {
@@ -753,8 +753,9 @@ app.get('/api/settings', requireAuth, async (req, res) => {
 // PUT /api/settings — save current user's settings (also stores their Discord names for lookup)
 app.put('/api/settings', requireAuth, async (req, res) => {
   const current = await getSettings(req.user.id);
-  const { rainbetName, preferredSlots } = req.body;
+  const { rainbetName, twitchName, preferredSlots } = req.body;
   if (rainbetName !== undefined)    current.rainbetName    = String(rainbetName).trim().slice(0, 64);
+  if (twitchName  !== undefined)    current.twitchName     = String(twitchName).trim().slice(0, 64);
   if (preferredSlots !== undefined) current.preferredSlots = (preferredSlots || []).filter(Boolean);
   // Always update Discord identity for name-based lookup by other hunt owners
   current.discordUsername    = req.user.username || '';
@@ -767,14 +768,14 @@ app.put('/api/settings', requireAuth, async (req, res) => {
 // GET /api/settings/:userId — get another user's preferred slots and rainbet name by Discord ID
 app.get('/api/settings/:userId', requireAuth, async (req, res) => {
   const s = await getSettings(req.params.userId);
-  res.json({ preferredSlots: s.preferredSlots || [], rainbetName: s.rainbetName || '' });
+  res.json({ preferredSlots: s.preferredSlots || [], rainbetName: s.rainbetName || '', twitchName: s.twitchName || '' });
 });
 
 // GET /api/settings/by-name/:name — look up another user's preferred slots & rainbet by their Discord username/displayName
 // Used when a hunt owner adds a member by name and we don't know their Discord ID
 app.get('/api/settings/by-name/:name', requireAuth, async (req, res) => {
   const search = (req.params.name || '').toLowerCase().trim();
-  if (!search) return res.json({ preferredSlots: [], rainbetName: '' });
+  if (!search) return res.json({ preferredSlots: [], rainbetName: '', twitchName: '' });
   const searchNoSp = search.replace(/\s+/g,'');
 
   // Build list of all settings to search
@@ -809,10 +810,11 @@ app.get('/api/settings/by-name/:name', requireAuth, async (req, res) => {
     return res.json({
       preferredSlots: match.preferredSlots || [],
       rainbetName:    match.rainbetName    || '',
+      twitchName:     match.twitchName     || '',
       userId:         match.userId         || null,
     });
   }
-  res.json({ preferredSlots: [], rainbetName: '' });
+  res.json({ preferredSlots: [], rainbetName: '', twitchName: '' });
 });
 
 // POST /api/admin/set-rainbet-name — let an admin manually set another user's Rainbet name.
