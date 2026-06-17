@@ -392,6 +392,15 @@ function uid() { return Math.random().toString(36).slice(2, 8); }
 app.get('/api/hunts',          (req, res) => res.json(getPublicHunts()));
 app.get('/api/hunts/archived', (req, res) => res.json(getArchivedHunts()));
 
+// Fetch a specific archived hunt snapshot. One user can have many archived hunts so the
+// archivedAt timestamp is the tiebreaker. Always returned as readonly (canEdit/canAddCalls=false).
+app.get('/api/hunts/:userId/archived/:archivedAt', (req, res) => {
+  const { userId, archivedAt } = req.params;
+  const found = archive.find(h => h.user?.id === userId && h.archivedAt === archivedAt);
+  if (!found) return res.status(404).json({error:'Archived hunt not found'});
+  res.json({ ...found, canEdit: false, canAddCalls: false });
+});
+
 app.get('/api/hunts/:userId', (req, res) => {
   const hunt = hunts[req.params.userId];
   if (!hunt) return res.status(404).json({error:'Hunt not found'});
