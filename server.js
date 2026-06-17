@@ -21,7 +21,9 @@ const ADMINS         = (process.env.ADMINS || 'bean,randycabbage,randy cabbage,m
 const ADMIN_IDS      = (process.env.ADMIN_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
 const VIP_HOSTS      = (process.env.VIP_HOSTS || 'bean,mcflurry,mihallimou,missingiscool,cuda,randycabbage,cabbage,goofer').toLowerCase().split(',').map(s=>s.trim());
 const VIP_IDS        = (process.env.VIP_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
-const TICKET_RECIPIENTS = (process.env.TICKET_RECIPIENTS || '135203806676779008').split(',').map(s=>s.trim()).filter(Boolean);
+const TICKET_EMAILS = (process.env.TICKET_EMAILS || 'nesgoomba@gmail.com,luimeneghim@gmail.com').split(',').map(s=>s.trim()).filter(Boolean);
+const RESEND_API_KEY = (process.env.RESEND_API_KEY || '').trim();
+const TICKET_FROM = (process.env.TICKET_FROM || 'BeanHunt Tickets <onboarding@resend.dev>').trim();
 
 function nameOf(user) { return (user?.displayName || user?.username || '').toLowerCase().trim(); }
 // Normalize slot name for dedup: strip punctuation, collapse whitespace, lowercase
@@ -972,49 +974,59 @@ app.post('/api/admin/set-preferred-slots', requireAdmin, async (req, res) => {
 
 app.post('/api/tickets', async (req, res) => {
   const { username, issue, type } = req.body;
-  const botToken = process.env.DISCORD_BOT_TOKEN;
-  if (!botToken) return res.status(500).json({error:'Bot token not configured'});
-  if (TICKET_RECIPIENTS.length === 0) return res.status(500).json({error:'No ticket recipients configured'});
 
-  const embed = {
-    title: `🎫 Ticket — ${type||'General'}`,
-    description: issue,
-    color: 0x9146ff,
-    fields: [{ name: 'From', value: username||'Anonymous', inline: true }],
-    timestamp: new Date().toISOString()
-  };
+  if (!RESEND_API_KEY) return res.status(500).json({error:'RESEND_API_KEY not configured on the server'});
+  if (TICKET_EMAILS.length === 0) return res.status(500).json({error:'No ticket recipients configured'});
 
-  // Fan out to every recipient. Track individual outcomes so one bad id doesn't
-  // sink the others — the ticket counts as delivered if at least one DM succeeds.
-  const results = await Promise.all(TICKET_RECIPIENTS.map(async recipientId => {
-    try {
-      const dmRes = await fetch('https://discord.com/api/v10/users/@me/channels', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bot ${botToken}` },
-        body: JSON.stringify({ recipient_id: recipientId })
-      });
-      const dmData = await dmRes.json();
-      if (!dmData.id) throw new Error(`Could not open DM channel for ${recipientId}: ${JSON.stringify(dmData)}`);
+  const safe = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const from = safe(username || 'Anonymous');
+  const kind = safe(type || 'General');
+  const body = safe(issue || '(no message)').replace(/\n/g,'<br>');
 
-      const msgRes = await fetch(`https://discord.com/api/v10/channels/${dmData.id}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bot ${botToken}` },
-        body: JSON.stringify({ embeds: [embed] })
-      });
-      if (!msgRes.ok) throw new Error(`Send failed for ${recipientId}: ${msgRes.status}`);
-      return { recipientId, ok: true };
-    } catch (e) {
-      console.error('[ticket] delivery failed:', e.message);
-      return { recipientId, ok: false, error: e.message };
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #0e0e10; color: #efeff1; border-radius: 8px;">
+      <div style="border-left: 3px solid #9146ff; padding-left: 14px; margin-bottom: 20px;">
+        <div style="font-size: 11px; color: #adadb8; letter-spacing: 0.12em; text-transform: uppercase;">New BeanHunt ticket</div>
+        <div style="font-size: 20px; font-weight: 700; margin-top: 4px;">${kind}</div>
+      </div>
+      <div style="background: #18181b; border-radius: 6px; padding: 16px 18px; margin-bottom: 16px;">
+        <div style="font-size: 12px; color: #adadb8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">From</div>
+        <div style="font-size: 15px; font-weight: 600;">${from}</div>
+      </div>
+      <div style="background: #18181b; border-radius: 6px; padding: 16px 18px;">
+        <div style="font-size: 12px; color: #adadb8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px;">Message</div>
+        <div style="font-size: 14px; line-height: 1.6; color: #efeff1;">${body}</div>
+      </div>
+      <div style="font-size: 11px; color: #7c7c84; margin-top: 18px; text-align: center;">
+        ${new Date().toISOString()}
+      </div>
+    </div>
+  `;
+
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${RESEND_API_KEY}` },
+      body: JSON.stringify({
+        from: TICKET_FROM,
+        to: TICKET_EMAILS,
+        subject: `🎫 BeanHunt Ticket — ${type||'General'} (from ${username||'Anonymous'})`,
+        reply_to: username && username.includes('@') ? username : undefined,
+        html
+      })
+    });
+    if (!r.ok) {
+      const detail = await r.text().catch(()=>'');
+      console.error('[ticket] Resend rejected:', r.status, detail);
+      return res.status(500).json({error:`Resend returned ${r.status}`, detail});
     }
-  }));
-
-  const delivered = results.filter(r => r.ok).length;
-  if (delivered === 0) {
-    return res.status(500).json({error:'Failed to send ticket to any recipient', results});
+    const data = await r.json().catch(()=>({}));
+    console.log(`[ticket] emailed to ${TICKET_EMAILS.join(', ')} — id ${data.id || '(no id)'}`);
+    res.json({ ok: true, via: 'email', recipients: TICKET_EMAILS.length });
+  } catch (e) {
+    console.error('[ticket] email delivery failed:', e.message);
+    res.status(500).json({error:'Failed to send ticket email', detail: e.message});
   }
-  console.log(`[ticket] delivered to ${delivered}/${TICKET_RECIPIENTS.length} recipients`);
-  res.json({ ok: true, delivered, total: TICKET_RECIPIENTS.length });
 });
 
 // ── Twitch live check ──────────────────────────────────────────────
