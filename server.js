@@ -877,6 +877,42 @@ app.post('/api/admin/set-user-field', requireAdmin, async (req, res) => {
   res.json({ ok: true, scope: 'name', name, syntheticId, field, value });
 });
 
+// POST /api/admin/set-preferred-slots — admin sets another user's preferred-slots list.
+// Body: { userId?, name?, slots: [{name, thumb, slug, provider}, ...] }
+// When only `name` is provided, uses synthetic `manual:<lowercased>` id so by-name lookup works.
+app.post('/api/admin/set-preferred-slots', requireAdmin, async (req, res) => {
+  const slots = Array.isArray(req.body?.slots) ? req.body.slots : null;
+  if (!slots) return res.status(400).json({ error: 'slots array required' });
+  // Sanitize: keep up to 50 slots, normalize fields, drop empties.
+  const cleaned = slots
+    .filter(s => s && typeof s === 'object' && s.name)
+    .slice(0, 50)
+    .map(s => ({
+      name:     String(s.name).slice(0, 120),
+      thumb:    s.thumb    ? String(s.thumb).slice(0, 500) : null,
+      slug:     s.slug     ? String(s.slug).slice(0, 200)  : null,
+      provider: s.provider ? String(s.provider).slice(0, 80) : null,
+    }));
+  const userId = (req.body?.userId || '').toString().trim();
+  const name   = (req.body?.name   || '').toString().trim();
+  if (!userId && !name) return res.status(400).json({ error: 'Provide userId or name' });
+
+  if (userId) {
+    const current = await getSettings(userId);
+    current.preferredSlots = cleaned;
+    await saveSettings(userId, current);
+    return res.json({ ok: true, scope: 'userId', userId, count: cleaned.length });
+  }
+
+  const syntheticId = `manual:${name.toLowerCase()}`;
+  const current = await getSettings(syntheticId);
+  current.preferredSlots     = cleaned;
+  current.discordDisplayName = current.discordDisplayName || name;
+  current.discordUsername    = current.discordUsername    || name;
+  await saveSettings(syntheticId, current);
+  res.json({ ok: true, scope: 'name', name, syntheticId, count: cleaned.length });
+});
+
 app.post('/api/tickets', async (req, res) => {
   const { username, issue, type } = req.body;
   const botToken = process.env.DISCORD_BOT_TOKEN;
