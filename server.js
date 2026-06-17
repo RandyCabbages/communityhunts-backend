@@ -815,6 +815,34 @@ app.get('/api/settings/by-name/:name', requireAuth, async (req, res) => {
   res.json({ preferredSlots: [], rainbetName: '' });
 });
 
+// POST /api/admin/set-rainbet-name — let an admin manually set another user's Rainbet name.
+// Accepts either { userId, rainbetName } (Discord ID known) or { name, rainbetName } (only name known).
+// When only a name is supplied, a synthetic settings row is keyed by `manual:<lowercased-name>` so the
+// existing by-name lookup matches via discordDisplayName.
+app.post('/api/admin/set-rainbet-name', requireAdmin, async (req, res) => {
+  const rainbetName = String(req.body?.rainbetName || '').trim().slice(0, 64);
+  if (!rainbetName) return res.status(400).json({ error: 'rainbetName required' });
+  const userId = (req.body?.userId || '').toString().trim();
+  const name   = (req.body?.name   || '').toString().trim();
+  if (!userId && !name) return res.status(400).json({ error: 'Provide userId or name' });
+
+  if (userId) {
+    const current = await getSettings(userId);
+    current.rainbetName = rainbetName;
+    await saveSettings(userId, current);
+    return res.json({ ok: true, scope: 'userId', userId, rainbetName });
+  }
+
+  // Name-only path: create or update a synthetic entry so the by-name lookup will find it later.
+  const syntheticId = `manual:${name.toLowerCase()}`;
+  const current = await getSettings(syntheticId);
+  current.rainbetName       = rainbetName;
+  current.discordDisplayName = name;     // makes /api/settings/by-name/:name match this row
+  current.discordUsername    = name;
+  await saveSettings(syntheticId, current);
+  res.json({ ok: true, scope: 'name', name, syntheticId, rainbetName });
+});
+
 
 
 app.post('/api/tickets', async (req, res) => {
