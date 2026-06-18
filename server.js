@@ -526,6 +526,13 @@ app.get('/api/hunts/:userId', (req, res) => {
 // ── My hunt ────────────────────────────────────────────────────────
 app.get('/api/my-hunt', requireAuth, (req, res) => res.json(hunts[req.user.id] || null));
 
+// Seed equity when a hunt is created/reset: VIP starts with Bean, solo with
+// just the runner, community empty.
+function initialEquity(huntType, user) {
+  if (huntType === 'vip')  return [{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}];
+  if (huntType === 'solo') return [{id:'creator_auto',name:(user?.displayName||user?.username||''),amount:0,isRollWinner:false}];
+  return [];
+}
 app.post('/api/my-hunt/start', requireAuth, (req, res) => {
   const { huntType = 'community' } = req.body;
   if (huntType === 'vip' && !isAdmin(req.user) && !isVipHost(req.user))
@@ -544,7 +551,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
   }
   hunts[req.user.id] = {
     user: req.user, isLive: false, startedAt: null, archivedAt: null,
-    huntType, bonuses: [], equity: huntType==='vip'?[{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}]:[], calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true
+    huntType, bonuses: [], equity: initialEquity(huntType, req.user), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true
   };
   persistHunts();
   res.json({ok:true});
@@ -579,9 +586,9 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
   }
   // Preserve the hunt type across a reset — resetting a VIP hunt should stay
   // VIP (re-seeded with Bean), not silently demote to community.
-  const keepType = hunts[req.user.id]?.huntType === 'vip' ? 'vip' : 'community';
+  const keepType = ['vip','solo'].includes(hunts[req.user.id]?.huntType) ? hunts[req.user.id].huntType : 'community';
   hunts[req.user.id] = { user: req.user, isLive: false, startedAt: null, archivedAt: null,
-    huntType: keepType, bonuses: [], equity: keepType==='vip'?[{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}]:[], calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true };
+    huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true };
   persistHunts();
   emitHubUpdate();
   res.json({ok:true});
