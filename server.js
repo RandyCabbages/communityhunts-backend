@@ -37,7 +37,7 @@ const VIP_HOSTS      = (process.env.VIP_HOSTS || 'bean,mcflurry,mihallimou,missi
 const VIP_IDS        = (process.env.VIP_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
 const TICKET_EMAILS = (process.env.TICKET_EMAILS || 'nesgoomba@gmail.com,luimeneghim@gmail.com').split(',').map(s=>s.trim()).filter(Boolean);
 const RESEND_API_KEY = (process.env.RESEND_API_KEY || '').trim();
-const TICKET_FROM = (process.env.TICKET_FROM || 'BeanHunt Tickets <onboarding@resend.dev>').trim();
+const TICKET_FROM = (process.env.TICKET_FROM || 'CommunityHunts Tickets <onboarding@resend.dev>').trim();
 
 function nameOf(user) { return (user?.displayName || user?.username || '').toLowerCase().trim(); }
 // Normalize slot name for dedup: strip punctuation, collapse whitespace, lowercase
@@ -1048,7 +1048,7 @@ app.post('/api/tickets', async (req, res) => {
   const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #0e0e10; color: #efeff1; border-radius: 8px;">
       <div style="border-left: 3px solid #9146ff; padding-left: 14px; margin-bottom: 20px;">
-        <div style="font-size: 11px; color: #adadb8; letter-spacing: 0.12em; text-transform: uppercase;">New BeanHunt ticket</div>
+        <div style="font-size: 11px; color: #adadb8; letter-spacing: 0.12em; text-transform: uppercase;">New CommunityHunts ticket</div>
         <div style="font-size: 20px; font-weight: 700; margin-top: 4px;">${kind}</div>
       </div>
       <div style="background: #18181b; border-radius: 6px; padding: 16px 18px; margin-bottom: 16px;">
@@ -1072,7 +1072,7 @@ app.post('/api/tickets', async (req, res) => {
       body: JSON.stringify({
         from: TICKET_FROM,
         to: TICKET_EMAILS,
-        subject: `🎫 BeanHunt Ticket — ${type||'General'} (from ${username||'Anonymous'})`,
+        subject: `🎫 CommunityHunts Ticket — ${type||'General'} (from ${username||'Anonymous'})`,
         reply_to: username && username.includes('@') ? username : undefined,
         html
       })
