@@ -1068,6 +1068,62 @@ setInterval(checkBeanLive, 5 * 60 * 1000);
 
 app.get('/api/bean-live', (req, res) => res.json(beanLive));
 
+// ── BeanTwitch leaderboard proxy ───────────────────────────────────
+// The beantwitch.com leaderboard API (https://api.beantwitch.com) is public
+// but CORS-allowlists only beantwitch.com, so the browser can't call it from
+// communityhunts.gg. We proxy it server-side, merge in prize/config metadata,
+// and cache the result so the homepage can render the synced standings.
+let lbCache = { data: null, fetchedAt: 0 };
+const LB_API = 'https://api.beantwitch.com';
+
+async function getLeaderboard() {
+  const CACHE_MS = 90 * 1000; // 90s — matches the upstream cache cadence
+  if (lbCache.data && Date.now() - lbCache.fetchedAt < CACHE_MS) return lbCache.data;
+
+  // beantwitch returns 500 unless the Origin is on its allowlist.
+  const headers = { 'User-Agent': 'Mozilla/5.0 Chrome/120', 'Origin': 'https://beantwitch.com', 'Accept': 'application/json' };
+  const [lbRes, cfgRes] = await Promise.all([
+    fetch(`${LB_API}/api/leaderboard`, { headers }),
+    fetch(`${LB_API}/api/config`,      { headers }),
+  ]);
+  if (!lbRes.ok)  throw new Error(`leaderboard upstream ${lbRes.status}`);
+  if (!cfgRes.ok) throw new Error(`config upstream ${cfgRes.status}`);
+  const lbJson  = await lbRes.json();
+  const cfg     = await cfgRes.json();
+
+  const prizes = Array.isArray(cfg.leaderboard_prizes) ? cfg.leaderboard_prizes : [];
+  const rows   = (lbJson?.data?.leaderboard || []).map(r => ({
+    rank:    r.rank,
+    player:  r.username,                 // already masked upstream (e.g. "2A***r")
+    wagered: r.wager,
+    prize:   prizes[r.rank - 1] ?? null, // prize by rank (1-indexed)
+  }));
+
+  const data = {
+    prizePool:   cfg.leaderboard_prize_pool ?? null,
+    currency:    cfg.currency || 'USD',
+    startDay:    cfg.leaderboard_start_day || null,
+    endDay:      cfg.leaderboard_end_day   || null,
+    syncedAt:    lbJson?.data?.cache_updated_at || null, // upstream cache timestamp
+    fetchedAt:   new Date().toISOString(),
+    standings:   rows,
+    fullUrl:     'https://beantwitch.com/leaderboard',
+  };
+  lbCache = { data, fetchedAt: Date.now() };
+  return data;
+}
+
+app.get('/api/leaderboard', async (req, res) => {
+  try {
+    res.json(await getLeaderboard());
+  } catch (e) {
+    console.error('[leaderboard] proxy error:', e.message);
+    // Serve stale cache if we have it, so a transient upstream blip doesn't blank the panel.
+    if (lbCache.data) return res.json(lbCache.data);
+    res.status(502).json({ error: 'leaderboard unavailable' });
+  }
+});
+
 // ── Health ─────────────────────────────────────────────────────────
 
 // ── Discord Import ────────────────────────────────────────────────
