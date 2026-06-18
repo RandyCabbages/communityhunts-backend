@@ -46,16 +46,28 @@ git revert <hash>          # safe way to undo a pushed commit — never force-pu
 
 ## Project Structure
 
-The entire backend is a **single file**: `server.js` (~740 lines, Express + Passport + Socket.IO).
+`server.js` holds Express routes + Socket.IO handlers + auth. Two seams were extracted into
+`lib/` (2026-06-18) to prepare for multi-tenancy:
 
 ```
-server.js         ← complete backend
+server.js            ← routes, Socket.IO, auth, Passport (the bulk of the backend)
+lib/persistence.js   ← hunt/archive state + Postgres hunts_kv persistence
+lib/integrations.js  ← Twitch live status, beantwitch leaderboard proxy, Discord import/parse
 package.json
-.env              ← secrets (never commit)
-.env.example      ← config template
-hunts_data.json   ← persistent hunt storage (auto-generated, don't commit)
-slots_cache.json  ← slot thumbnails cache (auto-generated, 24hr refresh)
+.env                 ← secrets (never commit)
+.env.example         ← config template
+hunts_data.json      ← persistent hunt storage (auto-generated, don't commit)
+slots_cache.json     ← slot thumbnails cache (auto-generated, 24hr refresh)
 ```
+
+**Shared-state rule:** `hunts` and `archive` are mutable singletons **owned by `lib/persistence.js`**.
+`server.js` imports them by reference (`const { hunts, archive } = require('./lib/persistence')`).
+Never reassign them (no `hunts = …`) — only mutate (`Object.assign`, `.push`, `.unshift`, `.splice`).
+A second instance would silently desync live hunt state.
+
+`lib/persistence.js` takes `pgPool` + `normalizeSlot` via `initPersistence(...)` (dependency
+injection, to avoid a circular require). `lib/integrations.js` takes `io` via `startTwitchPolling(io)`
+and receives the active hunt + `normalizeSlot` as args to `importCalls(...)`.
 
 ## Auth System
 
