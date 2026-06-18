@@ -238,6 +238,8 @@ app.get('/auth/discord/callback',
   (req, res) => {
     // Record this user as known so they show up in equity-name autocomplete for others
     recordKnownUser(req.user);
+    // Auto-join the community they signed in through (Bean today; the slug they arrived via later).
+    memberships.joinCommunity(req.user.id, req.tenant.id).catch(() => {});
     const userData = Buffer.from(JSON.stringify({
       id: req.user.id, username: req.user.username,
       displayName: req.user.displayName, avatar: req.user.avatar,
@@ -257,6 +259,9 @@ app.get('/auth/me', (req, res) => {
   // Anyone who hits /auth/me with a valid session has logged in at some point.
   // Record (or refresh) them in known_users so they show up in equity autocomplete.
   recordKnownUser(req.user);
+  // Auto-attribute to the community they're browsing (Bean by default) — idempotent, so a
+  // returning user keeps their original join date and this just no-ops after the first time.
+  memberships.joinCommunity(req.user.id, req.tenant.id).catch(() => {});
   res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req) } });
 });
 
@@ -278,6 +283,28 @@ app.get('/api/known-users', async (req, res) => {
   }
 });
 
+// ── Community memberships ──────────────────────────────────────────
+// GET /api/my-communities — tenant slugs the logged-in user belongs to.
+app.get('/api/my-communities', requireAuth, async (req, res) => {
+  res.json({ communities: await memberships.getUserCommunities(req.user.id) });
+});
+
+// POST /api/communities/:slug/join — join a community (the slug in the path, validated against tenants).
+app.post('/api/communities/:slug/join', requireAuth, async (req, res) => {
+  const t = tenants.getTenantBySlug(String(req.params.slug));
+  if (!t) return res.status(404).json({ error: 'Unknown community' });
+  await memberships.joinCommunity(req.user.id, t.id);
+  res.json({ ok: true, communities: await memberships.getUserCommunities(req.user.id) });
+});
+
+// POST /api/communities/:slug/leave — leave a community.
+app.post('/api/communities/:slug/leave', requireAuth, async (req, res) => {
+  const t = tenants.getTenantBySlug(String(req.params.slug));
+  if (!t) return res.status(404).json({ error: 'Unknown community' });
+  await memberships.leaveCommunity(req.user.id, t.id);
+  res.json({ ok: true, communities: await memberships.getUserCommunities(req.user.id) });
+});
+
 // ── State ──────────────────────────────────────────────────────────
 const viewers = {};
 
@@ -293,6 +320,13 @@ persistence.initPersistence({ pgPool, normalizeSlot })
 const tenants = require('./lib/tenants');
 const MULTI_TENANT = process.env.MULTI_TENANT === 'true';
 tenants.initTenants({ pgPool }).catch(e => console.error('[tenants] init error:', e.message));
+
+// Community memberships (which communities a user belongs to). One-time backfill attributes
+// every previously-known user to Bean; new users auto-join the slug they sign in through.
+const memberships = require('./lib/memberships');
+memberships.initMemberships({ pgPool })
+  .then(() => memberships.backfillExistingUsersToBean(tenants.BEAN_TENANT.id))
+  .catch(e => console.error('[memberships] init error:', e.message));
 
 function huntSummary(h) {
   return {
@@ -1073,12 +1107,14 @@ app.get('/api/tenant-config', (req, res) => {
   });
 });
 
-// Directory for the platform home — minimal public fields per tenant.
-app.get('/api/tenants', (req, res) => {
+// Directory for the platform home — minimal public fields per tenant, incl. member count.
+app.get('/api/tenants', async (req, res) => {
+  const counts = await memberships.getMemberCounts();
   res.json(tenants.getAllTenants().filter(t => t.isActive).map(t => ({
     slug: t.slug, displayName: t.displayName,
     accent: (t.branding || {}).accent || null,
     twitchChannel: t.twitchChannel || null,
+    memberCount: counts[t.id] || 0,
   })));
 });
 
