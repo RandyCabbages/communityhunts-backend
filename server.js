@@ -30,7 +30,10 @@ function corsOrigin(origin, callback) {
 const io = new Server(server, {
   cors: { origin: corsOrigin, credentials: true }
 });
-const SESSION_SECRET = process.env.SESSION_SECRET || 'beanhunt-secret';
+const SESSION_SECRET = process.env.SESSION_SECRET || (() => {
+  console.warn('[security] SESSION_SECRET is not set — using a random per-boot secret. Set SESSION_SECRET in the environment so sessions/tokens survive restarts and cannot be forged with a known default.');
+  return require('crypto').randomBytes(48).toString('hex');
+})();
 const ADMINS         = (process.env.ADMINS || 'bean,randycabbage,randy cabbage,mcflurry,mihallimou,missingiscool,cuda,cabbage,goofer').toLowerCase().split(',').map(s=>s.trim());
 const ADMIN_IDS      = (process.env.ADMIN_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
 const VIP_HOSTS      = (process.env.VIP_HOSTS || 'bean,mcflurry,mihallimou,missingiscool,cuda,randycabbage,cabbage,goofer').toLowerCase().split(',').map(s=>s.trim());
@@ -80,7 +83,8 @@ function verifyToken(token) {
   if (!token || typeof token !== 'string' || !token.includes('.')) return null;
   const [payloadB64, sig] = token.split('.');
   const expectedSig = b64url(crypto.createHmac('sha256', SESSION_SECRET).update(payloadB64).digest());
-  if (sig !== expectedSig) return null;
+  const sigBuf = Buffer.from(sig || ''), expBuf = Buffer.from(expectedSig);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
   try {
     const payload = JSON.parse(b64urlDecode(payloadB64));
     if (!payload.exp || payload.exp < Date.now()) return null;
@@ -144,7 +148,7 @@ function isEquityMember(user, huntOwnerId) {
 // ── Middleware ─────────────────────────────────────────────────────
 app.set('trust proxy', 1);
 app.use(cors({ origin: corsOrigin, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '256kb' }));
 
 // Postgres pool — shared by session store and user_settings
 const { Pool } = require('pg');
@@ -413,6 +417,16 @@ function requireAuth(req, res, next)  { if (!req.user) return res.status(401).js
 function requireAdmin(req, res, next) { if (!req.user||!isAdmin(req.user)) return res.status(403).json({error:'Admin only'}); next(); }
 function uid() { return Math.random().toString(36).slice(2, 8); }
 
+// Reject malformed / oversized hunt payloads (memory + DoS protection).
+const MAX_BONUSES = 1000, MAX_EQUITY = 300, MAX_CALLS = 1000;
+function rejectBadHuntInput(req, res) {
+  const { bonuses, equity, calls } = req.body || {};
+  if (bonuses !== undefined && (!Array.isArray(bonuses) || bonuses.length > MAX_BONUSES)) { res.status(400).json({error:'Invalid bonuses payload'}); return true; }
+  if (equity  !== undefined && (!Array.isArray(equity)  || equity.length  > MAX_EQUITY))  { res.status(400).json({error:'Invalid equity payload'});  return true; }
+  if (calls   !== undefined && (!Array.isArray(calls)   || calls.length   > MAX_CALLS))   { res.status(400).json({error:'Invalid calls payload'});   return true; }
+  return false;
+}
+
 // ── Public hunt endpoints ──────────────────────────────────────────
 app.get('/api/hunts',          (req, res) => res.json(getPublicHunts()));
 app.get('/api/hunts/archived', (req, res) => res.json(getArchivedHunts()));
@@ -487,7 +501,7 @@ app.get('/api/hunts/:userId', (req, res) => {
       let matches = false;
       for (const c of candidates) {
         if (!c) continue;
-        if (c === en || c === enNoSp || c.startsWith(en) || en.startsWith(c)) { matches = true; break; }
+        if (c === en || c === enNoSp) { matches = true; break; }
       }
       if (matches) {
         linked = true;
@@ -499,7 +513,18 @@ app.get('/api/hunts/:userId', (req, res) => {
   }
 
   const canCalls = req.user ? (canEdit || isEquityMember(req.user, req.params.userId)) : false;
-  res.json({ ...hunt, canEdit, canAddCalls: canCalls });
+  if (canEdit) {
+    res.json({ ...hunt, canEdit, canAddCalls: canCalls });
+  } else {
+    // Viewers don't need internal linkage/permission data — strip Discord IDs,
+    // the editor list, and call-permission IDs from the public payload.
+    const { invitedEditors, callsPermissions, ...pub } = hunt;
+    res.json({
+      ...pub,
+      equity: (hunt.equity || []).map(({ discordId, ...e }) => e),
+      canEdit, canAddCalls: canCalls,
+    });
+  }
 });
 
 // ── My hunt ────────────────────────────────────────────────────────
@@ -567,6 +592,7 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
 });
 
 app.put('/api/my-hunt', requireAuth, (req, res) => {
+  if (rejectBadHuntInput(req, res)) return;
   if (!hunts[req.user.id]) hunts[req.user.id] = {
     user: req.user, isLive: false, startedAt: null, archivedAt: null,
     huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10
@@ -656,6 +682,7 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
   if (!canEditHunt(req.user, req.params.userId)) return res.status(403).json({error:'Not authorised'});
   const hunt = hunts[req.params.userId];
   if (!hunt) return res.status(404).json({error:'Hunt not found'});
+  if (rejectBadHuntInput(req, res)) return;
   const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin } = req.body;
   if (bonuses     !== undefined) hunt.bonuses     = bonuses;
   if (equity      !== undefined) hunt.equity      = equity;
@@ -1034,11 +1061,21 @@ app.post('/api/admin/set-preferred-slots', requireAdmin, async (req, res) => {
   res.json({ ok: true, scope: 'name', name, syntheticId, count: cleaned.length });
 });
 
+const ticketHits = new Map(); // per-IP ticket timestamps for rate limiting
 app.post('/api/tickets', async (req, res) => {
   const { username, issue, type } = req.body;
 
   if (!RESEND_API_KEY) return res.status(500).json({error:'RESEND_API_KEY not configured on the server'});
   if (TICKET_EMAILS.length === 0) return res.status(500).json({error:'No ticket recipients configured'});
+
+  // Length caps + per-IP throttle to prevent inbox / Resend-quota spam.
+  if (String(issue||'').length > 5000 || String(username||'').length > 120 || String(type||'').length > 40)
+    return res.status(400).json({error:'Ticket content too long'});
+  const tip = req.ip || 'unknown';
+  const tnow = Date.now();
+  const recentTickets = (ticketHits.get(tip) || []).filter(t => tnow - t < 10*60*1000);
+  if (recentTickets.length >= 5) return res.status(429).json({error:'Too many tickets — please try again in a few minutes'});
+  recentTickets.push(tnow); ticketHits.set(tip, recentTickets);
 
   const safe = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const from = safe(username || 'Anonymous');
