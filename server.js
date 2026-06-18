@@ -34,9 +34,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || (() => {
   console.warn('[security] SESSION_SECRET is not set — using a random per-boot secret. Set SESSION_SECRET in the environment so sessions/tokens survive restarts and cannot be forged with a known default.');
   return require('crypto').randomBytes(48).toString('hex');
 })();
-const ADMINS         = (process.env.ADMINS || 'bean,randycabbage,randy cabbage,mcflurry,mihallimou,missingiscool,cuda,cabbage,goofer').toLowerCase().split(',').map(s=>s.trim());
 const ADMIN_IDS      = (process.env.ADMIN_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
-const VIP_HOSTS      = (process.env.VIP_HOSTS || 'bean,mcflurry,mihallimou,missingiscool,cuda,randycabbage,cabbage,goofer').toLowerCase().split(',').map(s=>s.trim());
 const VIP_IDS        = (process.env.VIP_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
 const TICKET_EMAILS = (process.env.TICKET_EMAILS || 'nesgoomba@gmail.com,luimeneghim@gmail.com').split(',').map(s=>s.trim()).filter(Boolean);
 const RESEND_API_KEY = (process.env.RESEND_API_KEY || '').trim();
@@ -46,14 +44,12 @@ function nameOf(user) { return (user?.displayName || user?.username || '').toLow
 // Normalize slot name for dedup: strip punctuation, collapse whitespace, lowercase
 function normalizeSlot(name) { return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 function isAdmin(user) {
-  if (!user) return false;
-  if (user.id && ADMIN_IDS.length && ADMIN_IDS.includes(user.id)) return true;
-  return ADMINS.includes(nameOf(user));
+  // ID-based only — display names are spoofable. Real admins live in ADMIN_IDS.
+  return !!(user && user.id && ADMIN_IDS.includes(user.id));
 }
 function isVipHost(user) {
-  if (!user) return false;
-  if (user.id && VIP_IDS.length && VIP_IDS.includes(user.id)) return true;
-  return VIP_HOSTS.includes(nameOf(user));
+  // ID-based only (see isAdmin). VIP hosts — and admins, who are also listed — in VIP_IDS.
+  return !!(user && user.id && VIP_IDS.includes(user.id));
 }
 
 // ── HMAC-signed auth tokens ────────────────────────────────────────
