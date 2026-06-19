@@ -369,6 +369,10 @@ function rejectBadHuntInput(req, res) {
   if (calls   !== undefined && (!Array.isArray(calls)   || calls.length   > MAX_CALLS))   { res.status(400).json({error:'Invalid calls payload'});   return true; }
   const { currency } = req.body || {};
   if (currency !== undefined && !['USD','CAD','ARS'].includes(currency)) { res.status(400).json({error:'Invalid currency'}); return true; }
+  const { publicCalls, publicCallsPin } = req.body || {};
+  if (publicCalls    !== undefined && typeof publicCalls !== 'boolean')                        { res.status(400).json({error:'Invalid publicCalls payload'}); return true; }
+  if (publicCallsPin !== undefined && publicCallsPin !== null &&
+      (typeof publicCallsPin !== 'string' || publicCallsPin.length > 32))                      { res.status(400).json({error:'Invalid publicCallsPin payload'}); return true; }
   return false;
 }
 
@@ -508,7 +512,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
   }
   hunts[req.user.id] = {
     user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
-    huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true, currency: 'USD'
+    huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true, currency: 'USD', publicCalls: false, publicCallsPin: null
   };
   persistHunts();
   res.json({ok:true});
@@ -561,7 +565,7 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
   // VIP (re-seeded with Bean), not silently demote to community.
   const keepType = ['vip','solo'].includes(hunts[req.user.id]?.huntType) ? hunts[req.user.id].huntType : 'community';
   hunts[req.user.id] = { user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
-    huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true, currency: 'USD' };
+    huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true, currency: 'USD', publicCalls: false, publicCallsPin: null };
   persistHunts();
   emitHubUpdate(req.tenant.id);
   res.json({ok:true});
@@ -571,9 +575,9 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
   if (rejectBadHuntInput(req, res)) return;
   if (!hunts[req.user.id]) hunts[req.user.id] = {
     user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
-    huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10, currency: 'USD'
+    huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10, currency: 'USD', publicCalls: false, publicCallsPin: null
   };
-  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, currency } = req.body;
+  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, currency, publicCalls, publicCallsPin } = req.body;
   if (bonuses    !== undefined) hunts[req.user.id].bonuses    = bonuses;
   if (equity     !== undefined) hunts[req.user.id].equity     = equity;
   if (calls      !== undefined) hunts[req.user.id].calls      = calls;
@@ -586,6 +590,8 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
   if (huntMode   !== undefined) hunts[req.user.id].huntMode   = huntMode;
   if (roundRobin !== undefined) hunts[req.user.id].roundRobin = roundRobin;
   if (currency   !== undefined) hunts[req.user.id].currency   = currency;
+  if (publicCalls    !== undefined) hunts[req.user.id].publicCalls    = publicCalls;
+  if (publicCallsPin !== undefined) hunts[req.user.id].publicCallsPin = publicCallsPin;
   persistHunts();
   io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
   emitHubUpdate(req.tenant.id);
@@ -660,7 +666,7 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
   const hunt = hunts[req.params.userId];
   if (!hunt) return res.status(404).json({error:'Hunt not found'});
   if (rejectBadHuntInput(req, res)) return;
-  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, currency } = req.body;
+  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, currency, publicCalls, publicCallsPin } = req.body;
   if (bonuses     !== undefined) hunt.bonuses     = bonuses;
   if (equity      !== undefined) hunt.equity      = equity;
   if (calls       !== undefined) hunt.calls       = calls;
@@ -669,6 +675,8 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
   if (huntMode    !== undefined) hunt.huntMode    = huntMode;
   if (roundRobin  !== undefined) hunt.roundRobin  = roundRobin;
   if (currency    !== undefined) hunt.currency    = currency;
+  if (publicCalls    !== undefined) hunt.publicCalls    = publicCalls;
+  if (publicCallsPin !== undefined) hunt.publicCallsPin = publicCallsPin;
   persistHunts();
   io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
   emitHubUpdate(req.tenant.id);
