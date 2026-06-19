@@ -615,7 +615,7 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10, currency: 'USD', publicCalls: false, publicCallsPin: null
   };
-  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, currency, publicCalls, publicCallsPin } = req.body;
+  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, currency, publicCalls, publicCallsPin, currentSlot } = req.body;
   if (bonuses    !== undefined) hunts[req.user.id].bonuses    = bonuses;
   if (equity     !== undefined) hunts[req.user.id].equity     = equity;
   if (calls      !== undefined) hunts[req.user.id].calls      = calls;
@@ -630,6 +630,7 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
   if (currency   !== undefined) hunts[req.user.id].currency   = currency;
   if (publicCalls    !== undefined) hunts[req.user.id].publicCalls    = publicCalls;
   if (publicCallsPin !== undefined) hunts[req.user.id].publicCallsPin = publicCallsPin;
+  if (currentSlot !== undefined) hunts[req.user.id].currentSlot = currentSlot;
   touch(req.user.id);
   persistHunts();
   io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(hunts[req.user.id]));
@@ -729,7 +730,7 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
   const hunt = hunts[req.params.userId];
   if (!hunt) return res.status(404).json({error:'Hunt not found'});
   if (rejectBadHuntInput(req, res)) return;
-  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, currency, publicCalls, publicCallsPin } = req.body;
+  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, currency, publicCalls, publicCallsPin, currentSlot } = req.body;
   if (bonuses     !== undefined) hunt.bonuses     = bonuses;
   if (equity      !== undefined) hunt.equity      = equity;
   if (calls       !== undefined) hunt.calls       = calls;
@@ -740,6 +741,7 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
   if (currency    !== undefined) hunt.currency    = currency;
   if (publicCalls    !== undefined) hunt.publicCalls    = publicCalls;
   if (publicCallsPin !== undefined) hunt.publicCallsPin = publicCallsPin;
+  if (currentSlot !== undefined) hunt.currentSlot = currentSlot;
   hunt.updatedAt = new Date().toISOString();
   persistHunts();
   io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(hunt));
