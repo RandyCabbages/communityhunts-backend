@@ -774,10 +774,30 @@ app.post('/api/mod-hunt/reopen', requireModHuntAccess, (req, res) => {
 });
 
 app.post('/api/mod-hunt/reset', requireModHuntAccess, (req, res) => {
+  const old = hunts[MOD_HUNT_ID];
+  if (old && Array.isArray(old.bonuses) && old.bonuses.length > 0) {
+    if (!old.archivedAt) old.archivedAt = new Date().toISOString();
+    archiveHunt(old);
+  }
   hunts[MOD_HUNT_ID] = emptyModHunt(req.tenant.id);
   persistHunts();
   io.to(`hunt:${MOD_HUNT_ID}`).emit('hunt:update', publicHuntView(hunts[MOD_HUNT_ID]));
   res.json({ ok: true });
+});
+
+app.get('/api/mod-hunt/history', requireModHuntAccess, (req, res) => {
+  const modArchived = archive.filter(h => h.user?.id === MOD_HUNT_ID);
+  res.json(modArchived.map(h => ({
+    archivedAt: h.archivedAt,
+    bonuses: h.bonuses || [],
+    equity: h.equity || [],
+    huntMode: h.huntMode,
+    startedAt: h.startedAt,
+    createdAt: h.createdAt,
+    totalWon: (h.bonuses || []).reduce((s, b) => s + (b.win || 0), 0),
+    totalBet: (h.bonuses || []).reduce((s, b) => s + (b.bet || 0), 0),
+    bonusCount: (h.bonuses || []).length,
+  })));
 });
 
 // Shared add-call logic for both the equity-member endpoint and the public link endpoint.
