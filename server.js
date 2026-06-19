@@ -44,9 +44,16 @@ function nameOf(user) { return (user?.displayName || user?.username || '').toLow
 // Normalize slot name for dedup: strip punctuation, collapse whitespace, lowercase
 function normalizeSlot(name) { return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 function isAdmin(user) {
-  // ID-based only — display names are spoofable. Real admins live in ADMIN_IDS.
-  return !!(user && user.id && ADMIN_IDS.includes(user.id));
+  // ID-based only — display names are spoofable. Admins live in ADMIN_IDS (env),
+  // the platform_admins DB table, or are the hardcoded platform owner.
+  if (!user || !user.id) return false;
+  return ADMIN_IDS.includes(user.id)
+      || user.id === tenants.PLATFORM_OWNER_ID
+      || admins.isDbAdmin(user.id);
 }
+// Platform admin = admin on ALL tenants (owner + env + DB). Distinct from a
+// per-tenant community admin (tenant_roles). Used by admin-management endpoints.
+function isPlatformAdmin(user) { return isAdmin(user); }
 function isVipHost(user) {
   // ID-based only (see isAdmin). VIP hosts — and admins, who are also listed — in VIP_IDS.
   return !!(user && user.id && VIP_IDS.includes(user.id));
@@ -248,7 +255,7 @@ app.get('/auth/discord/callback',
     const userData = Buffer.from(JSON.stringify({
       id: req.user.id, username: req.user.username,
       displayName: req.user.displayName, avatar: req.user.avatar,
-      isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req)
+      isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isPlatformAdmin: isPlatformAdmin(req.user)
     })).toString('base64');
     const returnTo = req.session.returnTo || '/';
     delete req.session.returnTo;
@@ -267,7 +274,7 @@ app.get('/auth/me', (req, res) => {
   // Auto-attribute to the community they're browsing (Bean by default) — idempotent, so a
   // returning user keeps their original join date and this just no-ops after the first time.
   memberships.joinCommunity(req.user.id, req.tenant.id).catch(() => {});
-  res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req) } });
+  res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isPlatformAdmin: isPlatformAdmin(req.user) } });
 });
 
 // Public list of known users for equity-name autocomplete.
@@ -325,6 +332,8 @@ persistence.initPersistence({ pgPool, normalizeSlot })
 const tenants = require('./lib/tenants');
 const MULTI_TENANT = process.env.MULTI_TENANT === 'true';
 tenants.initTenants({ pgPool }).catch(e => console.error('[tenants] init error:', e.message));
+const admins = require('./lib/admins');
+admins.initAdmins({ pgPool }).catch(e => console.error('[admins] init error:', e.message));
 
 // Community memberships (which communities a user belongs to). One-time backfill attributes
 // every previously-known user to Bean; new users auto-join the slug they sign in through.
@@ -384,9 +393,16 @@ function emitHuntUpdate(userId) { const h = hunts[userId]; if (h) { persistHunts
 
 function requireAuth(req, res, next)  { if (!req.user) return res.status(401).json({error:'Not authenticated'}); next(); }
 // Tenant-aware gates: when MULTI_TENANT is on, resolve against req.tenant; else the env-based globals.
-function reqIsAdmin(req)   { return MULTI_TENANT ? tenants.isTenantAdmin(req.user, req.tenant) : isAdmin(req.user); }
-function reqIsVipHost(req) { return MULTI_TENANT ? tenants.isTenantVip(req.user, req.tenant)   : (isAdmin(req.user)||isVipHost(req.user)); }
+function reqIsAdmin(req) {
+  if (isPlatformAdmin(req.user)) return true;               // owner + env + DB → admin everywhere
+  return MULTI_TENANT ? tenants.isTenantAdmin(req.user, req.tenant) : false;
+}
+function reqIsVipHost(req) { if (isPlatformAdmin(req.user)) return true; return MULTI_TENANT ? tenants.isTenantVip(req.user, req.tenant) : (isAdmin(req.user)||isVipHost(req.user)); }
 function requireAdmin(req, res, next) { if (!req.user||!reqIsAdmin(req)) return res.status(403).json({error:'Admin only'}); next(); }
+function requirePlatformAdmin(req, res, next) {
+  if (!req.user || !isPlatformAdmin(req.user)) return res.status(403).json({error:'Platform admin only'});
+  next();
+}
 
 // ── Mod hunt access ───────────────────────────────────────────────
 const MOD_HUNT_ID = '__mod_hunt__';
@@ -852,6 +868,99 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
 // ── Admin ──────────────────────────────────────────────────────────
 app.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts(req.tenant.id)));
 
+// Lightweight dashboard counts for the current tenant.
+app.get('/api/admin/overview', requireAuth, requireAdmin, async (req, res) => {
+  const tenantId = req.tenant?.id || 'bean';
+  let userCount = 0, recentLogins = [];
+  if (pgPool) {
+    try {
+      const c = await pgPool.query(
+        'SELECT COUNT(*)::int AS n FROM community_members WHERE tenant_id=$1', [tenantId]);
+      userCount = c.rows[0]?.n || 0;
+      const r = await pgPool.query(`
+        SELECT ku.user_id, ku.display_name, ku.avatar, ku.last_seen
+        FROM community_members cm JOIN known_users ku ON ku.user_id = cm.user_id
+        WHERE cm.tenant_id=$1 ORDER BY ku.last_seen DESC NULLS LAST LIMIT 10`, [tenantId]);
+      recentLogins = r.rows.map(u => ({
+        id: u.user_id, displayName: u.display_name, avatar: u.avatar, lastSeen: u.last_seen }));
+    } catch (e) { console.error('[admin] overview failed:', e.message); }
+  }
+  // getAllHunts returns all hunts (live + created + archived snapshots) for the tenant.
+  // getArchivedHunts returns only completed archived hunts for the tenant.
+  const allTenantHunts = getAllHunts(tenantId);
+  const activeHuntCount = allTenantHunts.filter(h => h.isLive && !h.archivedAt).length;
+  const archivedHuntCount = getArchivedHunts(tenantId).length;
+  res.json({
+    communityName: req.tenant?.displayName || 'Bean',
+    userCount, activeHuntCount, archivedHuntCount,
+    recentLogins,
+  });
+});
+
+// ── Platform-admin management ──────────────────────────────────────
+// List all platform admins with their source (owner | env | db) for the UI.
+app.get('/api/admin/platform-admins', requireAuth, requirePlatformAdmin, async (req, res) => {
+  try {
+    const OWNER = tenants.PLATFORM_OWNER_ID;
+    const rows = []; // { discordId, source }
+    rows.push({ discordId: OWNER, source: 'owner' });
+    for (const id of ADMIN_IDS) if (id !== OWNER) rows.push({ discordId: id, source: 'env' });
+    const dbAdmins = await admins.listDbAdmins();
+    for (const a of dbAdmins) {
+      if (a.discordId === OWNER || ADMIN_IDS.includes(a.discordId)) continue; // dedup; owner/env win
+      rows.push({ discordId: a.discordId, source: 'db', addedBy: a.addedBy, addedAt: a.addedAt });
+    }
+    // Enrich with display name + avatar from known_users (best-effort).
+    let enriched = rows;
+    if (pgPool && rows.length) {
+      try {
+        const ids = rows.map(r => r.discordId);
+        const r = await pgPool.query(
+          `SELECT user_id, display_name, avatar FROM known_users WHERE user_id = ANY($1)`, [ids]);
+        const byId = {};
+        for (const u of r.rows) byId[u.user_id] = u;
+        enriched = rows.map(row => ({
+          ...row,
+          displayName: byId[row.discordId]?.display_name || null,
+          avatar: byId[row.discordId]?.avatar || null,
+        }));
+      } catch (e) { console.error('[admin] platform-admins enrich failed:', e.message); }
+    }
+    res.json(enriched);
+  } catch (e) {
+    console.error('[admin] platform-admins list failed:', e.message);
+    res.status(500).json({ error: 'Failed to list admins' });
+  }
+});
+
+// Add a DB platform admin. Owner/env entries are not addable here (they already are admins).
+app.post('/api/admin/platform-admins', requireAuth, requirePlatformAdmin, async (req, res) => {
+  const discordId = String(req.body?.discordId || '').trim();
+  if (!/^\d{5,}$/.test(discordId)) return res.status(400).json({error:'Valid Discord ID required'});
+  if (discordId === tenants.PLATFORM_OWNER_ID) return res.status(400).json({error:'Owner is always admin'});
+  try {
+    await admins.addDbAdmin(discordId, req.user.id);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[admin] platform-admins add failed:', e.message);
+    res.status(500).json({ error: 'Failed to add admin' });
+  }
+});
+
+// Remove a DB platform admin. Owner and env-var admins cannot be removed here.
+app.delete('/api/admin/platform-admins/:id', requireAuth, requirePlatformAdmin, async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  if (id === tenants.PLATFORM_OWNER_ID) return res.status(400).json({error:'Owner cannot be removed'});
+  if (ADMIN_IDS.includes(id)) return res.status(400).json({error:'Env admin — managed via Railway ADMIN_IDS'});
+  try {
+    await admins.removeDbAdmin(id);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[admin] platform-admins remove failed:', e.message);
+    res.status(500).json({ error: 'Failed to remove admin' });
+  }
+});
+
 // ── Stale-hunt janitor ─────────────────────────────────────────────
 // Reap abandoned hunts after 36h of inactivity so the directory stays honest and storage bounded.
 // Idle is measured from updatedAt (created/live) or archivedAt (ended). Rules:
@@ -1204,6 +1313,85 @@ async function resolveUserIdByName(name) {
   });
   return match ? match.userId : null;
 }
+
+// GET /api/admin/users — list users in the CURRENT tenant (community_members ⨝ known_users ⨝ user_settings).
+// Tenant-scoped: a community admin only sees their own community's members.
+app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
+  if (!pgPool) return res.json({ users: [] });
+  const tenantId = req.tenant?.id || 'bean';
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+  try {
+    const params = [tenantId];
+    let where = `cm.tenant_id = $1`;
+    if (q) {
+      params.push(`%${q}%`);
+      where += ` AND (LOWER(ku.display_name) LIKE $${params.length}
+                   OR LOWER(ku.username) LIKE $${params.length}
+                   OR ku.user_id LIKE $${params.length})`;
+    }
+    params.push(limit, offset);
+    const sql = `
+      SELECT ku.user_id, ku.display_name, ku.username, ku.avatar, ku.last_seen,
+             us.settings
+      FROM community_members cm
+      JOIN known_users ku ON ku.user_id = cm.user_id
+      LEFT JOIN user_settings us ON us.user_id = cm.user_id
+      WHERE ${where}
+      ORDER BY ku.last_seen DESC NULLS LAST
+      LIMIT $${params.length - 1} OFFSET $${params.length}`;
+    const r = await pgPool.query(sql, params);
+    const users = r.rows.map(row => {
+      const s = row.settings || {};
+      return {
+        id: row.user_id, displayName: row.display_name, username: row.username,
+        avatar: row.avatar, lastSeen: row.last_seen,
+        rainbetName: s.rainbetName || null, twitchName: s.twitchName || null,
+        slotPickCount: Array.isArray(s.preferredSlots) ? s.preferredSlots.length : 0,
+      };
+    });
+    res.json({ users });
+  } catch (e) {
+    console.error('[admin] users list failed:', e.message);
+    res.status(500).json({ error: 'Failed to list users' });
+  }
+});
+
+// GET /api/admin/users/:userId — one user's full profile. Tenant-guarded: 404 unless the target
+// is a member of req.tenant — UNLESS the caller is a platform admin (who may inspect anyone).
+app.get('/api/admin/users/:userId', requireAuth, requireAdmin, async (req, res) => {
+  const userId = String(req.params.userId);
+  const tenantId = req.tenant?.id || 'bean';
+  const platform = isPlatformAdmin(req.user);
+  try {
+    if (pgPool && !platform) {
+      const m = await pgPool.query(
+        'SELECT 1 FROM community_members WHERE user_id=$1 AND tenant_id=$2', [userId, tenantId]);
+      if (m.rowCount === 0) return res.status(404).json({ error: 'User not in this community' });
+    }
+    let identity = { id: userId, displayName: null, username: null, avatar: null, lastSeen: null };
+    if (pgPool) {
+      const r = await pgPool.query(
+        'SELECT display_name, username, avatar, last_seen FROM known_users WHERE user_id=$1', [userId]);
+      if (r.rows[0]) identity = {
+        id: userId, displayName: r.rows[0].display_name, username: r.rows[0].username,
+        avatar: r.rows[0].avatar, lastSeen: r.rows[0].last_seen };
+    }
+    const settings = await getSettings(userId); // existing helper
+    const communities = await memberships.getUserCommunities(userId);
+    res.json({
+      ...identity,
+      rainbetName: settings.rainbetName || null,
+      twitchName: settings.twitchName || null,
+      preferredSlots: Array.isArray(settings.preferredSlots) ? settings.preferredSlots : [],
+      communities,
+    });
+  } catch (e) {
+    console.error('[admin] user profile failed:', e.message);
+    res.status(500).json({ error: 'Failed to load user' });
+  }
+});
 
 // POST /api/admin/set-user-field — let an admin manually set a per-user identity field
 // (rainbetName or twitchName) for someone else. Accepts either { userId, field, value } or
