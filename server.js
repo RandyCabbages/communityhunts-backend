@@ -351,7 +351,14 @@ function getPublicHunts(tenantId)   { return Object.values(hunts).filter(h=>h.is
 function getArchivedHunts(tenantId) { return archive.filter(h=>inTenant(h,tenantId)).map(huntSummary); }
 function getAllHunts(tenantId)       { return Object.values(hunts).filter(h=>inTenant(h,tenantId)).map(huntSummary); }
 function emitHubUpdate(tenantId)    { persistHunts(); io.to('hub:'+(tenantId||'bean')).emit('hub:update', getPublicHunts(tenantId)); }
-function emitHuntUpdate(userId) { const h = hunts[userId]; if (h) { persistHunts(); io.to(`hunt:${userId}`).emit('hunt:update', h); } }
+// Strip owner-only secrets before broadcasting a hunt to the shared hunt:<id> watch room
+// (which includes non-editor viewers). The PIN is replaced by a boolean the client can gate on.
+function publicHuntView(h) {
+  if (!h) return h;
+  const { publicCallsPin, ...rest } = h;
+  return { ...rest, requiresPin: !!publicCallsPin };
+}
+function emitHuntUpdate(userId) { const h = hunts[userId]; if (h) { persistHunts(); io.to(`hunt:${userId}`).emit('hunt:update', publicHuntView(h)); } }
 
 function requireAuth(req, res, next)  { if (!req.user) return res.status(401).json({error:'Not authenticated'}); next(); }
 // Tenant-aware gates: when MULTI_TENANT is on, resolve against req.tenant; else the env-based globals.
@@ -467,9 +474,10 @@ app.get('/api/hunts/:userId', (req, res) => {
   } else {
     // Viewers don't need internal linkage/permission data — strip Discord IDs,
     // the editor list, and call-permission IDs from the public payload.
-    const { invitedEditors, callsPermissions, ...pub } = hunt;
+    const { invitedEditors, callsPermissions, publicCallsPin, ...pub } = hunt;
     res.json({
       ...pub,
+      requiresPin: !!publicCallsPin,
       equity: (hunt.equity || []).map(({ discordId, ...e }) => e),
       canEdit, canAddCalls: canCalls,
     });
@@ -524,7 +532,7 @@ app.post('/api/my-hunt/golive', requireAuth, (req, res) => {
   hunts[req.user.id].startedAt = new Date().toISOString();
   hunts[req.user.id].archivedAt= null;
   emitHubUpdate(req.tenant.id); // emitHubUpdate calls persistHunts
-  io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
+  io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(hunts[req.user.id]));
   res.json({ok:true});
 });
 
@@ -536,7 +544,7 @@ app.post('/api/my-hunt/end', requireAuth, (req, res) => {
     if (!h.archivedAt) h.archivedAt = new Date().toISOString(); // stamp once — re-ending won't move it
     archiveHunt(h);                                         // upsert: refreshes the snapshot, never duplicates
     emitHubUpdate(req.tenant.id);
-    io.to(`hunt:${req.user.id}`).emit('hunt:update', h);
+    io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(h));
   }
   res.json({ok:true});
 });
@@ -551,7 +559,7 @@ app.post('/api/my-hunt/reopen', requireAuth, (req, res) => {
   h.archivedAt = null;
   if (!h.startedAt) h.startedAt = new Date().toISOString();
   emitHubUpdate(req.tenant.id);
-  io.to(`hunt:${req.user.id}`).emit('hunt:update', h);
+  io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(h));
   res.json({ok:true});
 });
 
@@ -593,7 +601,7 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
   if (publicCalls    !== undefined) hunts[req.user.id].publicCalls    = publicCalls;
   if (publicCallsPin !== undefined) hunts[req.user.id].publicCallsPin = publicCallsPin;
   persistHunts();
-  io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
+  io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(hunts[req.user.id]));
   emitHubUpdate(req.tenant.id);
   res.json({ok:true});
 });
@@ -651,7 +659,7 @@ function addCallToHunt(hunt, user, slot, isEditor) {
   pendingCalls.splice(insertAt, 0, newCall);
   hunt.calls = [...pendingCalls, ...otherCalls];
   persistHunts();
-  io.to(`hunt:${hunt.user.id}`).emit('hunt:update', hunt);
+  io.to(`hunt:${hunt.user.id}`).emit('hunt:update', publicHuntView(hunt));
   return { ok: true, call: newCall };
 }
 
@@ -701,7 +709,7 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
   if (publicCalls    !== undefined) hunt.publicCalls    = publicCalls;
   if (publicCallsPin !== undefined) hunt.publicCallsPin = publicCallsPin;
   persistHunts();
-  io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
+  io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(hunt));
   emitHubUpdate(req.tenant.id);
   res.json({ok:true});
 });
@@ -716,7 +724,7 @@ app.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
   if (!h.huntId) h.huntId = uid();
   if (!h.archivedAt) h.archivedAt = new Date().toISOString();
   archiveHunt(h);
-  emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', h);
+  emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(h));
   res.json({ok:true});
 });
 
@@ -726,7 +734,7 @@ app.post('/api/admin/hunts/:userId/reopen', requireAdmin, (req, res) => {
   unarchiveHunt(h);
   h.isLive = true; h.archivedAt = null;
   if (!h.startedAt) h.startedAt = new Date().toISOString();
-  emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', h);
+  emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(h));
   res.json({ok:true});
 });
 
@@ -1563,7 +1571,7 @@ io.on('connection', socket => {
     socketUsers[socket.id] = { watchingHuntId: userId };
     viewers[userId] = (viewers[userId]||0) + 1;
     const h = hunts[userId];
-    if (h) socket.emit('hunt:update', h);
+    if (h) socket.emit('hunt:update', publicHuntView(h));
     emitHubUpdate(tenantOf(h || {}));
     socket.on('disconnect', () => {
       viewers[userId] = Math.max(0,(viewers[userId]||1)-1);
