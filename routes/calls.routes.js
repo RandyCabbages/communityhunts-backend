@@ -24,7 +24,7 @@ module.exports = function callsRoutes(deps) {
 
   // Shared add-call logic for both the equity-member endpoint and the public link endpoint.
   // `isEditor` controls the rolling-mode + callLimit exemptions (owners/admins bypass them).
-  function addCallToHunt(hunt, user, slot, isEditor) {
+  function addCallToHunt(hunt, user, slot, isEditor, source) {
     if (!slot?.trim()) return { error: 'Slot name required', status: 400 };
 
     // Block non-editors from adding calls when the hunt is rolling
@@ -33,7 +33,7 @@ module.exports = function callsRoutes(deps) {
 
     // Duplicate check (normalized: "CULT" === "CULT.")
     if (hunt.calls.some(c => normalizeSlot(c.slot) === normalizeSlot(slot)))
-      return { error: `"${slot}" is already in the queue`, status: 400 };
+      return { error: `"${slot}" was already suggested`, status: 400 };
 
     // Per-person limit (not applied to editors/admins)
     const callerName = nameOf(user);
@@ -43,7 +43,7 @@ module.exports = function callsRoutes(deps) {
         return { error: `You've reached the limit of ${hunt.callLimit} calls`, status: 400 };
     }
 
-    const newCall = { id: Math.random().toString(36).slice(2,8), slot: slot.trim(), user: user.displayName||user.username, status: 'pending' };
+    const newCall = { id: Math.random().toString(36).slice(2,8), slot: slot.trim(), user: user.displayName||user.username, status: 'pending', ...(source ? { source } : {}) };
     // Insert after first 3 pending calls so top 3 stay stable
     const pendingCalls = hunt.calls.filter(c=>c.status==='pending');
     const otherCalls   = hunt.calls.filter(c=>c.status!=='pending');
@@ -79,7 +79,7 @@ module.exports = function callsRoutes(deps) {
 
     // Owners/admins/editors keep their exemptions; everyone else is a limited submitter.
     const isEditor = canEditHunt(req, req.params.userId);
-    const result = addCallToHunt(hunt, req.user, req.body.slot, isEditor);
+    const result = addCallToHunt(hunt, req.user, req.body.slot, isEditor, 'public');
     if (result.error) return res.status(result.status).json({error: result.error});
     res.json({ok:true, call: result.call});
   });
