@@ -39,6 +39,32 @@ const SESSION_SECRET = process.env.SESSION_SECRET || (() => {
 const ADMIN_IDS      = [...new Set((process.env.ADMIN_IDS || '').split(',').map(s=>s.trim()).filter(Boolean))];
 const VIP_IDS        = [...new Set((process.env.VIP_IDS || '').split(',').map(s=>s.trim()).filter(Boolean))];
 // Ticket env config (TICKET_EMAILS / RESEND_API_KEY / TICKET_FROM) moved to routes/misc.routes.js.
+const DISCORD_GUILD_ID          = (process.env.DISCORD_GUILD_ID || '').trim();
+const DISCORD_AFFILIATE_ROLE_ID = (process.env.DISCORD_AFFILIATE_ROLE_ID || '').trim();
+const DISCORD_VIP_ROLE_ID       = (process.env.DISCORD_VIP_ROLE_ID || '').trim();
+const DISCORD_MOD_ROLE_ID       = (process.env.DISCORD_MOD_ROLE_ID || '').trim();
+
+// Fetches a user's roles in the configured guild using their OAuth access token
+// (guilds.members.read scope). Called at login time; results cached in session.
+async function fetchGuildRoles(oauthAccessToken) {
+  if (!DISCORD_GUILD_ID || !oauthAccessToken) return { isAffiliate: false, isDiscordVip: false, isDiscordMod: false };
+  try {
+    const res = await fetch(`https://discord.com/api/v10/users/@me/guilds/${DISCORD_GUILD_ID}/member`, {
+      headers: { Authorization: `Bearer ${oauthAccessToken}` }
+    });
+    if (!res.ok) return { isAffiliate: false, isDiscordVip: false, isDiscordMod: false };
+    const member = await res.json();
+    const memberRoles = member.roles || [];
+    return {
+      isAffiliate:  !!(DISCORD_AFFILIATE_ROLE_ID && memberRoles.includes(DISCORD_AFFILIATE_ROLE_ID)),
+      isDiscordVip: !!(DISCORD_VIP_ROLE_ID       && memberRoles.includes(DISCORD_VIP_ROLE_ID)),
+      isDiscordMod: !!(DISCORD_MOD_ROLE_ID        && memberRoles.includes(DISCORD_MOD_ROLE_ID)),
+    };
+  } catch (e) {
+    console.error('[discord] guild role fetch failed:', e.message);
+    return { isAffiliate: false, isDiscordVip: false, isDiscordMod: false };
+  }
+}
 
 // Normalize slot name for dedup: strip punctuation, collapse whitespace, lowercase
 function normalizeSlot(name) { return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
@@ -106,15 +132,21 @@ passport.use(new DiscordStrategy({
   clientID: process.env.DISCORD_CLIENT_ID,
   clientSecret: process.env.DISCORD_CLIENT_SECRET,
   callbackURL: process.env.DISCORD_CALLBACK_URL || `http://localhost:${PORT}/auth/discord/callback`,
-  scope: ['identify']
-}, (access, refresh, profile, done) => done(null, {
-  id: profile.id,
-  username: profile.username,
-  displayName: profile.global_name || profile.username,
-  avatar: profile.avatar
-    ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png`
-    : `https://cdn.discordapp.com/embed/avatars/${parseInt(profile.discriminator||0)%5}.png`
-})));
+  scope: ['identify', 'guilds.members.read']
+}, async (access, refresh, profile, done) => {
+  const guildRoles = await fetchGuildRoles(access);
+  done(null, {
+    id: profile.id,
+    username: profile.username,
+    displayName: profile.global_name || profile.username,
+    avatar: profile.avatar
+      ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png`
+      : `https://cdn.discordapp.com/embed/avatars/${parseInt(profile.discriminator||0)%5}.png`,
+    isAffiliate: guildRoles.isAffiliate,
+    isDiscordVip: guildRoles.isDiscordVip,
+    isDiscordMod: guildRoles.isDiscordMod,
+  });
+}));
 passport.serializeUser((u,d) => d(null,u));
 passport.deserializeUser((u,d) => d(null,u));
 
