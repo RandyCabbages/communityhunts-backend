@@ -249,7 +249,10 @@ app.use(require('./routes/calls.routes')({
   normalizeSlot, nameOf, publicHuntView, emitHubUpdate, uid, rejectBadHuntInput,
 }));
 
-
+// Share-link routes (routes/share.routes.js): token mint + public resolve.
+app.use(require('./routes/share.routes')({
+  requireAuth, canEditHunt, hunts, archive, publicHuntView, uid, persistHunts,
+}));
 
 // ── Stale-hunt janitor ─────────────────────────────────────────────
 // Reap abandoned hunts after 36h of inactivity so the directory stays honest and storage bounded.
