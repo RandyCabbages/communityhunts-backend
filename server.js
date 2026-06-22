@@ -131,7 +131,7 @@ app.use(resolveTenant);
 passport.use(new DiscordStrategy({
   clientID: process.env.DISCORD_CLIENT_ID,
   clientSecret: process.env.DISCORD_CLIENT_SECRET,
-  callbackURL: process.env.DISCORD_CALLBACK_URL || `http://localhost:${PORT}/auth/discord/callback`,
+  callbackURL: process.env.DISCORD_CALLBACK_URL || `${FRONTEND_URL}/auth/discord/callback`,
   scope: ['identify', 'guilds.members.read']
 }, async (access, refresh, profile, done) => {
   const guildRoles = await fetchGuildRoles(access);
