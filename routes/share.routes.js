@@ -25,7 +25,10 @@ module.exports = (deps) => {
   });
 
   // Public: resolve a token to a read-only overview. No auth — anyone with the link can view.
-  // Rule: owner's current hunt if it's live or has content; else their most recent ended hunt; else 404.
+  // Rule: owner's ACTIVE hunt (not yet ended) if one exists — even pre-live/empty, so the link
+  // tracks the current hunt through setup; else their most recent ended hunt; else 404.
+  // `frozen` means ENDED (archivedAt set), NOT merely "not live" — a hunt in setup is not frozen,
+  // so the share page shows live stats + the suggestion box during setup, not a "FINAL RESULTS" view.
   router.get('/api/share/:token', (req, res) => {
     const { token } = req.params;
     if (!token) return res.status(400).json({ error: 'Bad token' });
@@ -34,14 +37,13 @@ module.exports = (deps) => {
     const ownerKey = shareTokens[token];
     if (ownerKey) {
       const cur = hunts[ownerKey];
-      const hasContent = cur && (cur.isLive || (cur.bonuses?.length > 0) || (cur.calls?.length > 0));
-      if (hasContent) {
-        hunt = cur;
+      if (cur && !cur.archivedAt) {
+        hunt = cur; // owner's active / in-setup hunt (even if empty or pre-live)
       } else {
         hunt = archive
           .filter(h => h && h.user?.id === ownerKey)
-          .sort((a, b) => new Date(b.archivedAt || 0) - new Date(a.archivedAt || 0))[0] || null;
-        if (!hunt && cur) hunt = cur; // empty shell, owner's first-ever hunt
+          .sort((a, b) => new Date(b.archivedAt || 0) - new Date(a.archivedAt || 0))[0]
+          || cur || null; // most recent ended hunt, else the ended shell
       }
     }
     // Legacy fallback: tokens minted before the map existed lived on the hunt object.
@@ -49,7 +51,7 @@ module.exports = (deps) => {
     if (!hunt) hunt = archive.find(h => h && h.shareToken === token) || null;
 
     if (!hunt) return res.status(404).json({ error: 'Not found' });
-    res.json({ hunt: publicHuntView(hunt), frozen: !hunt.isLive, ownerId: hunt.user?.id || null });
+    res.json({ hunt: publicHuntView(hunt), frozen: !!hunt.archivedAt, ownerId: hunt.user?.id || null });
   });
 
   return router;
