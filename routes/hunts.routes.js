@@ -4,8 +4,8 @@
 //   GET    /api/hunts/:userId/archived/:archivedAt — one archived snapshot (readonly)
 //   GET    /api/hunts/:userId                      — one hunt (permission-aware, auto-links viewer)
 //   GET    /api/my-hunt                            — caller's own hunt
-//   POST   /api/my-hunt/start|golive|end|reopen|reset
-//   PUT    /api/my-hunt
+//   POST   /api/my-hunt/start|golive|offline|end|reopen|reset
+//   PUT    /api/my-hunt          DELETE /api/my-hunt  — caller deletes their own hunt (removes it)
 //   POST   /api/my-hunt/invite   DELETE /api/my-hunt/invite
 //
 // ROUTE ORDER IS LOAD-BEARING: /api/hunts/archived and /api/hunts/:userId/archived/:archivedAt
@@ -206,6 +206,17 @@ module.exports = function huntsRoutes(deps) {
       huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: keepType === 'solo' ? 0 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null };
     persistHunts();
     emitHubUpdate(req.tenant.id);
+    res.json({ok:true});
+  });
+
+  // Delete the caller's own hunt entirely — removes it from the hub. Distinct from /reset (which
+  // blanks it but leaves an empty hunt still showing in the hub) and /end (which archives + keeps it
+  // as history). To keep results, the client calls /end first (archives a copy), then this.
+  router.delete('/api/my-hunt', requireAuth, (req, res) => {
+    if (hunts[req.user.id]) {
+      delete hunts[req.user.id];
+      emitHubUpdate(req.tenant.id); // drops it from the hub list; also persists
+    }
     res.json({ok:true});
   });
 
