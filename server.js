@@ -157,7 +157,7 @@ const viewers = {};
 // Persistence layer (hunt/archive state + Postgres hunts_kv) lives in lib/persistence.js.
 // hunts/archive are shared singletons owned there — imported by reference, never reassigned.
 const persistence = require('./lib/persistence');
-const { hunts, archive, persistHunts, persistArchive, archiveHunt, unarchiveHunt } = persistence;
+const { hunts, archive, shareTokens, persistHunts, persistArchive, persistShareTokens, tokenForOwner, archiveHunt, unarchiveHunt } = persistence;
 
 // User settings + known-users (Postgres-backed, file fallback). Owns user_settings/known_users
 // tables, the name-lookup helpers, and the startup backfill. Needs hunts (by reference) for backfill.
@@ -251,7 +251,8 @@ app.use(require('./routes/calls.routes')({
 
 // Share-link routes (routes/share.routes.js): token mint + public resolve.
 app.use(require('./routes/share.routes')({
-  requireAuth, canEditHunt, hunts, archive, publicHuntView, uid, persistHunts,
+  requireAuth, canEditHunt, hunts, archive, publicHuntView, uid,
+  shareTokens, tokenForOwner, persistShareTokens,
 }));
 
 // ── Stale-hunt janitor ─────────────────────────────────────────────
