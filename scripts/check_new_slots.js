@@ -20,42 +20,75 @@ const SLOTS_FILE = path.join(process.cwd(), 'rainbet_slots.json');
 const MAX_VERIFY_PARALLEL = 6;
 const MAX_RETRIES = 3;
 
-// ── Strategy 1: Direct API fetch ────────────────────────────────────
-// Rainbet's Next.js frontend loads slot data from internal API routes.
-// If we can hit those directly, we skip the browser entirely.
-async function tryApiFetch() {
-  const endpoints = [
-    'https://rainbet.com/api/casino/games?category=slots&limit=10000',
-    'https://rainbet.com/api/games?type=slots&limit=10000',
-    'https://rainbet.com/api/casino/slots?limit=10000',
-  ];
+// slot.report provider_slug → Rainbet URL prefix
+const SLOT_REPORT_TO_RAINBET = {
+  'playngo':'play-n-go','hacksaw-gaming':'hacksaw','nolimit-city':'nolimit',
+  'blueprint-gaming':'blueprint','relax-gaming':'relax','iron-dog-studio':'iron-dog',
+  'backseat-gaming':'backseat-gaming','bullshark-games':'bullshark-games',
+  'print-studios':'print-studios','nownow-gaming':'nownow-gaming',
+  'trusty-gaming':'trusty-gaming','kitsune-studios':'kitsune-studios',
+  'foxhound-games':'foxhound-games','jinx-gaming':'jinx-gaming',
+  'pineapple-play':'pineapple-play',
+};
 
-  for (const url of endpoints) {
+const RELEVANT_PROVIDERS = new Set([
+  'pragmatic-play','playngo','hacksaw-gaming','elk-studios','red-tiger',
+  'relax-gaming','quickspin','blueprint-gaming','nolimit-city','bgaming',
+  'thunderkick','yggdrasil','push-gaming','netent','isoftbet','gameart',
+  'wazdan','big-time-gaming','iron-dog-studio','spinomenal',
+  'bullshark-games','backseat-gaming','print-studios','nownow-gaming',
+  'trusty-gaming','kitsune-studios','ace-roll','foxhound-games',
+  'jinx-gaming','pineapple-play',
+]);
+
+// ── Strategy 1: slot.report API (no Cloudflare, always works) ───────
+// Fetches the full slot catalog from slot.report, filters to Rainbet-
+// available providers, constructs Rainbet slugs, and finds thumbnails.
+async function trySlotReport() {
+  console.log('[slot.report] fetching slot catalog + thumbnails…');
+  const [gamesRes, thumbRes] = await Promise.all([
+    fetch('https://slot.report/api/v1/slots.json'),
+    fetch('https://slot.report/data/slots-cards.js'),
+  ]);
+  if (!gamesRes.ok) { console.log(`[slot.report] slots.json → ${gamesRes.status}`); return null; }
+
+  const gamesData = await gamesRes.json();
+  const allGames = (gamesData.results || []).filter(s => s.name);
+  console.log(`[slot.report] ${allGames.length} total slots from API`);
+
+  // Build thumbnail map from reviewed slots
+  const thumbMap = {};
+  const thumbText = await thumbRes.text();
+  const thumbMatch = thumbText.match(/var SLOT_DATA=([\s\S]*?]);/);
+  if (thumbMatch) {
     try {
-      console.log(`[api] trying ${url}`);
-      const res = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
-          'Accept': 'application/json',
-          'Referer': 'https://rainbet.com/casino/slots',
-        },
+      const reviewed = JSON.parse(thumbMatch[1]);
+      reviewed.forEach(s => {
+        if (s.slug && s.thumbnail) {
+          thumbMap[s.slug] = `https://slot.report${s.thumbnail.split('?')[0]}`;
+        }
       });
-      if (!res.ok) { console.log(`  → ${res.status}`); continue; }
-      const data = await res.json();
-      const games = Array.isArray(data) ? data : (data.games || data.results || data.data || []);
-      if (games.length > 100) {
-        console.log(`[api] got ${games.length} slots from ${url}`);
-        return games.map(g => ({
-          rainbetSlug: g.slug || g.id || '',
-          name: g.name || g.title || '',
-          thumb: g.thumbnail || g.image || g.thumb || null,
-        })).filter(g => g.rainbetSlug && g.name);
-      }
-    } catch (e) {
-      console.log(`  → failed: ${e.message}`);
-    }
+      console.log(`[slot.report] ${Object.keys(thumbMap).length} reviewed thumbnails`);
+    } catch (e) { console.error('[slot.report] failed to parse slots-cards.js:', e.message); }
   }
-  return null;
+
+  // Filter to providers available on Rainbet
+  const relevant = allGames.filter(g => RELEVANT_PROVIDERS.has(g.provider_slug));
+  console.log(`[slot.report] ${relevant.length} slots from Rainbet-available providers`);
+
+  // Construct Rainbet slugs and find thumbnails
+  const results = [];
+  for (const g of relevant) {
+    const rbProvider = SLOT_REPORT_TO_RAINBET[g.provider_slug] || g.provider_slug;
+    const rainbetSlug = `${rbProvider}-${g.slug}`;
+    const thumb = thumbMap[g.slug] || null;
+    if (!thumb) continue; // only include slots with verified thumbnails
+
+    results.push({ rainbetSlug, name: g.name, thumb });
+  }
+
+  console.log(`[slot.report] ${results.length} slots with thumbnails ready`);
+  return results.length > 100 ? results : null;
 }
 
 // ── Strategy 2: Headless browser scrape ─────────────────────────────
@@ -275,12 +308,15 @@ async function verifyAll(entries) {
 }
 
 (async () => {
-  // Try direct API first (fast, no CF issues)
-  let games = await tryApiFetch();
+  // Strategy 1: slot.report (reliable, no Cloudflare)
+  let games = await trySlotReport().catch(e => {
+    console.error('[slot.report] failed:', e.message);
+    return null;
+  });
 
-  // Fall back to browser scrape if API didn't work
+  // Strategy 2: browser scrape (may fail if CF blocks)
   if (!games || games.length === 0) {
-    console.log('[check] API fetch returned nothing — falling back to browser scrape');
+    console.log('[check] slot.report returned nothing — falling back to browser scrape');
     games = await scrapeBrowser();
   }
 
