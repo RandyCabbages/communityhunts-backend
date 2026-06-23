@@ -125,6 +125,26 @@ module.exports = function adminRoutes(deps) {
   // Manual trigger for admins — used for verification and on-demand cleanup.
   router.post('/api/admin/hunts/cleanup', requireAdmin, (req, res) => res.json({ ok: true, ...cleanupStaleHunts() }));
 
+  router.post('/api/admin/hunts/:userId/golive', requireAdmin, (req, res) => {
+    const h = hunts[req.params.userId];
+    if (!h) return res.status(404).json({error:'Not found'});
+    h.isLive = true;
+    h.startedAt = h.startedAt || new Date().toISOString();
+    h.updatedAt = new Date().toISOString();
+    h.archivedAt = null;
+    emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(h));
+    res.json({ok:true});
+  });
+
+  router.post('/api/admin/hunts/:userId/gooffline', requireAdmin, (req, res) => {
+    const h = hunts[req.params.userId];
+    if (!h) return res.status(404).json({error:'Not found'});
+    h.isLive = false;
+    h.updatedAt = new Date().toISOString();
+    emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(h));
+    res.json({ok:true});
+  });
+
   router.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
     const h = hunts[req.params.userId];
     if (!h) return res.status(404).json({error:'Not found'});
