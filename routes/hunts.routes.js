@@ -104,9 +104,10 @@ module.exports = function huntsRoutes(deps) {
       return [{ id, discordId: hostId, name: hostName, amount: balance != null ? balance : 1000, isRollWinner: false }];
     }
     if (huntType === 'solo') return [{ id:'creator_auto', name: userName, amount: balance != null ? balance : 0, isRollWinner: false }];
-    // community: seed a creator row only when a balance was given; else empty (today's behavior)
-    if (balance != null) return [{ id:'creator_auto', name: userName, amount: balance, isRollWinner: false }];
-    return [];
+    // community: always seed the host (creator) so the runner is present even without a
+    // starting balance (amount = the balance if given, else 0). Also covers reset, which
+    // calls initialEquity('community', …) with no balance.
+    return [{ id:'creator_auto', name: userName, amount: balance != null ? balance : 0, isRollWinner: false }];
   }
 
   router.post('/api/my-hunt/start', requireAuth, (req, res) => {
