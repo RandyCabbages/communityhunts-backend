@@ -39,6 +39,10 @@ const RELEVANT_PROVIDERS = new Set([
   'bullshark-games','backseat-gaming','print-studios','nownow-gaming',
   'trusty-gaming','kitsune-studios','ace-roll','foxhound-games',
   'jinx-gaming','pineapple-play',
+  'habanero','endorphina','betsoft','1spin4win','pgsoft','mascot',
+  'peter-and-sons','3-oaks','belatra','platipus','avatarux',
+  'truelab','slotmill','fantasma','popiplay','gamomat','onetouch',
+  'massive-studios','clutch-gaming','shady-lady',
 ]);
 
 // ── Strategy 1: slot.report API (no Cloudflare, always works) ───────
@@ -77,17 +81,22 @@ async function trySlotReport() {
   console.log(`[slot.report] ${relevant.length} slots from Rainbet-available providers`);
 
   // Construct Rainbet slugs and find thumbnails
+  // Use Rainbet CDN as fallback for slots without slot.report thumbnails
   const results = [];
+  let cdnFallbacks = 0;
   for (const g of relevant) {
     const rbProvider = SLOT_REPORT_TO_RAINBET[g.provider_slug] || g.provider_slug;
     const rainbetSlug = `${rbProvider}-${g.slug}`;
-    const thumb = thumbMap[g.slug] || null;
-    if (!thumb) continue; // only include slots with verified thumbnails
+    let thumb = thumbMap[g.slug] || null;
+    if (!thumb) {
+      thumb = `https://cdn.rainbet.com/slots/${encodeURIComponent(g.name)}.png`;
+      cdnFallbacks++;
+    }
 
     results.push({ rainbetSlug, name: g.name, thumb });
   }
 
-  console.log(`[slot.report] ${results.length} slots with thumbnails ready`);
+  console.log(`[slot.report] ${results.length} slots ready (${results.length - cdnFallbacks} with reviewed thumbs, ${cdnFallbacks} using Rainbet CDN)`);
   return results.length > 100 ? results : null;
 }
 
