@@ -43,6 +43,7 @@ const RELEVANT_PROVIDERS = new Set([
   'peter-and-sons','3-oaks','belatra','platipus','avatarux',
   'truelab','slotmill','fantasma','popiplay','gamomat','onetouch',
   'massive-studios','clutch-gaming','shady-lady',
+  'playnetic','amigo-gaming','penguin-king','mascot-gaming','aceroll',
 ]);
 
 // ── Strategy 1: slot.report API (no Cloudflare, always works) ───────
@@ -100,7 +101,115 @@ async function trySlotReport() {
   return results.length > 100 ? results : null;
 }
 
-// ── Strategy 2: Headless browser scrape ─────────────────────────────
+// ── Rainbet New Releases scrape ─────────────────────────────────────
+// Small page, no infinite scroll — grabs the ~20-50 newest slots directly.
+async function scrapeNewReleases() {
+  let stealthChromium, StealthPlugin;
+  try {
+    const { addExtra } = require('playwright-extra');
+    const { chromium } = require('playwright');
+    StealthPlugin = require('puppeteer-extra-plugin-stealth');
+    stealthChromium = addExtra(chromium);
+    stealthChromium.use(StealthPlugin());
+  } catch (e) {
+    console.log('[new-releases] playwright not installed — skipping');
+    return [];
+  }
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    console.log(`[new-releases] attempt ${attempt}/2`);
+    let browser;
+    try {
+      browser = await stealthChromium.launch({
+        headless: true,
+        args: ['--disable-blink-features=AutomationControlled', '--no-sandbox',
+               '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+      });
+      const ctx = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.6934.79 Safari/537.36',
+        viewport: { width: 1280, height: 900 }, locale: 'en-US', timezoneId: 'America/Chicago',
+      });
+      const page = await ctx.newPage();
+
+      console.log('[new-releases] navigating to https://rainbet.com/new-releases');
+      await page.goto('https://rainbet.com/new-releases', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+
+      // Cloudflare challenge
+      const title = await page.title();
+      if (title.toLowerCase().includes('just a moment') || title.toLowerCase().includes('cloudflare')) {
+        console.log('[new-releases] Cloudflare challenge — waiting…');
+        try {
+          await page.waitForFunction(
+            () => !document.title.toLowerCase().includes('just a moment') && !document.title.toLowerCase().includes('cloudflare'),
+            { timeout: 30_000 }
+          );
+        } catch {
+          console.log('[new-releases] challenge did NOT clear');
+          await browser.close();
+          if (attempt < 2) { await new Promise(r => setTimeout(r, 15_000)); continue; }
+          return [];
+        }
+        await page.waitForTimeout(3000);
+      }
+
+      // Wait for slot cards
+      try {
+        await page.waitForSelector('a[href*="/casino/slots/"]', { timeout: 30_000 });
+      } catch {
+        console.log('[new-releases] no slot cards found');
+        await browser.close();
+        if (attempt < 2) { await new Promise(r => setTimeout(r, 15_000)); continue; }
+        return [];
+      }
+
+      await page.waitForTimeout(2000);
+
+      // Click "Load more" a few times in case they paginate new releases
+      for (let i = 0; i < 10; i++) {
+        const loadMore = await page.$('button:has-text("Load more"), button:has-text("load more")');
+        if (!loadMore || !(await loadMore.isVisible().catch(() => false))) break;
+        await loadMore.scrollIntoViewIfNeeded().catch(() => {});
+        await loadMore.click().catch(() => {});
+        await page.waitForTimeout(500);
+      }
+
+      const games = await page.$$eval('a[href*="/casino/slots/"]', els => {
+        const seen = new Set();
+        const results = [];
+        for (const a of els) {
+          const href = a.getAttribute('href') || '';
+          const slug = href.replace('/casino/slots/', '');
+          if (!slug || slug.length < 2 || slug.includes('?') || seen.has(slug)) continue;
+          seen.add(slug);
+          const img = a.querySelector('img');
+          let thumb = null;
+          if (img) {
+            const src = img.getAttribute('src') || '';
+            try {
+              const u = new URL(src, 'https://rainbet.com');
+              const original = u.searchParams.get('url');
+              thumb = original ? decodeURIComponent(original) : src;
+            } catch { thumb = src; }
+          }
+          const name = img?.alt || slug.replace(/^[a-z]+-[a-z]+-/, '').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+          results.push({ rainbetSlug: slug, name, thumb });
+        }
+        return results;
+      });
+
+      await browser.close();
+      console.log(`[new-releases] found ${games.length} slots`);
+      return games;
+    } catch (e) {
+      console.error(`[new-releases] attempt ${attempt} error:`, e.message);
+      if (browser) await browser.close().catch(() => {});
+      if (attempt < 2) await new Promise(r => setTimeout(r, 15_000));
+    }
+  }
+  return [];
+}
+
+// ── Full catalog browser scrape ─────────────────────────────────────
 async function scrapeBrowser() {
   const { addExtra } = require('playwright-extra');
   const { chromium } = require('playwright');
@@ -317,16 +426,37 @@ async function verifyAll(entries) {
 }
 
 (async () => {
-  // Strategy 1: slot.report (reliable, no Cloudflare)
+  // Strategy 1: Rainbet new releases page (targeted, fast)
+  const newReleases = await scrapeNewReleases().catch(e => {
+    console.error('[new-releases] failed:', e.message);
+    return [];
+  });
+
+  // Strategy 2: slot.report API (bulk catalog, reliable)
   let games = await trySlotReport().catch(e => {
     console.error('[slot.report] failed:', e.message);
     return null;
   });
 
-  // Strategy 2: browser scrape (may fail if CF blocks)
+  // Strategy 3: full browser scrape (fallback if slot.report fails)
   if (!games || games.length === 0) {
-    console.log('[check] slot.report returned nothing — falling back to browser scrape');
+    console.log('[check] slot.report returned nothing — falling back to full browser scrape');
     games = await scrapeBrowser();
+  }
+
+  // Merge new releases into the games list (new releases take priority —
+  // they have exact Rainbet slugs and CDN thumbs straight from the site)
+  if (newReleases.length > 0) {
+    const gameSlugs = new Set((games || []).map(g => g.rainbetSlug.toLowerCase()));
+    let merged = 0;
+    for (const nr of newReleases) {
+      if (!gameSlugs.has(nr.rainbetSlug.toLowerCase())) {
+        (games || (games = [])).push(nr);
+        gameSlugs.add(nr.rainbetSlug.toLowerCase());
+        merged++;
+      }
+    }
+    console.log(`[check] merged ${merged} new-release slots not in slot.report`);
   }
 
   if (!Array.isArray(games) || games.length === 0) {
