@@ -361,6 +361,20 @@ app.use(require('./routes/settings.routes')({
 }));
 
 
+// TEMP DEBUG (remove after diagnosing the extension miss-save 500): a global error handler.
+// Without this, an uncaught throw in any route returns Express's default HTML "Internal Server
+// Error" and the stack is lost. This logs the full stack (Railway logs) AND returns it in the
+// JSON body so the extension console (which prints the 500 response) surfaces the real error.
+app.use((err, req, res, next) => {
+  console.error(`[ERR] ${req.method} ${req.originalUrl}\n`, err && err.stack ? err.stack : err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({
+    error: 'Internal Server Error',
+    message: String(err && err.message),
+    where: (err && err.stack ? err.stack : '').split('\n').slice(0, 8),
+  });
+});
+
 // ── Socket.io ─────────────────────────────────────────────────────
 // Connection handling lives in sockets/index.js. viewers is shared by reference with
 // hunts-core so live counts stay coherent.
