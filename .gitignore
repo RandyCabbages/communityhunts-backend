@@ -6,6 +6,8 @@
 # auto-generated data / cache (never commit)
 hunts_data.json
 slots_cache.json
+share_tokens.json
+user_settings.json
 
 # environment / secrets
 .env

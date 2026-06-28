@@ -13,7 +13,7 @@ Node.js/Express backend for **CommunityHunts.gg** — a community/VIP slot bonus
 | Backend (Railway) | https://beanhunt-backend-production.up.railway.app |
 | Frontend (Vercel) | https://communityhunts.gg |
 | Backend repo | https://github.com/RandyCabbages/communityhunts.gg-backend |
-| Frontend repo | https://github.com/GooferG/beanhunt-frontend |
+| Frontend repo | https://github.com/GooferG/communityhunts-frontend |
 | Railway Project ID | `21885da4-a512-4d3c-b3ff-9d499cb82d4a` |
 
 **Local paths:**
