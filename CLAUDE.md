@@ -4,21 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Node.js/Express backend for **BeanHunt** — a community/VIP slot bonus hunt tracker. Features: Discord OAuth, hunt state management, real-time Socket.IO events, slot autocomplete, Discord bot integration (import calls, ticket DMs, parse winners), Twitch live status, and file-based persistence. Deployed on Railway.
+Node.js/Express backend for **CommunityHunts.gg** — a community/VIP slot bonus hunt tracker. Features: Discord OAuth, hunt state management, real-time Socket.IO events, slot autocomplete, Discord bot integration (import calls, ticket DMs, parse winners), Twitch live status, and file-based persistence. Deployed on Railway.
 
 ## Live URLs
 
 | Resource | URL |
 |---|---|
 | Backend (Railway) | https://beanhunt-backend-production.up.railway.app |
-| Frontend (Vercel) | https://twitchbean-hunt.vercel.app |
-| Backend repo | https://github.com/RandyCabbages/beanhunt-backend |
-| Frontend repo | https://github.com/RandyCabbages/beanhunt-frontend |
+| Frontend (Vercel) | https://communityhunts.gg |
+| Backend repo | https://github.com/RandyCabbages/communityhunts.gg-backend |
+| Frontend repo | https://github.com/GooferG/beanhunt-frontend |
 | Railway Project ID | `21885da4-a512-4d3c-b3ff-9d499cb82d4a` |
 
 **Local paths:**
-- Backend: `C:\Users\kylew\beanhunt-backend`
-- Frontend: `C:\Users\kylew\beanhunt-frontend`
+- Backend: `C:\Users\kylew\communityhunts-backend`
+- Frontend: `C:\Users\kylew\communityhunts-frontend`
 
 ## Commands
 
