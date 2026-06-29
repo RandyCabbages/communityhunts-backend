@@ -202,7 +202,7 @@ huntsCore.initHuntsCore({ hunts, archive, viewers, io, persistHunts });
 const {
   MOD_HUNT_ID, AFFILIATE_HUNT_ID,
   huntSummary, huntCompleted, tenantOf, inTenant,
-  getPublicHunts, getArchivedHunts, getAllHunts,
+  getPublicHunts, getArchivedHunts, getAllHunts, getSlotCallCounts,
   emitHubUpdate, publicHuntView, emitHuntUpdate,
   uid, touch,
 } = huntsCore;
@@ -356,7 +356,7 @@ app.use(require('./routes/integrations.routes')({
 // Routes are mounted via routes/slots.routes.js. Pre-fetch the slot list on startup.
 const slots = require('./lib/slots');
 slots.prefetchSlots();
-app.use(require('./routes/slots.routes')({ slots }));
+app.use(require('./routes/slots.routes')({ slots, getSlotCallCounts }));
 
 // Misc leaf routes: /api/bangers (reads hunts+archive), /api/tickets, /api/health.
 app.use(require('./routes/misc.routes')({ hunts, archive }));
