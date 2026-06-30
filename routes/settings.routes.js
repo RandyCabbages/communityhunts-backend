@@ -19,6 +19,22 @@ module.exports = function settingsRoutes(deps) {
   const { getSettings, saveSettings, nameMatchesSettings, allSettingsRows, resolveUserIdByName } = settings;
   const router = express.Router();
 
+  // Overlay Studio config — cosmetic per-streamer prefs stored in user_settings JSONB.
+  // Enums must stay in sync with the frontend src/overlay/overlayConfig.js.
+  const OVERLAY_AESTHETICS = ['classic', 'pass', 'linecheck', 'docket'];
+  const OVERLAY_SIZES = ['board', 'compact'];
+  const HEX6 = /^#[0-9a-fA-F]{6}$/;
+  const DEFAULT_OVERLAY_CONFIG = { aesthetic: 'classic', size: 'board', accent: null };
+
+  function sanitizeOverlayConfig(raw) {
+    const r = (raw && typeof raw === 'object') ? raw : {};
+    return {
+      aesthetic: OVERLAY_AESTHETICS.includes(r.aesthetic) ? r.aesthetic : 'classic',
+      size:      OVERLAY_SIZES.includes(r.size) ? r.size : 'board',
+      accent:    (typeof r.accent === 'string' && HEX6.test(r.accent)) ? r.accent : null,
+    };
+  }
+
   // GET /api/settings — get current user's settings
   router.get('/api/settings', requireAuth, async (req, res) => {
     res.json(await getSettings(req.user.id));
@@ -31,6 +47,7 @@ module.exports = function settingsRoutes(deps) {
     if (rainbetName !== undefined)    current.rainbetName    = String(rainbetName).trim().slice(0, 64);
     if (twitchName  !== undefined)    current.twitchName     = String(twitchName).trim().slice(0, 64);
     if (preferredSlots !== undefined) current.preferredSlots = (preferredSlots || []).filter(Boolean);
+    if (req.body.overlayConfig !== undefined) current.overlayConfig = sanitizeOverlayConfig(req.body.overlayConfig);
     // Always update Discord identity for name-based lookup by other hunt owners
     current.discordUsername    = req.user.username || '';
     current.discordDisplayName = req.user.displayName || req.user.username || '';
@@ -43,6 +60,14 @@ module.exports = function settingsRoutes(deps) {
   router.get('/api/settings/:userId', requireAuth, async (req, res) => {
     const s = await getSettings(req.params.userId);
     res.json({ preferredSlots: s.preferredSlots || [], rainbetName: s.rainbetName || '', twitchName: s.twitchName || '' });
+  });
+
+  // GET /api/overlay-config/:userId — PUBLIC (no requireAuth). The OBS browser-source is
+  // unauthenticated and reads the streamer's chosen overlay style by Discord ID. Cosmetic
+  // prefs only (no secrets); always returns a valid, defaults-merged config.
+  router.get('/api/overlay-config/:userId', async (req, res) => {
+    const s = await getSettings(req.params.userId);
+    res.json({ ...DEFAULT_OVERLAY_CONFIG, ...sanitizeOverlayConfig(s.overlayConfig || {}) });
   });
 
   // GET /api/settings/by-name/:name — look up another user's preferred slots & rainbet by their Discord username/displayName
