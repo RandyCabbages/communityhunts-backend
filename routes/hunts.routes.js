@@ -226,7 +226,7 @@ module.exports = function huntsRoutes(deps) {
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10, currency: 'USD', publicCalls: false, publicCallsPin: null
     };
-    const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot } = req.body;
+    const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[req.user.id].bonuses    = bonuses;
     if (equity     !== undefined) hunts[req.user.id].equity     = equity;
     if (calls      !== undefined) hunts[req.user.id].calls      = calls;
@@ -243,6 +243,7 @@ module.exports = function huntsRoutes(deps) {
     if (publicCalls    !== undefined) hunts[req.user.id].publicCalls    = publicCalls;
     if (publicCallsPin !== undefined) hunts[req.user.id].publicCallsPin = publicCallsPin;
     if (currentSlot !== undefined) hunts[req.user.id].currentSlot = currentSlot;
+    if (manualOrder !== undefined) hunts[req.user.id].manualOrder = manualOrder;
     touch(req.user.id);
     persistHunts();
     io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(hunts[req.user.id]));

@@ -38,7 +38,7 @@ module.exports = function modHuntRoutes(deps) {
   router.put('/api/mod-hunt', requireModHuntAccess, (req, res) => {
     if (rejectBadHuntInput(req, res)) return;
     if (!hunts[MOD_HUNT_ID]) hunts[MOD_HUNT_ID] = emptyModHunt(req.tenant.id);
-    const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot } = req.body;
+    const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[MOD_HUNT_ID].bonuses    = bonuses;
     if (equity     !== undefined) hunts[MOD_HUNT_ID].equity     = equity;
     if (calls      !== undefined) hunts[MOD_HUNT_ID].calls      = calls;
@@ -48,6 +48,7 @@ module.exports = function modHuntRoutes(deps) {
     if (lockTop4   !== undefined) hunts[MOD_HUNT_ID].lockTop4   = lockTop4;
     if (currency   !== undefined) hunts[MOD_HUNT_ID].currency   = currency;
     if (currentSlot !== undefined) hunts[MOD_HUNT_ID].currentSlot = currentSlot;
+    if (manualOrder !== undefined) hunts[MOD_HUNT_ID].manualOrder = manualOrder;
     hunts[MOD_HUNT_ID].huntType = 'solo';
     touch(MOD_HUNT_ID);
     persistHunts();
@@ -153,7 +154,7 @@ module.exports = function modHuntRoutes(deps) {
   router.put('/api/affiliate-hunt', requireModHuntAccess, (req, res) => {
     if (rejectBadHuntInput(req, res)) return;
     if (!hunts[AFFILIATE_HUNT_ID]) hunts[AFFILIATE_HUNT_ID] = emptyAffiliateHunt(req.tenant.id);
-    const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot } = req.body;
+    const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[AFFILIATE_HUNT_ID].bonuses    = bonuses;
     if (equity     !== undefined) hunts[AFFILIATE_HUNT_ID].equity     = equity;
     if (calls      !== undefined) hunts[AFFILIATE_HUNT_ID].calls      = calls;
@@ -163,6 +164,7 @@ module.exports = function modHuntRoutes(deps) {
     if (lockTop4   !== undefined) hunts[AFFILIATE_HUNT_ID].lockTop4   = lockTop4;
     if (currency   !== undefined) hunts[AFFILIATE_HUNT_ID].currency   = currency;
     if (currentSlot !== undefined) hunts[AFFILIATE_HUNT_ID].currentSlot = currentSlot;
+    if (manualOrder !== undefined) hunts[AFFILIATE_HUNT_ID].manualOrder = manualOrder;
     hunts[AFFILIATE_HUNT_ID].huntType = 'vip';
     touch(AFFILIATE_HUNT_ID);
     persistHunts();

@@ -90,7 +90,7 @@ module.exports = function callsRoutes(deps) {
     const hunt = hunts[req.params.userId];
     if (!hunt) return res.status(404).json({error:'Hunt not found'});
     if (rejectBadHuntInput(req, res)) return;
-    const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot } = req.body;
+    const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
     if (bonuses     !== undefined) hunt.bonuses     = bonuses;
     if (equity      !== undefined) hunt.equity      = equity;
     if (calls       !== undefined) hunt.calls       = calls;
@@ -103,6 +103,7 @@ module.exports = function callsRoutes(deps) {
     if (publicCalls    !== undefined) hunt.publicCalls    = publicCalls;
     if (publicCallsPin !== undefined) hunt.publicCallsPin = publicCallsPin;
     if (currentSlot !== undefined) hunt.currentSlot = currentSlot;
+    if (manualOrder !== undefined) hunt.manualOrder = manualOrder;
     hunt.updatedAt = new Date().toISOString();
     persistHunts();
     io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(hunt));
