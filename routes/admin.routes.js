@@ -6,6 +6,7 @@
 //
 //   GET    /api/admin/hunts                              — all hunts (admin)
 //   GET    /api/admin/gotin-log                          — every got-in {ts,slot,bet}, newest first (admin)
+//   GET    /api/admin/gotin-log.xlsx                     — multi-tab workbook (admin OR GOTIN_EXPORT_KEY)
 //   GET    /api/admin/overview                           — dashboard counts (admin)
 //   GET    /api/admin/platform-admins                    — list platform admins (platform admin)
 //   POST   /api/admin/platform-admins                    — add a DB platform admin
@@ -17,6 +18,7 @@
 //   DELETE /api/admin/hunts/archived/:userId/:archivedAt — delete an archived snapshot
 
 const express = require('express');
+const { buildGotInWorkbook, ymdInTz } = require('../lib/gotin-export');
 
 module.exports = function adminRoutes(deps) {
   const {
@@ -31,9 +33,37 @@ module.exports = function adminRoutes(deps) {
   router.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts(req.tenant.id)));
 
   // Got-In log — every slot that got in, with timestamp + bet, newest first (tenant-scoped).
-  // Backs the admin "Export Got-In Sheet" CSV download in the frontend Settings page.
+  // Backs the admin "Export Got-In Sheet" download in the frontend Settings page.
   router.get('/api/admin/gotin-log', requireAuth, requireAdmin, (req, res) => {
     res.json({ rows: getGotInLog(req.tenant?.id || 'bean'), generatedAt: Date.now() });
+  });
+
+  // Allow either an admin session (in-app button) OR a matching GOTIN_EXPORT_KEY (headless daily
+  // script — no Discord login). The key path stays read-only and is only wired to the export below.
+  function requireAdminOrKey(req, res, next) {
+    const KEY = process.env.GOTIN_EXPORT_KEY;
+    const provided = req.headers['x-export-key'] || req.query.key;
+    if (KEY && provided && provided === KEY) return next();
+    return requireAuth(req, res, () => requireAdmin(req, res, next));
+  }
+
+  // Got-In workbook — multi-tab .xlsx (Overview + one tab per day, newest first).
+  // ?tz=<IANA> sets the day-boundary timezone (default America/Chicago). Same bytes for the
+  // in-app button and the daily local script.
+  router.get('/api/admin/gotin-log.xlsx', requireAdminOrKey, async (req, res) => {
+    const tz = String(req.query.tz || 'America/Chicago');
+    const tenantId = req.tenant?.id || 'bean';
+    try {
+      const rows = getGotInLog(tenantId);
+      const buf = await buildGotInWorkbook(rows, { tz, tenantName: req.tenant?.displayName || 'Bean' });
+      const fname = `${tenantId}-got-in-${ymdInTz(Date.now(), tz)}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+      res.send(Buffer.from(buf));
+    } catch (e) {
+      console.error('[admin] gotin xlsx failed:', e.message);
+      res.status(500).json({ error: 'Export failed' });
+    }
   });
 
   // Lightweight dashboard counts for the current tenant.
