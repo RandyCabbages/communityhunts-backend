@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon -r dotenv/config server.js",
-    "postinstall": "patchright install --with-deps chrome || true"
+    "postinstall": "patchright install --with-deps chromium || true"
   },
   "dependencies": {
     "axios": "^1.6.7",

@@ -153,10 +153,7 @@ async function scrapeNewReleases() {
     console.log(`[new-releases] attempt ${attempt}/2`);
     let browser;
     try {
-      browser = await chromium.launch({
-        headless: true,
-        channel: 'chrome', // patchright recommends real Chrome over bundled Chromium for stealth
-      });
+      browser = await chromium.launch({ headless: true });
       const ctx = await browser.newContext({
         viewport: { width: 1280, height: 900 }, locale: 'en-US', timezoneId: 'America/Chicago',
       });
@@ -250,10 +247,7 @@ async function scrapeBrowser() {
     console.log(`[scrape] attempt ${attempt}/${MAX_RETRIES}`);
     let browser;
     try {
-      browser = await chromium.launch({
-        headless: true,
-        channel: 'chrome',
-      });
+      browser = await chromium.launch({ headless: true });
 
       const ctx = await browser.newContext({
         viewport: { width: 1280, height: 900 },
