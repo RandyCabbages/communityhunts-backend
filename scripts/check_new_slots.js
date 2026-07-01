@@ -471,10 +471,16 @@ async function runCheck() {
     return null;
   });
 
+  // slot.report only reconstructs slugs for a curated provider list (RELEVANT_PROVIDERS)
+  // — it's not a full enumeration of everything actually live on Rainbet. Only a real
+  // DOM crawl of rainbet.com (Strategy 3) is trustworthy enough to say a slot was removed.
+  let isFullCatalog = false;
+
   // Strategy 3: full browser scrape (fallback if slot.report fails)
   if (!games || games.length === 0) {
     console.log('[check] slot.report returned nothing — falling back to full browser scrape');
     games = await scrapeBrowser();
+    isFullCatalog = games.length > 0;
   }
 
   // Merge new releases into the games list (new releases take priority —
@@ -503,9 +509,13 @@ async function runCheck() {
   const existing = JSON.parse(fs.readFileSync(SLOTS_FILE, 'utf8'));
   const seenSlugs = new Set(existing.map(s => (s.rainbetSlug || '').toLowerCase()));
 
-  // Detect slots removed from Rainbet
+  // Detect slots removed from Rainbet — only trust this when Strategy 3 actually ran
+  // (see isFullCatalog above); slot.report's curated-provider reconstruction alone
+  // would otherwise flag thousands of still-live slots as "removed".
   const liveSlugs = new Set(games.map(g => g.rainbetSlug.toLowerCase()));
-  const removed = existing.filter(s => !liveSlugs.has((s.rainbetSlug || '').toLowerCase()));
+  const removed = isFullCatalog
+    ? existing.filter(s => !liveSlugs.has((s.rainbetSlug || '').toLowerCase()))
+    : [];
   if (removed.length > 0 && removed.length < existing.length * 0.5) {
     console.log(`[check] ${removed.length} slot(s) no longer on Rainbet — removing`);
     for (const r of removed.slice(0, 20)) console.log(`  - ${r.name}`);
@@ -514,7 +524,7 @@ async function runCheck() {
 
   // Build new file: keep existing entries that are still live (preserves manual edits),
   // then append genuinely new slots.
-  const kept = removed.length < existing.length * 0.5
+  const kept = removed.length > 0 && removed.length < existing.length * 0.5
     ? existing.filter(s => liveSlugs.has((s.rainbetSlug || '').toLowerCase()))
     : existing;
 
