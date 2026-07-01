@@ -2,8 +2,8 @@ name: Check Rainbet for new slots
 
 on:
   schedule:
-    # Runs every 30 minutes
-    - cron: '*/30 * * * *'
+    # Runs every 10 minutes
+    - cron: '*/10 * * * *'
   workflow_dispatch:  # Lets you trigger manually from the Actions tab
 
 permissions:
