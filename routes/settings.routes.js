@@ -16,7 +16,7 @@ const express = require('express');
 
 module.exports = function settingsRoutes(deps) {
   const { settings, pgPool, memberships, isPlatformAdmin, requireAuth, requireAdmin } = deps;
-  const { getSettings, saveSettings, nameMatchesSettings, allSettingsRows, resolveUserIdByName } = settings;
+  const { getSettings, saveSettings, resolveUserIdByName } = settings;
   const router = express.Router();
 
   // Overlay Studio config — cosmetic per-streamer prefs stored in user_settings JSONB.
@@ -72,22 +72,18 @@ module.exports = function settingsRoutes(deps) {
 
   // GET /api/settings/by-name/:name — look up another user's preferred slots & rainbet by their Discord username/displayName
   // Used when a hunt owner adds a member by name and we don't know their Discord ID
+  // Delegates to resolveUserIdByName so this stays real-ID-priority — same as the admin
+  // write routes below — instead of an unsorted find() that could return a stale
+  // synthetic `manual:<name>` row (no preferredSlots) ahead of the member's real account.
   router.get('/api/settings/by-name/:name', requireAuth, async (req, res) => {
-    const search = (req.params.name || '').toLowerCase().trim();
-    if (!search) return res.json({ preferredSlots: [], rainbetName: '', twitchName: '' });
-    const searchNoSp = search.replace(/\s+/g,'');
-
-    const allSettings = await allSettingsRows();
-
-    // Find match by Discord username or displayName (case-insensitive, space-insensitive)
-    const match = allSettings.find(s => nameMatchesSettings(s, search, searchNoSp));
-
-    if (match) {
+    const userId = await resolveUserIdByName(req.params.name || '');
+    if (userId) {
+      const s = await getSettings(userId);
       return res.json({
-        preferredSlots: match.preferredSlots || [],
-        rainbetName:    match.rainbetName    || '',
-        twitchName:     match.twitchName     || '',
-        userId:         match.userId         || null,
+        preferredSlots: s.preferredSlots || [],
+        rainbetName:    s.rainbetName    || '',
+        twitchName:     s.twitchName     || '',
+        userId,
       });
     }
     res.json({ preferredSlots: [], rainbetName: '', twitchName: '' });
