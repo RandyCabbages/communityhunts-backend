@@ -512,6 +512,10 @@ async function runCheck() {
     candidates.push(g);
   }
 
+  // Log only the first few of each kind — a big batch (e.g. after a long outage)
+  // can mean thousands of these in one run, which trips Railway's per-second log
+  // rate limit and drops messages (including the summary line below).
+  const LOG_SAMPLE = 20;
   let addedCount = 0, upgradedCount = 0;
   for (const g of candidates) {
     const key = g.rainbetSlug.toLowerCase();
@@ -521,15 +525,17 @@ async function runCheck() {
       if (g.thumb && !existingEntry.thumb) {
         existingEntry.thumb = g.thumb;
         upgradedCount++;
-        console.log(`  ↑ upgraded thumbnail: ${g.name}  [${g.rainbetSlug}]`);
+        if (upgradedCount <= LOG_SAMPLE) console.log(`  ↑ upgraded thumbnail: ${g.name}  [${g.rainbetSlug}]`);
       }
     } else {
       kept.push(g);
       existingBySlug.set(key, g);
       addedCount++;
-      console.log(`  + ${g.name}  [${g.rainbetSlug}]${g.thumb ? '' : ' (no thumb yet)'}`);
+      if (addedCount <= LOG_SAMPLE) console.log(`  + ${g.name}  [${g.rainbetSlug}]${g.thumb ? '' : ' (no thumb yet)'}`);
     }
   }
+  if (addedCount > LOG_SAMPLE) console.log(`  … and ${addedCount - LOG_SAMPLE} more added`);
+  if (upgradedCount > LOG_SAMPLE) console.log(`  … and ${upgradedCount - LOG_SAMPLE} more upgraded`);
 
   const changed = addedCount > 0 || upgradedCount > 0 || removed.length > 0;
   if (changed) {
