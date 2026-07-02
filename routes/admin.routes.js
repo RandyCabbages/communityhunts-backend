@@ -5,6 +5,7 @@
 // trigger via the injected cleanupStaleHunts.
 //
 //   GET    /api/admin/hunts                              — all hunts (admin)
+//   GET    /api/admin/hunt-stats                         — dashboard statistics, ?tz=<IANA> (admin)
 //   GET    /api/admin/gotin-log                          — every got-in {ts,slot,bet}, newest first (admin)
 //   GET    /api/admin/gotin-log.xlsx                     — multi-tab workbook (admin OR GOTIN_EXPORT_KEY)
 //   GET    /api/admin/overview                           — dashboard counts (admin)
@@ -23,7 +24,7 @@ const { buildGotInWorkbook, ymdInTz } = require('../lib/gotin-export');
 module.exports = function adminRoutes(deps) {
   const {
     requireAuth, requireAdmin, requirePlatformAdmin,
-    getAllHunts, getArchivedHunts, getGotInLog,
+    getAllHunts, getArchivedHunts, getGotInLog, getHuntStats,
     pgPool, admins, tenants, ADMIN_IDS,
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, io, uid, cleanupStaleHunts,
@@ -31,6 +32,12 @@ module.exports = function adminRoutes(deps) {
   const router = express.Router();
 
   router.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts(req.tenant.id)));
+
+  // Dashboard statistics for the admin Hunts tab. ?tz=<IANA> buckets the hour/weekday/week
+  // charts in the admin's own timezone (frontend sends the browser zone).
+  router.get('/api/admin/hunt-stats', requireAuth, requireAdmin, (req, res) => {
+    res.json({ ...getHuntStats(req.tenant?.id || 'bean', String(req.query.tz || '')), generatedAt: Date.now() });
+  });
 
   // Got-In log — every slot that got in, with timestamp + bet, newest first (tenant-scoped).
   // Backs the admin "Export Got-In Sheet" download in the frontend Settings page.
