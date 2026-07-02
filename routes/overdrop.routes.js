@@ -11,6 +11,7 @@
 //   POST   /api/overdrop/audio      — play a sound/music URL
 //   PUT    /api/overdrop/audio      — live-update volume/loop
 //   DELETE /api/overdrop/audio      — stop audio
+//   PUT    /api/overdrop/enabled    — master switch: OFF = stage only, ON = live on stream
 
 const express = require('express');
 
@@ -60,6 +61,10 @@ module.exports = function overdropRoutes(deps) {
   router.delete('/api/overdrop/audio', requireMod, (req, res) => {
     overdrop.stopAudio(slugOf(req));
     res.json({ ok: true });
+  });
+
+  router.put('/api/overdrop/enabled', requireMod, (req, res) => {
+    res.json({ enabled: overdrop.setEnabled(slugOf(req), !!(req.body || {}).enabled) });
   });
 
   return router;

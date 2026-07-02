@@ -169,6 +169,7 @@ POST   /api/overdrop/clear                  → clear all items + audio (mod-gat
 POST   /api/overdrop/audio                  → play sound/music URL (mod-gated)
 PUT    /api/overdrop/audio                  → update volume/loop (mod-gated)
 DELETE /api/overdrop/audio                  → stop audio (mod-gated)
+PUT    /api/overdrop/enabled                → master switch: OFF = staging, ON = live (mod-gated)
 ```
 
 ### OverDrop (mod-controlled stream overlay)
@@ -179,7 +180,9 @@ joins the `overdrop:<slug>` socket room via `watch:overdrop`. **Sockets are read
 feature** (the socket layer is unauthenticated) — every mutation goes through the requireMod REST
 routes above, which broadcast the delta to the room. State is per-tenant, in-memory only
 (transient on-stream content; a deploy clearing it is expected). Media is URL-based (http/https
-enforced by `safeUrl`) — no file uploads (Railway disk is ephemeral).
+enforced by `safeUrl`) — no file uploads (Railway disk is ephemeral). The `enabled` flag is the
+master switch: OFF means the OBS source page renders nothing while mods stage/arrange items in
+the control panel; state still broadcasts normally — only source-page rendering is gated.
 
 ## Socket.IO Events
 
@@ -193,9 +196,10 @@ calls:denied            → call permission denied
 bean:live               → Twitch live status update
 
 watch:overdrop          ← client joins overdrop:<slug> room (read-only)
-overdrop:sync           → full OverDrop state on join
+overdrop:sync           → full OverDrop state on join (incl. `enabled`)
 overdrop:item:add / overdrop:item:update / overdrop:item:remove / overdrop:clear
 overdrop:audio:play / overdrop:audio:update / overdrop:audio:stop
+overdrop:enabled        → master switch changed ({ enabled })
 ```
 
 ## Slot Autocomplete
