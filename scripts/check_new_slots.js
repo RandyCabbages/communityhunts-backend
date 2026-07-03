@@ -39,7 +39,7 @@ const SOFTSWISS_PROVIDER = {
   'yggdrasil':'yggdrasil','push-gaming':'pushgaming','netent':'netent',
   'quickspin':'quickspin','blueprint-gaming':'blueprint','big-time-gaming':'bigtimegaming',
   'spinomenal':'spinomenal','isoftbet':'isoftbet','wazdan':'wazdan',
-  'iron-dog-studio':'irondog','gameart':'gameart',
+  'iron-dog-studio':'irondog','gameart':'gameart','gamomat':'gamomat',
 };
 const toPascal = slug => slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
 
