@@ -43,6 +43,12 @@ const SOFTSWISS_PROVIDER = {
 };
 const toPascal = slug => slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
 
+// Constructed slugs that don't match Rainbet's real URL (verified in a browser —
+// a wrong slug 404s). slot.report says "chaos-crew-2"; Rainbet serves …-chaos-crew-ii.
+const SLUG_FIXES = {
+  'hacksaw-chaos-crew-2': 'hacksaw-chaos-crew-ii',
+};
+
 const RELEVANT_PROVIDERS = new Set([
   'pragmatic-play','playngo','hacksaw-gaming','elk-studios','red-tiger',
   'relax-gaming','quickspin','blueprint-gaming','nolimit-city','bgaming',
@@ -113,7 +119,13 @@ async function trySlotReport() {
   let reviewedThumbs = 0, softswissGuess = 0;
   for (const g of relevant) {
     const rbProvider = SLOT_REPORT_TO_RAINBET[g.provider_slug] || g.provider_slug;
-    const rainbetSlug = `${rbProvider}-${g.slug}`;
+    // slot.report suffixes some Pragmatic entries "… Slot by Pragmatic Play"; Rainbet's
+    // real slug/name never carries it (CULT. lives at pragmatic-play-cult), so a
+    // constructed slug keeping the suffix 404s AND duplicates the clean row.
+    const slug = g.slug.replace(/-slot-by-pragmatic-play$/, '');
+    const name = g.name.replace(/\s+slot by pragmatic play\s*$/i, '');
+    const built = `${rbProvider}-${slug}`;
+    const rainbetSlug = SLUG_FIXES[built] || built;
     let thumb = thumbMap[g.slug] || null;
     if (thumb) {
       reviewedThumbs++;
@@ -122,7 +134,7 @@ async function trySlotReport() {
       if (ss) { thumb = `https://cdn.softswiss.net/i/s4/${ss}/${toPascal(g.slug)}.webp`; softswissGuess++; }
     }
 
-    results.push({ rainbetSlug, name: g.name, thumb });
+    results.push({ rainbetSlug, name, thumb });
   }
 
   console.log(`[slot.report] ${results.length} slots ready (${reviewedThumbs} reviewed thumbs, ${softswissGuess} SoftSwiss guesses to verify, ${results.length - reviewedThumbs - softswissGuess} without a thumb source)`);
