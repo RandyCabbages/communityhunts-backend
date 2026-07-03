@@ -338,7 +338,7 @@ setInterval(cleanupStaleHunts, 60 * 60 * 1000);
 // background task); the manual /api/admin/hunts/cleanup trigger calls the injected cleanupStaleHunts.
 app.use(require('./routes/admin.routes')({
   requireAuth, requireAdmin, requirePlatformAdmin,
-  getAllHunts, getArchivedHunts, getGotInLog,
+  getAllHunts, getArchivedHunts, getGotInLog, getHuntStats: huntsCore.getHuntStats,
   pgPool, admins, tenants, ADMIN_IDS,
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
   emitHubUpdate, publicHuntView, io, uid, cleanupStaleHunts,
