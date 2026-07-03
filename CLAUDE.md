@@ -170,6 +170,8 @@ POST   /api/overdrop/audio                  → play sound/music URL (mod-gated)
 PUT    /api/overdrop/audio                  → update volume/loop (mod-gated)
 DELETE /api/overdrop/audio                  → stop audio (mod-gated)
 PUT    /api/overdrop/enabled                → master switch: OFF = staging, ON = live (mod-gated)
+POST   /api/overdrop/upload                 → raw-body file upload, ≤30 MB (mod-gated)
+GET    /api/overdrop/media/:name            → serve uploaded file (PUBLIC — OBS loads these)
 ```
 
 ### OverDrop (mod-controlled stream overlay)
@@ -180,7 +182,12 @@ joins the `overdrop:<slug>` socket room via `watch:overdrop`. **Sockets are read
 feature** (the socket layer is unauthenticated) — every mutation goes through the requireMod REST
 routes above, which broadcast the delta to the room. State is per-tenant, in-memory only
 (transient on-stream content; a deploy clearing it is expected). Media is URL-based (http/https
-enforced by `safeUrl`) — no file uploads (Railway disk is ephemeral). The `enabled` flag is the
+enforced by `safeUrl`) or uploaded via `POST /api/overdrop/upload` (raw body, mime in the
+Content-Type header — no multipart dep; type whitelist + 30 MB cap in `saveUpload`). Uploads
+live on the EPHEMERAL disk (`os.tmpdir()/overdrop-media`, ~24h TTL + count-cap sweep on each
+upload) — same transient lifecycle as the in-memory overlay state, deliberately not an archive.
+`GET /api/overdrop/media/:name` serves them publicly (OBS source has no session; strict
+name-pattern check, no traversal). The `enabled` flag is the
 master switch: OFF means the OBS source page renders nothing while mods stage/arrange items in
 the control panel; state still broadcasts normally — only source-page rendering is gated.
 
