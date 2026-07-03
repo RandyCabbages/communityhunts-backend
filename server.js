@@ -380,7 +380,7 @@ app.use(require('./routes/misc.routes')({ hunts, archive }));
 
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
-  settings, pgPool, memberships, isPlatformAdmin, requireAuth, requireAdmin,
+  settings, pgPool, memberships, isPlatformAdmin, requireAuth, requireAdmin, io,
 }));
 
 

@@ -15,7 +15,7 @@
 const express = require('express');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, requireAuth, requireAdmin } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, requireAuth, requireAdmin, io } = deps;
   const { getSettings, saveSettings, resolveUserIdByName } = settings;
   const router = express.Router();
 
@@ -53,6 +53,12 @@ module.exports = function settingsRoutes(deps) {
     current.discordDisplayName = req.user.displayName || req.user.username || '';
     current.discordId          = req.user.id;
     await saveSettings(req.user.id, current);
+    // Live-restyle: the streamer's OBS overlay sits in room hunt:<their id> (watch:hunt join),
+    // so a Studio save restyles it without a source refresh. Cosmetic config only — already
+    // public via GET /api/overlay-config/:userId.
+    if (req.body.overlayConfig !== undefined && io) {
+      io.to(`hunt:${req.user.id}`).emit('overlay-config:update', current.overlayConfig);
+    }
     res.json({ ok: true, settings: current });
   });
 
