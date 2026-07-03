@@ -122,8 +122,8 @@ async function trySlotReport() {
     // slot.report suffixes some Pragmatic entries "… Slot by Pragmatic Play"; Rainbet's
     // real slug/name never carries it (CULT. lives at pragmatic-play-cult), so a
     // constructed slug keeping the suffix 404s AND duplicates the clean row.
-    const slug = g.slug.replace(/-slot-by-pragmatic-play$/, '');
-    const name = g.name.replace(/\s+slot by pragmatic play\s*$/i, '');
+    const slug = g.slug.replace(/-slot-by-pragmatic-play.*$/, '');
+    const name = g.name.replace(/\s+slot by pragmatic play.*$/i, '');
     const built = `${rbProvider}-${slug}`;
     const rainbetSlug = SLUG_FIXES[built] || built;
     let thumb = thumbMap[g.slug] || null;
