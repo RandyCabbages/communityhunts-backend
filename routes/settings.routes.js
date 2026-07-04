@@ -13,27 +13,15 @@
 //   POST /api/admin/set-preferred-slots → admin sets another user's preferred slots
 
 const express = require('express');
+const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
 
 module.exports = function settingsRoutes(deps) {
   const { settings, pgPool, memberships, isPlatformAdmin, requireAuth, requireAdmin, io } = deps;
   const { getSettings, saveSettings, resolveUserIdByName } = settings;
   const router = express.Router();
 
-  // Overlay Studio config — cosmetic per-streamer prefs stored in user_settings JSONB.
-  // Enums must stay in sync with the frontend src/overlay/overlayConfig.js.
-  const OVERLAY_AESTHETICS = ['classic', 'pass', 'linecheck', 'docket'];
-  const OVERLAY_SIZES = ['board', 'compact'];
-  const HEX6 = /^#[0-9a-fA-F]{6}$/;
-  const DEFAULT_OVERLAY_CONFIG = { aesthetic: 'classic', size: 'board', accent: null };
-
-  function sanitizeOverlayConfig(raw) {
-    const r = (raw && typeof raw === 'object') ? raw : {};
-    return {
-      aesthetic: OVERLAY_AESTHETICS.includes(r.aesthetic) ? r.aesthetic : 'classic',
-      size:      OVERLAY_SIZES.includes(r.size) ? r.size : 'board',
-      accent:    (typeof r.accent === 'string' && HEX6.test(r.accent)) ? r.accent : null,
-    };
-  }
+  // Overlay/widget config — cosmetic per-streamer prefs stored in user_settings JSONB.
+  // Shape + sanitizer live in lib/overlayConfig.js (mirrors frontend src/overlay/overlayConfig.js).
 
   // GET /api/settings — get current user's settings
   router.get('/api/settings', requireAuth, async (req, res) => {
