@@ -45623,5 +45623,15 @@
     "rainbetSlug": "elk-studios-quackers",
     "name": "Quackers",
     "thumb": "https://cdn.softswiss.net/i/s4/elk/Quackers.webp"
+  },
+  {
+    "rainbetSlug": "pragmatic-play-death-dominion",
+    "name": "Death Dominion",
+    "thumb": "https://cdn.softswiss.net/i/s4/pragmatic/DeathDominion.webp"
+  },
+  {
+    "rainbetSlug": "pragmatic-play-super-peru-fest",
+    "name": "Super Peru Fest",
+    "thumb": "https://cdn.softswiss.net/i/s4/pragmatic/SuperPeruFest.webp"
   }
 ]
