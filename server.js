@@ -183,6 +183,8 @@ const MULTI_TENANT = process.env.MULTI_TENANT === 'true';
 tenants.initTenants({ pgPool }).catch(e => console.error('[tenants] init error:', e.message));
 const admins = require('./lib/admins');
 admins.initAdmins({ pgPool }).catch(e => console.error('[admins] init error:', e.message));
+const subscriptions = require('./lib/subscriptions');
+subscriptions.initSubscriptions({ pgPool }).catch(e => console.error('[subscriptions] init error:', e.message));
 
 // Community memberships (which communities a user belongs to). One-time backfill attributes
 // every previously-known user to Bean; new users auto-join the slug they sign in through.
@@ -229,7 +231,7 @@ const {
 app.use(require('./routes/auth.routes')({
   passport, FRONTEND_URL, requireAuth,
   reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken,
-  recordKnownUser, memberships, tenants, pgPool,
+  recordKnownUser, memberships, tenants, pgPool, subscriptions,
 }));
 
 
@@ -358,6 +360,7 @@ app.use(require('./routes/admin.routes')({
   pgPool, admins, tenants, ADMIN_IDS,
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
   emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
+  subscriptions,
 }));
 
 // ── User Settings + known-users + admin user management ────────────
@@ -396,7 +399,12 @@ app.use(require('./routes/misc.routes')({ hunts, archive }));
 
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
-  settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io,
+  settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions,
+}));
+
+// Standalone tracker routes (paid product, no tenant context).
+app.use(require('./routes/tracker.routes')({
+  requireAuth, hunts, persistHunts, subscriptions, rejectBadHuntInput, uid,
 }));
 
 

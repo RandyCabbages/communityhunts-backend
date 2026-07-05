@@ -28,6 +28,7 @@ module.exports = function adminRoutes(deps) {
     pgPool, admins, tenants, ADMIN_IDS,
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
+    subscriptions,
   } = deps;
   const router = express.Router();
 
@@ -250,6 +251,43 @@ module.exports = function adminRoutes(deps) {
     persistArchive();
     emitHubUpdate(req.tenant.id);
     res.json({ok:true});
+  });
+
+  // ── Subscription management ──────────────────────────────────────
+  router.get('/api/admin/subscriptions', requireAdmin, async (req, res) => {
+    try {
+      res.json({ subscriptions: await subscriptions.listSubscriptions() });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.post('/api/admin/subscriptions', requireAdmin, async (req, res) => {
+    const { userId, tier, expiresAt } = req.body || {};
+    if (!userId || !tier) return res.status(400).json({ error: 'userId and tier required' });
+    try {
+      await subscriptions.setSubscription(userId, tier, expiresAt || null, req.user.id);
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Payment claims ─────────────────────────────────────────────
+  router.get('/api/admin/payment-claims', requireAdmin, async (req, res) => {
+    try {
+      res.json({ claims: await subscriptions.listPaymentClaims() });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.post('/api/admin/payment-claims/:id/approve', requireAdmin, async (req, res) => {
+    try {
+      await subscriptions.approvePaymentClaim(req.params.id, req.user.id);
+      res.json({ ok: true });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  router.post('/api/admin/payment-claims/:id/reject', requireAdmin, async (req, res) => {
+    try {
+      await subscriptions.rejectPaymentClaim(req.params.id, req.user.id, req.body?.reason);
+      res.json({ ok: true });
+    } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
   return router;

@@ -16,7 +16,7 @@ const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions } = deps;
   const { getSettings, saveSettings, resolveUserIdByName } = settings;
   const router = express.Router();
 
@@ -288,6 +288,20 @@ module.exports = function settingsRoutes(deps) {
     current.discordUsername    = current.discordUsername    || name;
     await saveSettings(syntheticId, current);
     res.json({ ok: true, scope: 'name', name, syntheticId, count: cleaned.length });
+  });
+
+  // ── Payment claim submission (user-facing) ─────────────────────
+  router.post('/api/payment/claim', requireAuth, async (req, res) => {
+    if (!subscriptions) return res.status(503).json({ error: 'Subscriptions not available' });
+    const { tier, method, reference } = req.body || {};
+    if (!tier || !method || !reference) return res.status(400).json({ error: 'tier, method, and reference required' });
+    if (!['basic', 'pro', 'ultimate', 'supporter', 'champion'].includes(tier)) return res.status(400).json({ error: 'Invalid tier' });
+    if (!['eth', 'rainbet'].includes(method)) return res.status(400).json({ error: 'Method must be eth or rainbet' });
+    if (typeof reference !== 'string' || reference.length > 256) return res.status(400).json({ error: 'Invalid reference' });
+    try {
+      const id = await subscriptions.createPaymentClaim(req.user.id, tier, method, reference);
+      res.json({ ok: true, claimId: id });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   return router;

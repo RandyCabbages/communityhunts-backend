@@ -17,7 +17,7 @@ module.exports = function authRoutes(deps) {
   const {
     passport, FRONTEND_URL, requireAuth,
     reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken,
-    recordKnownUser, memberships, tenants, pgPool,
+    recordKnownUser, memberships, tenants, pgPool, subscriptions,
   } = deps;
   const router = express.Router();
 
@@ -47,19 +47,17 @@ module.exports = function authRoutes(deps) {
     }
   );
   router.get('/auth/logout', (req, res) => req.logout(() => res.redirect(FRONTEND_URL)));
-  router.get('/auth/me', (req, res) => {
+  router.get('/auth/me', async (req, res) => {
     if (!req.user) return res.json({ user: null });
-    // Anyone who hits /auth/me with a valid session has logged in at some point.
-    // Record (or refresh) them in known_users so they show up in equity autocomplete.
     recordKnownUser(req.user);
-    // Auto-attribute to the community they're browsing (Bean by default) — idempotent, so a
-    // returning user keeps their original join date and this just no-ops after the first time.
     memberships.joinCommunity(req.user.id, req.tenant.id).catch(() => {});
-    // Reissue the Bearer fallback token on every check-in so it slides forward like the session
-    // cookie (rolling: true) — without this, the localStorage token still hard-expired 30 days
-    // from login even for daily visitors on cookie-blocking browsers (Safari/Brave).
+    const [sub, premiumTier] = await Promise.all([
+      subscriptions ? subscriptions.getSubscription(req.user.id) : null,
+      subscriptions ? subscriptions.getPremiumTier(req.user.id) : 'none',
+    ]);
     res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isCommunityMod: reqIsMod(req), isPlatformAdmin: isPlatformAdmin(req.user),
-      isAffiliate: !!req.user.isAffiliate, isDiscordVip: !!req.user.isDiscordVip, isDiscordMod: !!req.user.isDiscordMod },
+      isAffiliate: !!req.user.isAffiliate, isDiscordVip: !!req.user.isDiscordVip, isDiscordMod: !!req.user.isDiscordMod,
+      subscription: sub || { tier: 'free' }, premiumTier: premiumTier || 'none' },
       token: signToken(req.user) });
   });
 

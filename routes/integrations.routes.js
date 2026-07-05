@@ -19,11 +19,14 @@ module.exports = function integrationsRoutes(deps) {
   // Active tenant's public branding — NO secrets (bot tokens, channel ids excluded).
   router.get('/api/tenant-config', (req, res) => {
     const t = req.tenant;
+    const b = t.branding || {};
     res.json({
       slug: t.slug, displayName: t.displayName,
-      branding: t.branding || {},
-      leaderboardUrl: !!t.leaderboardUrl,   // boolean: does a leaderboard exist?
+      branding: b,
+      leaderboardUrl: !!t.leaderboardUrl,
       twitchChannel: t.twitchChannel || null,
+      requiredRoles: b.requiredRoles || null,
+      discordInvite: b.discordInvite || null,
     });
   });
 
