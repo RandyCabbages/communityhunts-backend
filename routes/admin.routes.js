@@ -24,7 +24,7 @@ const { buildGotInWorkbook, ymdInTz } = require('../lib/gotin-export');
 module.exports = function adminRoutes(deps) {
   const {
     requireAuth, requireAdmin, requirePlatformAdmin,
-    getAllHunts, getArchivedHunts, getGotInLog, getHuntStats,
+    getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats,
     pgPool, admins, tenants, ADMIN_IDS,
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, io, uid, cleanupStaleHunts,
@@ -71,6 +71,30 @@ module.exports = function adminRoutes(deps) {
       console.error('[admin] gotin xlsx failed:', e.message);
       res.status(500).json({ error: 'Export failed' });
     }
+  });
+
+  router.get('/api/admin/hunts/export.csv', requireAuth, requireAdmin, (req, res) => {
+    const rows = getHuntsFullExport(req.tenant?.id || 'bean');
+    if (!rows.length) return res.status(204).end();
+    const cols = ['gotInAt','slot','provider','bet','win','mult','scat','caller','slotIndex','totalSlots',
+      'hunter','huntType','huntMode','currency','pot','equityCount','startedAt','archivedAt','completed','huntId'];
+    const esc = v => {
+      if (v == null) return '';
+      const s = String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? '"' + s.replace(/"/g,'""') + '"' : s;
+    };
+    const fmtTs = v => v ? new Date(v).toISOString() : '';
+    const lines = [cols.join(',')];
+    for (const r of rows) {
+      lines.push(cols.map(c => {
+        if (c === 'gotInAt' || c === 'startedAt' || c === 'archivedAt') return esc(fmtTs(r[c]));
+        return esc(r[c]);
+      }).join(','));
+    }
+    const csv = lines.join('\r\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="hunt-data-export.csv"');
+    res.send(csv);
   });
 
   // Lightweight dashboard counts for the current tenant.

@@ -203,7 +203,7 @@ huntsCore.initHuntsCore({ hunts, archive, viewers, io, persistHunts });
 const {
   MOD_HUNT_ID, AFFILIATE_HUNT_ID, modHuntKey, affiliateHuntKey,
   huntSummary, huntCompleted, tenantOf, inTenant,
-  getPublicHunts, getArchivedHunts, getAllHunts, getSlotCallCounts, getGotInLog,
+  getPublicHunts, getArchivedHunts, getAllHunts, getSlotCallCounts, getGotInLog, getHuntsFullExport,
   emitHubUpdate, publicHuntView, emitHuntUpdate,
   uid, touch,
 } = huntsCore;
@@ -338,7 +338,7 @@ setInterval(cleanupStaleHunts, 60 * 60 * 1000);
 // background task); the manual /api/admin/hunts/cleanup trigger calls the injected cleanupStaleHunts.
 app.use(require('./routes/admin.routes')({
   requireAuth, requireAdmin, requirePlatformAdmin,
-  getAllHunts, getArchivedHunts, getGotInLog, getHuntStats: huntsCore.getHuntStats,
+  getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats: huntsCore.getHuntStats,
   pgPool, admins, tenants, ADMIN_IDS,
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
   emitHubUpdate, publicHuntView, io, uid, cleanupStaleHunts,
