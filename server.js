@@ -53,14 +53,21 @@ const DISCORD_MOD_ROLE_ID       = (process.env.DISCORD_MOD_ROLE_ID || '').trim()
 // Fetches a user's roles in the configured guild using their OAuth access token
 // (guilds.members.read scope). Called at login time; results cached in session.
 async function fetchGuildRoles(oauthAccessToken) {
-  if (!DISCORD_GUILD_ID || !oauthAccessToken) return { isAffiliate: false, isDiscordVip: false, isDiscordMod: false };
+  if (!DISCORD_GUILD_ID || !oauthAccessToken) {
+    console.log(`[discord] fetchGuildRoles skipped: guild=${!!DISCORD_GUILD_ID} token=${!!oauthAccessToken}`);
+    return { isAffiliate: false, isDiscordVip: false, isDiscordMod: false };
+  }
   try {
     const res = await fetch(`https://discord.com/api/v10/users/@me/guilds/${DISCORD_GUILD_ID}/member`, {
       headers: { Authorization: `Bearer ${oauthAccessToken}` }
     });
-    if (!res.ok) return { isAffiliate: false, isDiscordVip: false, isDiscordMod: false };
+    if (!res.ok) {
+      console.log(`[discord] fetchGuildRoles failed: status=${res.status}`);
+      return { isAffiliate: false, isDiscordVip: false, isDiscordMod: false };
+    }
     const member = await res.json();
     const memberRoles = member.roles || [];
+    console.log(`[discord] fetchGuildRoles: user=${member.user?.id} roles=${JSON.stringify(memberRoles)} affRoleId=${DISCORD_AFFILIATE_ROLE_ID}`);
     return {
       isAffiliate:  !!(DISCORD_AFFILIATE_ROLE_ID && memberRoles.includes(DISCORD_AFFILIATE_ROLE_ID)),
       isDiscordVip: !!(DISCORD_VIP_ROLE_ID       && memberRoles.includes(DISCORD_VIP_ROLE_ID)),
@@ -85,11 +92,15 @@ async function refreshGuildRoles(discordUserId) {
     if (!res.ok) return null;
     const member = await res.json();
     const memberRoles = member.roles || [];
-    return {
+    const result = {
       isAffiliate:  !!(DISCORD_AFFILIATE_ROLE_ID && memberRoles.includes(DISCORD_AFFILIATE_ROLE_ID)),
       isDiscordVip: !!(DISCORD_VIP_ROLE_ID       && memberRoles.includes(DISCORD_VIP_ROLE_ID)),
       isDiscordMod: !!(DISCORD_MOD_ROLE_ID        && memberRoles.includes(DISCORD_MOD_ROLE_ID)),
     };
+    if (!result.isAffiliate) {
+      console.log(`[discord] role debug for ${discordUserId}: memberRoles=${JSON.stringify(memberRoles)}, expected affiliate=${DISCORD_AFFILIATE_ROLE_ID}`);
+    }
+    return result;
   } catch (e) {
     console.error('[discord] bot role refresh failed:', e.message);
     return null;
