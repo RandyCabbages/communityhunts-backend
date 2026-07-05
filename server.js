@@ -72,6 +72,30 @@ async function fetchGuildRoles(oauthAccessToken) {
   }
 }
 
+const DISCORD_BOT_TOKEN = (process.env.DISCORD_BOT_TOKEN || '').trim();
+
+// Refreshes guild roles via the bot token (no user OAuth token needed).
+// Called on /auth/me so roles stay current without re-login.
+async function refreshGuildRoles(discordUserId) {
+  if (!DISCORD_GUILD_ID || !DISCORD_BOT_TOKEN || !discordUserId) return null;
+  try {
+    const res = await fetch(`https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/members/${discordUserId}`, {
+      headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}` }
+    });
+    if (!res.ok) return null;
+    const member = await res.json();
+    const memberRoles = member.roles || [];
+    return {
+      isAffiliate:  !!(DISCORD_AFFILIATE_ROLE_ID && memberRoles.includes(DISCORD_AFFILIATE_ROLE_ID)),
+      isDiscordVip: !!(DISCORD_VIP_ROLE_ID       && memberRoles.includes(DISCORD_VIP_ROLE_ID)),
+      isDiscordMod: !!(DISCORD_MOD_ROLE_ID        && memberRoles.includes(DISCORD_MOD_ROLE_ID)),
+    };
+  } catch (e) {
+    console.error('[discord] bot role refresh failed:', e.message);
+    return null;
+  }
+}
+
 // Normalize slot name for dedup: strip punctuation, collapse whitespace, lowercase
 function normalizeSlot(name) { return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 
@@ -231,7 +255,7 @@ const {
 app.use(require('./routes/auth.routes')({
   passport, FRONTEND_URL, requireAuth,
   reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken,
-  recordKnownUser, memberships, tenants, pgPool, subscriptions,
+  recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles,
 }));
 
 

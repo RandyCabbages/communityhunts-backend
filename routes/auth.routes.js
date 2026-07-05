@@ -17,7 +17,7 @@ module.exports = function authRoutes(deps) {
   const {
     passport, FRONTEND_URL, requireAuth,
     reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken,
-    recordKnownUser, memberships, tenants, pgPool, subscriptions,
+    recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles,
   } = deps;
   const router = express.Router();
 
@@ -51,10 +51,15 @@ module.exports = function authRoutes(deps) {
     if (!req.user) return res.json({ user: null });
     recordKnownUser(req.user);
     memberships.joinCommunity(req.user.id, req.tenant.id).catch(() => {});
-    const [sub, premiumTier] = await Promise.all([
+    const [sub, premiumTier, freshRoles] = await Promise.all([
       subscriptions ? subscriptions.getSubscription(req.user.id) : null,
       subscriptions ? subscriptions.getPremiumTier(req.user.id) : 'none',
+      refreshGuildRoles ? refreshGuildRoles(req.user.id) : null,
     ]);
+    if (freshRoles) {
+      Object.assign(req.user, freshRoles);
+      req.session.passport && (req.session.passport.user = req.user);
+    }
     res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isCommunityMod: reqIsMod(req), isPlatformAdmin: isPlatformAdmin(req.user),
       isAffiliate: !!req.user.isAffiliate, isDiscordVip: !!req.user.isDiscordVip, isDiscordMod: !!req.user.isDiscordMod,
       subscription: sub || { tier: 'free' }, premiumTier: premiumTier || 'none' },
