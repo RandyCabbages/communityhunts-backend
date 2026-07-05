@@ -75,13 +75,11 @@ module.exports = function huntsRoutes(deps) {
     if (canEdit) {
       res.json({ ...hunt, canEdit, canAddCalls: canCalls });
     } else {
-      // Viewers don't need internal linkage/permission data — strip Discord IDs,
-      // the editor list, and call-permission IDs from the public payload.
-      const { invitedEditors, callsPermissions, publicCallsPin, ...pub } = hunt;
+      // Viewers don't need internal linkage/permission data — publicHuntView strips Discord IDs,
+      // the editor list, and call-permission IDs, AND redacts anonymous members' names for anyone
+      // who isn't the runner/mod/admin (caller identity passed so mods still see real names).
       res.json({
-        ...pub,
-        requiresPin: !!publicCallsPin,
-        equity: (hunt.equity || []).map(({ discordId, ...e }) => e),
+        ...publicHuntView(hunt, req.user?.id),
         canEdit, canAddCalls: canCalls,
       });
     }
@@ -145,7 +143,7 @@ module.exports = function huntsRoutes(deps) {
     hunts[req.user.id].updatedAt = new Date().toISOString();
     hunts[req.user.id].archivedAt= null;
     emitHubUpdate(req.tenant.id); // emitHubUpdate calls persistHunts
-    io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(hunts[req.user.id]));
+    emitHuntUpdate(req.user.id);
     res.json({ok:true});
   });
 
@@ -157,7 +155,7 @@ module.exports = function huntsRoutes(deps) {
       h.isLive = false;
       h.updatedAt = new Date().toISOString();
       emitHubUpdate(req.tenant.id); // drop it from the hub's live list; also persists
-      io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(h));
+      emitHuntUpdate(req.user.id);
     }
     res.json({ok:true});
   });
@@ -171,7 +169,7 @@ module.exports = function huntsRoutes(deps) {
       if (!h.archivedAt) h.archivedAt = new Date().toISOString(); // stamp once — re-ending won't move it
       archiveHunt(h);                                         // upsert: refreshes the snapshot, never duplicates
       emitHubUpdate(req.tenant.id);
-      io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(h));
+      emitHuntUpdate(req.user.id);
     }
     res.json({ok:true});
   });
@@ -187,7 +185,7 @@ module.exports = function huntsRoutes(deps) {
     h.archivedAt = null;
     if (!h.startedAt) h.startedAt = new Date().toISOString();
     emitHubUpdate(req.tenant.id);
-    io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(h));
+    emitHuntUpdate(req.user.id);
     res.json({ok:true});
   });
 
@@ -246,7 +244,7 @@ module.exports = function huntsRoutes(deps) {
     if (manualOrder !== undefined) hunts[req.user.id].manualOrder = manualOrder;
     touch(req.user.id);
     persistHunts();
-    io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(hunts[req.user.id]));
+    emitHuntUpdate(req.user.id);
     emitHubUpdate(req.tenant.id);
     res.json({ok:true});
   });

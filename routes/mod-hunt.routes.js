@@ -14,7 +14,7 @@ module.exports = function modHuntRoutes(deps) {
   const {
     hunts, archive, io, persistHunts, archiveHunt,
     requireMod, modHuntKey, affiliateHuntKey, tenants,
-    uid, touch, publicHuntView, rejectBadHuntInput,
+    uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput,
   } = deps;
   const router = express.Router();
 
@@ -65,7 +65,7 @@ module.exports = function modHuntRoutes(deps) {
     hunts[key].huntType = 'solo';
     touch(key);
     persistHunts();
-    io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(hunts[key]));
+    emitHuntUpdate(key);
     res.json({ ok: true });
   });
 
@@ -77,7 +77,7 @@ module.exports = function modHuntRoutes(deps) {
     hunts[key].updatedAt  = new Date().toISOString();
     hunts[key].archivedAt = null;
     persistHunts();
-    io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(hunts[key]));
+    emitHuntUpdate(key);
     res.json({ ok: true });
   });
 
@@ -89,7 +89,7 @@ module.exports = function modHuntRoutes(deps) {
       h.isLive = false;
       h.updatedAt = new Date().toISOString();
       persistHunts();
-      io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(h));
+      emitHuntUpdate(key);
     }
     res.json({ ok: true });
   });
@@ -102,7 +102,7 @@ module.exports = function modHuntRoutes(deps) {
       h.updatedAt = new Date().toISOString();
       if (!h.archivedAt) h.archivedAt = new Date().toISOString();
       persistHunts();
-      io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(h));
+      emitHuntUpdate(key);
     }
     res.json({ ok: true });
   });
@@ -116,7 +116,7 @@ module.exports = function modHuntRoutes(deps) {
     h.archivedAt = null;
     if (!h.startedAt) h.startedAt = new Date().toISOString();
     persistHunts();
-    io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(h));
+    emitHuntUpdate(key);
     res.json({ ok: true });
   });
 
@@ -129,7 +129,7 @@ module.exports = function modHuntRoutes(deps) {
     }
     hunts[key] = emptyModHunt(req.tenant.id);
     persistHunts();
-    io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(hunts[key]));
+    emitHuntUpdate(key);
     res.json({ ok: true });
   });
 
@@ -189,7 +189,7 @@ module.exports = function modHuntRoutes(deps) {
     hunts[key].huntType = 'vip';
     touch(key);
     persistHunts();
-    io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(hunts[key]));
+    emitHuntUpdate(key);
     res.json({ ok: true });
   });
 
@@ -201,7 +201,7 @@ module.exports = function modHuntRoutes(deps) {
     hunts[key].updatedAt  = new Date().toISOString();
     hunts[key].archivedAt = null;
     persistHunts();
-    io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(hunts[key]));
+    emitHuntUpdate(key);
     res.json({ ok: true });
   });
 
@@ -213,7 +213,7 @@ module.exports = function modHuntRoutes(deps) {
       h.isLive = false;
       h.updatedAt = new Date().toISOString();
       persistHunts();
-      io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(h));
+      emitHuntUpdate(key);
     }
     res.json({ ok: true });
   });
@@ -226,7 +226,7 @@ module.exports = function modHuntRoutes(deps) {
       h.updatedAt = new Date().toISOString();
       if (!h.archivedAt) h.archivedAt = new Date().toISOString();
       persistHunts();
-      io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(h));
+      emitHuntUpdate(key);
     }
     res.json({ ok: true });
   });
@@ -240,7 +240,7 @@ module.exports = function modHuntRoutes(deps) {
     h.archivedAt = null;
     if (!h.startedAt) h.startedAt = new Date().toISOString();
     persistHunts();
-    io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(h));
+    emitHuntUpdate(key);
     res.json({ ok: true });
   });
 
@@ -253,7 +253,7 @@ module.exports = function modHuntRoutes(deps) {
     }
     hunts[key] = emptyAffiliateHunt(req.tenant.id);
     persistHunts();
-    io.to(`hunt:${key}`).emit('hunt:update', publicHuntView(hunts[key]));
+    emitHuntUpdate(key);
     res.json({ ok: true });
   });
 

@@ -40,7 +40,9 @@ module.exports = function registerSockets(io, deps) {
       socketUsers[socket.id] = { watchingHuntId: userId };
       viewers[userId] = (viewers[userId]||0) + 1;
       const h = hunts[userId];
-      if (h) socket.emit('hunt:update', publicHuntView(h));
+      // Serialize for THIS viewer (socket.data.userId is set once they 'identify'; until then this
+      // is the privacy-safe masked view). A re-emit fires in the identify handler below.
+      if (h) socket.emit('hunt:update', publicHuntView(h, socket.data && socket.data.userId));
       emitHubUpdate(tenantOf(h || {}));
       socket.on('disconnect', () => {
         viewers[userId] = Math.max(0,(viewers[userId]||1)-1);
@@ -55,9 +57,19 @@ module.exports = function registerSockets(io, deps) {
       emitHubUpdate(tenantOf(hunts[userId] || {}));
     });
 
-    // Client sends their user id so we can compute canEdit for them
+    // Client sends their user id so we can compute canEdit for them — and, for anonymous-mode
+    // name redaction, so per-socket broadcasts (emitHuntUpdate) know who is watching. Stash it on
+    // socket.data (what fetchSockets() exposes) and re-emit the watched hunt now that we know the
+    // viewer, so a privileged viewer (runner/mod/admin) gets real names instead of the masked
+    // view they received at watch:hunt time.
     socket.on('identify', (userId) => {
-      if (socketUsers[socket.id]) socketUsers[socket.id].userId = userId;
+      socket.data.userId = userId;
+      const rec = socketUsers[socket.id];
+      if (rec) {
+        rec.userId = userId;
+        const h = hunts[rec.watchingHuntId];
+        if (h) socket.emit('hunt:update', publicHuntView(h, userId));
+      }
     });
 
     // On reinvite, socket re-fetches permissions from the API

@@ -16,7 +16,7 @@ const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, requireAuth, requireAdmin, io } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io } = deps;
   const { getSettings, saveSettings, resolveUserIdByName } = settings;
   const router = express.Router();
 
@@ -35,6 +35,7 @@ module.exports = function settingsRoutes(deps) {
     if (rainbetName !== undefined)    current.rainbetName    = String(rainbetName).trim().slice(0, 64);
     if (twitchName  !== undefined)    current.twitchName     = String(twitchName).trim().slice(0, 64);
     if (preferredSlots !== undefined) current.preferredSlots = (preferredSlots || []).filter(Boolean);
+    if (req.body.anonymous !== undefined) current.anonymous  = !!req.body.anonymous;
     if (req.body.overlayConfig !== undefined) current.overlayConfig = sanitizeOverlayConfig(req.body.overlayConfig);
     // Always update Discord identity for name-based lookup by other hunt owners
     current.discordUsername    = req.user.username || '';
@@ -50,10 +51,25 @@ module.exports = function settingsRoutes(deps) {
     res.json({ ok: true, settings: current });
   });
 
+  // Is the caller allowed to see an anonymous user's identity (Rainbet/Twitch)? Yes when it's
+  // themselves, or a mod/admin of the current tenant (reqIsMod folds in platform admins). The
+  // hunt-runner case is covered separately: the Discord name reaches them via the hunt payload
+  // (publicHuntView marks the host privileged), not this lookup.
+  const canSeeIdentity = (req, targetId, s) =>
+    !s.anonymous
+    || (req.user && String(req.user.id) === String(targetId))
+    || (typeof reqIsMod === 'function' && reqIsMod(req));
+
   // GET /api/settings/:userId — get another user's preferred slots and rainbet name by Discord ID
   router.get('/api/settings/:userId', requireAuth, async (req, res) => {
     const s = await getSettings(req.params.userId);
-    res.json({ preferredSlots: s.preferredSlots || [], rainbetName: s.rainbetName || '', twitchName: s.twitchName || '' });
+    const show = canSeeIdentity(req, req.params.userId, s);
+    res.json({
+      preferredSlots: s.preferredSlots || [],
+      rainbetName: show ? (s.rainbetName || '') : '',
+      twitchName:  show ? (s.twitchName  || '') : '',
+      anonymous: !!s.anonymous,
+    });
   });
 
   // GET /api/overlay-config/:userId — PUBLIC (no requireAuth). The OBS browser-source is
@@ -73,10 +89,12 @@ module.exports = function settingsRoutes(deps) {
     const userId = await resolveUserIdByName(req.params.name || '');
     if (userId) {
       const s = await getSettings(userId);
+      const show = canSeeIdentity(req, userId, s);
       return res.json({
         preferredSlots: s.preferredSlots || [],
-        rainbetName:    s.rainbetName    || '',
-        twitchName:     s.twitchName     || '',
+        rainbetName:    show ? (s.rainbetName || '') : '',
+        twitchName:     show ? (s.twitchName  || '') : '',
+        anonymous:      !!s.anonymous,
         userId,
       });
     }

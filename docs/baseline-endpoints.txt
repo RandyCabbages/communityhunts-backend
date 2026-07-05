@@ -143,8 +143,14 @@ SOCKET.IO — io.on('connection') @ 2081
 ========================================================================
 SECRET-STRIPPING (publicHuntView) — must be preserved exactly
 ========================================================================
-# publicHuntView(h) @ server.js ~390-394: strips publicCallsPin→requiresPin, removes equity discordId
-# for viewer payloads. Every hunt:update goes through it. A regression here leaks PIN / discord IDs.
+# publicHuntView(h, viewerId?) @ lib/hunts-core.js: strips publicCallsPin→requiresPin, removes equity
+# discordId for viewer payloads. Every hunt:update goes through it. A regression here leaks PIN /
+# discord IDs. Now ALSO viewer-aware: equity members who set settings.anonymous get name→'Anonymous'
+# (+avatar dropped) UNLESS viewerId is the hunt runner / a mod / an admin (isPrivilegedViewer) or the
+# member themselves; an `anonymous:true` flag is surfaced either way. Omit viewerId ⇒ fully masked
+# (share links, unidentified sockets). emitHuntUpdate serializes PER SOCKET only when a hunt has an
+# anonymous member (viewer id from socket.data.userId, set on 'identify'); otherwise unchanged single
+# room broadcast. A regression here de-anonymizes users.
 
 ========================================================================
 ROUTE-ORDER HAZARDS (Express matches in registration order)

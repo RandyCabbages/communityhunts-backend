@@ -15,7 +15,7 @@ module.exports = function callsRoutes(deps) {
   const {
     hunts, io, persistHunts,
     requireAuth, canEditHunt, isEquityMember, reqIsAdmin,
-    normalizeSlot, nameOf, publicHuntView, emitHubUpdate, uid, rejectBadHuntInput,
+    normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
   } = deps;
   const router = express.Router();
 
@@ -44,15 +44,16 @@ module.exports = function callsRoutes(deps) {
     }
 
     const newCall = { id: Math.random().toString(36).slice(2,8), slot: slot.trim(), user: user.displayName||user.username, status: 'pending', ...(source ? { source } : {}) };
-    // Insert after first 3 pending calls so top 3 stay stable
+    // New calls go to the END of the pending queue. The old "insert after first 3"
+    // splice predates round-robin + the top-4 lock: it shoved every incoming call up
+    // top — even INTO the locked top 4, pushing locked calls down. Queue order is the
+    // frontend's job now (round-robin at render time; frozen stored order while
+    // lockTop4 is on), and the host's own local add already appends to the end.
     const pendingCalls = hunt.calls.filter(c=>c.status==='pending');
     const otherCalls   = hunt.calls.filter(c=>c.status!=='pending');
-    const insertAt     = Math.min(3, pendingCalls.length);
-    pendingCalls.splice(insertAt, 0, newCall);
-    hunt.calls = [...pendingCalls, ...otherCalls];
+    hunt.calls = [...pendingCalls, newCall, ...otherCalls];
     hunt.updatedAt = new Date().toISOString();
-    persistHunts();
-    io.to(`hunt:${hunt.user.id}`).emit('hunt:update', publicHuntView(hunt));
+    emitHuntUpdate(hunt.user.id); // per-socket (persists + redacts anonymous names)
     return { ok: true, call: newCall };
   }
 
@@ -105,8 +106,7 @@ module.exports = function callsRoutes(deps) {
     if (currentSlot !== undefined) hunt.currentSlot = currentSlot;
     if (manualOrder !== undefined) hunt.manualOrder = manualOrder;
     hunt.updatedAt = new Date().toISOString();
-    persistHunts();
-    io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(hunt));
+    emitHuntUpdate(req.params.userId); // per-socket (persists + redacts anonymous names)
     emitHubUpdate(req.tenant.id);
     res.json({ok:true});
   });

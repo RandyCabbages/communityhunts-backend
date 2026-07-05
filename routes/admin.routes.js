@@ -27,7 +27,7 @@ module.exports = function adminRoutes(deps) {
     getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats,
     pgPool, admins, tenants, ADMIN_IDS,
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
-    emitHubUpdate, publicHuntView, io, uid, cleanupStaleHunts,
+    emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
   } = deps;
   const router = express.Router();
 
@@ -200,7 +200,7 @@ module.exports = function adminRoutes(deps) {
     h.startedAt = h.startedAt || new Date().toISOString();
     h.updatedAt = new Date().toISOString();
     h.archivedAt = null;
-    emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(h));
+    emitHubUpdate(req.tenant.id); emitHuntUpdate(req.params.userId);
     res.json({ok:true});
   });
 
@@ -209,7 +209,7 @@ module.exports = function adminRoutes(deps) {
     if (!h) return res.status(404).json({error:'Not found'});
     h.isLive = false;
     h.updatedAt = new Date().toISOString();
-    emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(h));
+    emitHubUpdate(req.tenant.id); emitHuntUpdate(req.params.userId);
     res.json({ok:true});
   });
 
@@ -220,7 +220,7 @@ module.exports = function adminRoutes(deps) {
     if (!h.huntId) h.huntId = uid();
     if (!h.archivedAt) h.archivedAt = new Date().toISOString();
     archiveHunt(h);
-    emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(h));
+    emitHubUpdate(req.tenant.id); emitHuntUpdate(req.params.userId);
     res.json({ok:true});
   });
 
@@ -230,7 +230,7 @@ module.exports = function adminRoutes(deps) {
     unarchiveHunt(h);
     h.isLive = true; h.archivedAt = null;
     if (!h.startedAt) h.startedAt = new Date().toISOString();
-    emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', publicHuntView(h));
+    emitHubUpdate(req.tenant.id); emitHuntUpdate(req.params.userId);
     res.json({ok:true});
   });
 

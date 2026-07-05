@@ -174,6 +174,7 @@ const { recordKnownUser } = settings;  // called from the auth callback / Bearer
 
 persistence.initPersistence({ pgPool, normalizeSlot })
   .then(() => settings.startupBackfill())
+  .then(() => settings.loadAnonymousUsers())   // hydrate the anonymous-user set for name redaction
   .catch(e => console.error('[persist] init error:', e.message));
 
 // Multi-tenancy config (tenants + roles). Gated by MULTI_TENANT; defaults to Bean.
@@ -199,7 +200,22 @@ auth.initAuth({ ADMIN_IDS, VIP_IDS, SESSION_SECRET, MULTI_TENANT, tenants, admin
 // reference with the sockets module so live viewer counts stay coherent. Re-bound into scope
 // so the still-inline hunt routes keep working until they move into their own routers.
 const huntsCore = require('./lib/hunts-core');
-huntsCore.initHuntsCore({ hunts, archive, viewers, io, persistHunts });
+// May a viewer see anonymous members' real names in this hunt? Yes for the hunt runner (host),
+// and for mods/admins of the hunt's tenant (auth.isAdmin covers platform admins; isTenantMod folds
+// in tenant admins). Everyone else gets 'Anonymous'. Called per-socket on every anonymous-hunt
+// broadcast, so it stays synchronous + cache-backed (no DB/awaits).
+function isPrivilegedViewer(viewerId, hunt) {
+  if (!viewerId || !hunt) return false;
+  if (hunt.user && hunt.user.id && String(viewerId) === String(hunt.user.id)) return true; // host
+  const u = { id: String(viewerId) };
+  if (auth.isAdmin(u)) return true;
+  const tenant = tenants.getTenantBySlug(huntsCore.tenantOf(hunt)) || tenants.BEAN_TENANT;
+  return tenants.isTenantMod(u, tenant);
+}
+huntsCore.initHuntsCore({
+  hunts, archive, viewers, io, persistHunts,
+  isAnonymousUser: settings.isAnonymousUser, isPrivilegedViewer,
+});
 const {
   MOD_HUNT_ID, AFFILIATE_HUNT_ID, modHuntKey, affiliateHuntKey,
   huntSummary, huntCompleted, tenantOf, inTenant,
@@ -246,7 +262,7 @@ app.use(require('./routes/hunts.routes')({
 app.use(require('./routes/mod-hunt.routes')({
   hunts, archive, io, persistHunts, archiveHunt,
   requireMod, modHuntKey, affiliateHuntKey, tenants,
-  uid, touch, publicHuntView, rejectBadHuntInput,
+  uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput,
 }));
 
 // Tenant-mod management (routes/mods.routes.js). Owner-only add/remove; view is requireAdmin
@@ -265,7 +281,7 @@ app.use(require('./routes/overdrop.routes')({ requireMod, overdrop }));
 app.use(require('./routes/calls.routes')({
   hunts, io, persistHunts,
   requireAuth, canEditHunt, isEquityMember, reqIsAdmin,
-  normalizeSlot, nameOf, publicHuntView, emitHubUpdate, uid, rejectBadHuntInput,
+  normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
 }));
 
 // Share-link routes (routes/share.routes.js): token mint + public resolve.
@@ -341,7 +357,7 @@ app.use(require('./routes/admin.routes')({
   getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats: huntsCore.getHuntStats,
   pgPool, admins, tenants, ADMIN_IDS,
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
-  emitHubUpdate, publicHuntView, io, uid, cleanupStaleHunts,
+  emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
 }));
 
 // ── User Settings + known-users + admin user management ────────────
@@ -380,7 +396,7 @@ app.use(require('./routes/misc.routes')({ hunts, archive }));
 
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
-  settings, pgPool, memberships, isPlatformAdmin, requireAuth, requireAdmin, io,
+  settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io,
 }));
 
 
