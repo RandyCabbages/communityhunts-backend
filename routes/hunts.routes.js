@@ -130,7 +130,7 @@ module.exports = function huntsRoutes(deps) {
     hunts[req.user.id] = {
       user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant, bal), calls: [], invitedEditors: [], callLimit: huntType === 'solo' ? 0 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: currency || 'USD', publicCalls: false, publicCallsPin: null
+      huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant, bal), calls: [], invitedEditors: [], callLimit: huntType === 'solo' ? 0 : huntType === 'community' ? 20 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: currency || 'USD', publicCalls: false, publicCallsPin: null
     };
     persistHunts();
     res.json({ok:true});
@@ -200,7 +200,7 @@ module.exports = function huntsRoutes(deps) {
     const keepType = ['vip','solo'].includes(hunts[req.user.id]?.huntType) ? hunts[req.user.id].huntType : 'community';
     hunts[req.user.id] = { user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: keepType === 'solo' ? 0 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null };
+      huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: keepType === 'solo' ? 0 : keepType === 'community' ? 20 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null };
     persistHunts();
     emitHubUpdate(req.tenant.id);
     res.json({ok:true});
@@ -222,7 +222,7 @@ module.exports = function huntsRoutes(deps) {
     if (!hunts[req.user.id]) hunts[req.user.id] = {
       user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10, currency: 'USD', publicCalls: false, publicCallsPin: null
+      huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 20, currency: 'USD', publicCalls: false, publicCallsPin: null
     };
     const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[req.user.id].bonuses    = bonuses;
