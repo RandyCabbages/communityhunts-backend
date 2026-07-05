@@ -273,5 +273,33 @@ module.exports = function huntsRoutes(deps) {
     res.json({ok:true, invitedEditors: hunts[req.user.id].invitedEditors});
   });
 
+  // ── Invite editor on another user's hunt (admin/editor) ────────────
+  router.post('/api/hunts/:userId/invite', requireAuth, (req, res) => {
+    const { userId } = req.params;
+    if (!canEditHunt(req, userId)) return res.status(403).json({error:'Not authorised'});
+    const { username } = req.body;
+    if (!username) return res.status(400).json({error:'username required'});
+    if (!hunts[userId]) return res.status(404).json({error:'Hunt not found'});
+    if (!hunts[userId].invitedEditors) hunts[userId].invitedEditors = [];
+    const lower = username.toLowerCase().trim();
+    if (!hunts[userId].invitedEditors.includes(lower))
+      hunts[userId].invitedEditors.push(lower);
+    persistHunts();
+    io.to(`hunt:${userId}`).emit('hunt:reinvite', { huntUserId: userId });
+    res.json({ok:true, invitedEditors: hunts[userId].invitedEditors});
+  });
+
+  router.delete('/api/hunts/:userId/invite', requireAuth, (req, res) => {
+    const { userId } = req.params;
+    if (!canEditHunt(req, userId)) return res.status(403).json({error:'Not authorised'});
+    const { username } = req.body;
+    if (!hunts[userId]) return res.status(404).json({error:'Hunt not found'});
+    hunts[userId].invitedEditors = (hunts[userId].invitedEditors||[])
+      .filter(u => u !== username.toLowerCase().trim());
+    persistHunts();
+    io.to(`hunt:${userId}`).emit('hunt:reinvite', { huntUserId: userId });
+    res.json({ok:true, invitedEditors: hunts[userId].invitedEditors});
+  });
+
   return router;
 };
