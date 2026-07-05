@@ -16,7 +16,7 @@ const express = require('express');
 module.exports = function authRoutes(deps) {
   const {
     passport, FRONTEND_URL, requireAuth,
-    reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken,
+    reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken, guildFlags,
     recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles,
   } = deps;
   const router = express.Router();
@@ -36,7 +36,7 @@ module.exports = function authRoutes(deps) {
         id: req.user.id, username: req.user.username,
         displayName: req.user.displayName, avatar: req.user.avatar,
         isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isCommunityMod: reqIsMod(req), isPlatformAdmin: isPlatformAdmin(req.user),
-        isAffiliate: !!req.user.isAffiliate, isDiscordVip: !!req.user.isDiscordVip, isDiscordMod: !!req.user.isDiscordMod,
+        ...guildFlags(req.user),
       })).toString('base64');
       const returnTo = req.session.returnTo || '/';
       delete req.session.returnTo;
@@ -61,7 +61,7 @@ module.exports = function authRoutes(deps) {
       req.session.passport && (req.session.passport.user = req.user);
     }
     res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isCommunityMod: reqIsMod(req), isPlatformAdmin: isPlatformAdmin(req.user),
-      isAffiliate: !!req.user.isAffiliate, isDiscordVip: !!req.user.isDiscordVip, isDiscordMod: !!req.user.isDiscordMod,
+      ...guildFlags(req.user),
       subscription: sub || { tier: 'free' }, premiumTier: premiumTier || 'none' },
       token: signToken(req.user) });
   });

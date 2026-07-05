@@ -50,32 +50,43 @@ const DISCORD_AFFILIATE_ROLE_ID = (process.env.DISCORD_AFFILIATE_ROLE_ID || '').
 const DISCORD_VIP_ROLE_ID       = (process.env.DISCORD_VIP_ROLE_ID || '').trim();
 const DISCORD_MOD_ROLE_ID       = (process.env.DISCORD_MOD_ROLE_ID || '').trim();
 
+// Derives guild-role flags from a member's role-id list. CRITICAL: a flag is only included
+// when its role ID is actually configured — an unconfigured role stays ABSENT (undetermined),
+// never a hard `false`. Absent flags let the frontend's "no guild flags → allow" net (roles.js
+// hasGuildFlags) fall OPEN, so a missing/mis-set DISCORD_*_ROLE_ID can't mass-deny a role-gated
+// tenant. We only ever emit a definitive true/false for a role we were configured to check.
+function rolesFromMemberRoles(memberRoles) {
+  const flags = {};
+  if (DISCORD_AFFILIATE_ROLE_ID) flags.isAffiliate  = memberRoles.includes(DISCORD_AFFILIATE_ROLE_ID);
+  if (DISCORD_VIP_ROLE_ID)       flags.isDiscordVip = memberRoles.includes(DISCORD_VIP_ROLE_ID);
+  if (DISCORD_MOD_ROLE_ID)       flags.isDiscordMod = memberRoles.includes(DISCORD_MOD_ROLE_ID);
+  return flags;
+}
+
 // Fetches a user's roles in the configured guild using their OAuth access token
 // (guilds.members.read scope). Called at login time; results cached in session.
+// Returns null when roles are UNDETERMINED (no guild configured, or the Discord lookup
+// failed) — callers must leave the flags absent in that case, never coerce to false.
 async function fetchGuildRoles(oauthAccessToken) {
   if (!DISCORD_GUILD_ID || !oauthAccessToken) {
-    console.log(`[discord] fetchGuildRoles skipped: guild=${!!DISCORD_GUILD_ID} token=${!!oauthAccessToken}`);
-    return { isAffiliate: false, isDiscordVip: false, isDiscordMod: false };
+    console.log(`[discord] fetchGuildRoles skipped (roles undetermined): guild=${!!DISCORD_GUILD_ID} token=${!!oauthAccessToken}`);
+    return null;
   }
   try {
     const res = await fetch(`https://discord.com/api/v10/users/@me/guilds/${DISCORD_GUILD_ID}/member`, {
       headers: { Authorization: `Bearer ${oauthAccessToken}` }
     });
     if (!res.ok) {
-      console.log(`[discord] fetchGuildRoles failed: status=${res.status}`);
-      return { isAffiliate: false, isDiscordVip: false, isDiscordMod: false };
+      console.log(`[discord] fetchGuildRoles failed (roles undetermined): status=${res.status}`);
+      return null;
     }
     const member = await res.json();
     const memberRoles = member.roles || [];
-    console.log(`[discord] fetchGuildRoles: user=${member.user?.id} roles=${JSON.stringify(memberRoles)} affRoleId=${DISCORD_AFFILIATE_ROLE_ID}`);
-    return {
-      isAffiliate:  !!(DISCORD_AFFILIATE_ROLE_ID && memberRoles.includes(DISCORD_AFFILIATE_ROLE_ID)),
-      isDiscordVip: !!(DISCORD_VIP_ROLE_ID       && memberRoles.includes(DISCORD_VIP_ROLE_ID)),
-      isDiscordMod: !!(DISCORD_MOD_ROLE_ID        && memberRoles.includes(DISCORD_MOD_ROLE_ID)),
-    };
+    console.log(`[discord] fetchGuildRoles: user=${member.user?.id} roles=${JSON.stringify(memberRoles)} affRoleId=${DISCORD_AFFILIATE_ROLE_ID || '(unset)'}`);
+    return rolesFromMemberRoles(memberRoles);
   } catch (e) {
-    console.error('[discord] guild role fetch failed:', e.message);
-    return { isAffiliate: false, isDiscordVip: false, isDiscordMod: false };
+    console.error('[discord] guild role fetch failed (roles undetermined):', e.message);
+    return null;
   }
 }
 
@@ -92,13 +103,9 @@ async function refreshGuildRoles(discordUserId) {
     if (!res.ok) return null;
     const member = await res.json();
     const memberRoles = member.roles || [];
-    const result = {
-      isAffiliate:  !!(DISCORD_AFFILIATE_ROLE_ID && memberRoles.includes(DISCORD_AFFILIATE_ROLE_ID)),
-      isDiscordVip: !!(DISCORD_VIP_ROLE_ID       && memberRoles.includes(DISCORD_VIP_ROLE_ID)),
-      isDiscordMod: !!(DISCORD_MOD_ROLE_ID        && memberRoles.includes(DISCORD_MOD_ROLE_ID)),
-    };
+    const result = rolesFromMemberRoles(memberRoles);
     if (!result.isAffiliate) {
-      console.log(`[discord] role debug for ${discordUserId}: memberRoles=${JSON.stringify(memberRoles)}, expected affiliate=${DISCORD_AFFILIATE_ROLE_ID}`);
+      console.log(`[discord] role debug for ${discordUserId}: memberRoles=${JSON.stringify(memberRoles)}, expected affiliate=${DISCORD_AFFILIATE_ROLE_ID || '(unset)'}`);
     }
     return result;
   } catch (e) {
@@ -118,7 +125,7 @@ function normalizeSlot(name) { return (name || '').toLowerCase().replace(/[^a-z0
 const auth = require('./lib/auth');
 const {
   nameOf, isAdmin, isPlatformAdmin, isVipHost,
-  signToken, verifyToken,
+  signToken, verifyToken, guildFlags,
   canEditHunt, isEquityMember,
   requireAuth, reqIsAdmin, reqIsVipHost, requireAdmin, requirePlatformAdmin,
   reqIsMod, requireMod,
@@ -184,9 +191,10 @@ passport.use(new DiscordStrategy({
     avatar: profile.avatar
       ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png`
       : `https://cdn.discordapp.com/embed/avatars/${parseInt(profile.discriminator||0)%5}.png`,
-    isAffiliate: guildRoles.isAffiliate,
-    isDiscordVip: guildRoles.isDiscordVip,
-    isDiscordMod: guildRoles.isDiscordMod,
+    // Spread only the flags we could actually determine. When guildRoles is null (Discord
+    // lookup unconfigured/failed) NO guild flags are set — the user is "role undetermined",
+    // and role-gated tenants fall open rather than falsely denying. See guildFlags/roles.js.
+    ...(guildRoles || {}),
   });
 }));
 passport.serializeUser((u,d) => d(null,u));
@@ -265,7 +273,7 @@ const {
 // exist. Passport strategy is configured above; resolveTenant (global) already set req.tenant.
 app.use(require('./routes/auth.routes')({
   passport, FRONTEND_URL, requireAuth,
-  reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken,
+  reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken, guildFlags,
   recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles,
 }));
 
