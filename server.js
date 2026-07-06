@@ -291,7 +291,7 @@ function rejectBadHuntInput(req, res) {
   if (equity  !== undefined && (!Array.isArray(equity)  || equity.length  > MAX_EQUITY))  { res.status(400).json({error:'Invalid equity payload'});  return true; }
   if (calls   !== undefined && (!Array.isArray(calls)   || calls.length   > MAX_CALLS))   { res.status(400).json({error:'Invalid calls payload'});   return true; }
   const { currency } = req.body || {};
-  if (currency !== undefined && !['USD','CAD','ARS'].includes(currency)) { res.status(400).json({error:'Invalid currency'}); return true; }
+  if (currency !== undefined && !huntsCore.CURRENCIES.includes(currency)) { res.status(400).json({error:'Invalid currency'}); return true; }
   const { publicCalls, publicCallsPin } = req.body || {};
   if (publicCalls    !== undefined && typeof publicCalls !== 'boolean')                        { res.status(400).json({error:'Invalid publicCalls payload'}); return true; }
   if (publicCallsPin !== undefined && publicCallsPin !== null &&

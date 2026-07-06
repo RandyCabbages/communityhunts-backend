@@ -13,6 +13,7 @@
 //   POST   /api/admin/platform-admins                    — add a DB platform admin
 //   DELETE /api/admin/platform-admins/:id                — remove a DB platform admin
 //   POST   /api/admin/hunts/cleanup                      — manual stale-hunt sweep
+//   POST   /api/admin/hunts/retag-currency               — fix a hunt's currency tag (single or all-untagged)
 //   POST   /api/admin/hunts/:userId/end                  — force-end + archive a hunt
 //   POST   /api/admin/hunts/:userId/reopen               — reopen an ended hunt
 //   DELETE /api/admin/hunts/:userId                      — delete a hunt
@@ -20,6 +21,7 @@
 
 const express = require('express');
 const { buildGotInWorkbook, ymdInTz } = require('../lib/gotin-export');
+const { CURRENCIES, inTenant } = require('../lib/hunts-core');
 
 module.exports = function adminRoutes(deps) {
   const {
@@ -256,6 +258,38 @@ module.exports = function adminRoutes(deps) {
     if (!hunts[req.params.userId]) return res.status(404).json({error:'Not found'});
     delete hunts[req.params.userId]; emitHubUpdate(req.tenant.id);
     res.json({ok:true});
+  });
+
+  // Retag a hunt's currency. Legacy hunts logged before currency tracking carry no currency
+  // field and get bucketed as USD in the stats, which skews every USD total when they were
+  // actually played in another currency. Two forms:
+  //   { currency, scope: 'untagged' }      — every tenant hunt (current + archived) with no tag
+  //   { currency, userId, archivedAt? }    — one hunt; archivedAt targets an archived snapshot
+  // Retagging a current hunt also updates any archived snapshot sharing its huntId so the
+  // stats union (which dedups by huntId) can never see two currencies for one hunt.
+  router.post('/api/admin/hunts/retag-currency', requireAuth, requireAdmin, (req, res) => {
+    const { currency, scope, userId, archivedAt } = req.body || {};
+    if (!CURRENCIES.includes(currency)) return res.status(400).json({ error: 'Invalid currency' });
+    const tid = req.tenant?.id || 'bean';
+    let updated = 0;
+    if (scope === 'untagged') {
+      for (const h of Object.values(hunts)) if (inTenant(h, tid) && !h.currency) { h.currency = currency; updated++; }
+      for (const h of archive) if (inTenant(h, tid) && !h.currency) { h.currency = currency; updated++; }
+    } else if (userId && archivedAt) {
+      const h = archive.find(x => inTenant(x, tid) && x.user?.id === userId && x.archivedAt === archivedAt);
+      if (!h) return res.status(404).json({ error: 'Archived hunt not found' });
+      h.currency = currency; updated = 1;
+    } else if (userId) {
+      const h = hunts[userId];
+      if (!h || !inTenant(h, tid)) return res.status(404).json({ error: 'Not found' });
+      h.currency = currency; updated = 1;
+      if (h.huntId) for (const a of archive) if (a.huntId === h.huntId && a.currency !== currency) { a.currency = currency; updated++; }
+    } else {
+      return res.status(400).json({ error: 'userId or scope required' });
+    }
+    persistArchive();
+    emitHubUpdate(tid); // also persists current hunts
+    res.json({ ok: true, updated });
   });
 
   // Delete an archived hunt. Two archived hunts can share a userId (same user, multiple completed hunts),
