@@ -64,10 +64,11 @@ module.exports = function integrationsRoutes(deps) {
     }
   });
 
-  // Parse VIP winners from Discord — finds latest results message and extracts names.
+  // Parse winners from Discord — ?type=affiliate uses the affiliate channel; default is VIP.
   router.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
     try {
-      res.json(await integrations.parseWinners(req.tenant));
+      const type = req.query.type === 'affiliate' ? 'affiliate' : 'vip';
+      res.json(await integrations.parseWinners(req.tenant, type));
     } catch(e) {
       res.status(500).json({ error: e.message });
     }
