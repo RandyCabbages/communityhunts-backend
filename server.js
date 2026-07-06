@@ -44,7 +44,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || (() => {
 // doesn't render the same admin twice in the platform-admins list.
 const ADMIN_IDS      = [...new Set((process.env.ADMIN_IDS || '').split(',').map(s=>s.trim()).filter(Boolean))];
 const VIP_IDS        = [...new Set((process.env.VIP_IDS || '').split(',').map(s=>s.trim()).filter(Boolean))];
-// Ticket env config (TICKET_EMAILS / RESEND_API_KEY / TICKET_FROM) moved to routes/misc.routes.js.
+// Ticket env config (DISCORD_TICKETS_BOT_TOKEN / DISCORD_TICKETS_CHANNEL_ID / DISCORD_SUGGESTIONS_CHANNEL_ID) lives in routes/misc.routes.js.
 const DISCORD_GUILD_ID          = (process.env.DISCORD_GUILD_ID || '').trim();
 const DISCORD_AFFILIATE_ROLE_ID = (process.env.DISCORD_AFFILIATE_ROLE_ID || '').trim();
 const DISCORD_VIP_ROLE_ID       = (process.env.DISCORD_VIP_ROLE_ID || '').trim();

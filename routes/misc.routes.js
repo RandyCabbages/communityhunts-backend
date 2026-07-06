@@ -1,6 +1,6 @@
 // Misc leaf routes that don't belong to a larger concern:
 //   GET  /api/bangers   → top recent big-multiplier wins (reads hunts + archive, read-only)
-//   POST /api/tickets   → bug-report email via Resend (per-IP rate limited)
+//   POST /api/tickets   → post inquiries/suggestions into Discord via the CommunityHunts bot (per-IP rate limited)
 //   GET  /api/health    → health check
 // Thin router, mounted from the server.js composition root.
 // hunts/archive are the persistence-owned singletons — injected by reference, read only.
@@ -11,9 +11,13 @@ const express = require('express');
 const BANGER_MIN_MULT = 300;
 
 // Ticket config is env-derived (config, not shared state) — read here so the router is self-sufficient.
-const TICKET_EMAILS = (process.env.TICKET_EMAILS || 'nesgoomba@gmail.com,luimeneghim@gmail.com').split(',').map(s=>s.trim()).filter(Boolean);
-const RESEND_API_KEY = (process.env.RESEND_API_KEY || '').trim();
-const TICKET_FROM = (process.env.TICKET_FROM || 'CommunityHunts Tickets <onboarding@resend.dev>').trim();
+// This is the CommunityHunts *business* Discord bot (App 1506278609445191800), distinct from the
+// per-tenant DISCORD_BOT_TOKEN used for slot-call import / winner parsing in Bean's community server.
+// Tickets split by type: "Feature Request" → suggestions channel; everything else → tickets channel.
+const TICKETS_BOT_TOKEN = (process.env.DISCORD_TICKETS_BOT_TOKEN || '').trim();
+const TICKETS_CHANNEL_ID = (process.env.DISCORD_TICKETS_CHANNEL_ID || '').trim();
+const SUGGESTIONS_CHANNEL_ID = (process.env.DISCORD_SUGGESTIONS_CHANNEL_ID || '').trim();
+const SUGGESTION_TYPES = new Set(['Feature Request']);
 
 const ticketHits = new Map(); // per-IP ticket timestamps for rate limiting
 
@@ -56,10 +60,9 @@ module.exports = function miscRoutes(deps) {
   router.post('/api/tickets', async (req, res) => {
     const { username, issue, type } = req.body;
 
-    if (!RESEND_API_KEY) return res.status(500).json({error:'RESEND_API_KEY not configured on the server'});
-    if (TICKET_EMAILS.length === 0) return res.status(500).json({error:'No ticket recipients configured'});
+    if (!TICKETS_BOT_TOKEN) return res.status(500).json({error:'Discord ticket bot not configured on the server'});
 
-    // Length caps + per-IP throttle to prevent inbox / Resend-quota spam.
+    // Length caps + per-IP throttle to prevent channel spam.
     if (String(issue||'').length > 5000 || String(username||'').length > 120 || String(type||'').length > 40)
       return res.status(400).json({error:'Ticket content too long'});
     const tip = req.ip || 'unknown';
@@ -68,54 +71,42 @@ module.exports = function miscRoutes(deps) {
     if (recentTickets.length >= 5) return res.status(429).json({error:'Too many tickets — please try again in a few minutes'});
     recentTickets.push(tnow); ticketHits.set(tip, recentTickets);
 
-    const safe = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    const from = safe(username || 'Anonymous');
-    const kind = safe(type || 'General');
-    const body = safe(issue || '(no message)').replace(/\n/g,'<br>');
+    // Route by type: feature suggestions go to their own channel, everything else to the inquiries channel.
+    const kind = (type || 'General').trim();
+    const isSuggestion = SUGGESTION_TYPES.has(kind);
+    const channelId = isSuggestion ? SUGGESTIONS_CHANNEL_ID : TICKETS_CHANNEL_ID;
+    const dest = isSuggestion ? 'suggestions' : 'tickets';
+    if (!channelId) return res.status(500).json({error:`No Discord ${dest} channel configured on the server`});
 
-    const html = `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #0e0e10; color: #efeff1; border-radius: 8px;">
-        <div style="border-left: 3px solid #9146ff; padding-left: 14px; margin-bottom: 20px;">
-          <div style="font-size: 11px; color: #adadb8; letter-spacing: 0.12em; text-transform: uppercase;">New CommunityHunts ticket</div>
-          <div style="font-size: 20px; font-weight: 700; margin-top: 4px;">${kind}</div>
-        </div>
-        <div style="background: #18181b; border-radius: 6px; padding: 16px 18px; margin-bottom: 16px;">
-          <div style="font-size: 12px; color: #adadb8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">From</div>
-          <div style="font-size: 15px; font-weight: 600;">${from}</div>
-        </div>
-        <div style="background: #18181b; border-radius: 6px; padding: 16px 18px;">
-          <div style="font-size: 12px; color: #adadb8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px;">Message</div>
-          <div style="font-size: 14px; line-height: 1.6; color: #efeff1;">${body}</div>
-        </div>
-        <div style="font-size: 11px; color: #7c7c84; margin-top: 18px; text-align: center;">
-          ${new Date().toISOString()}
-        </div>
-      </div>
-    `;
+    // Discord embed. description limit is 4096 and a field value 1024 — keep margins.
+    const from = String(username || 'Anonymous').slice(0, 256);
+    const desc = String(issue || '(no message)').slice(0, 3900);
+    const color = isSuggestion ? 0x22c55e : (kind.toLowerCase() === 'bug' ? 0xef4444 : 0x7c3aed);
+    const embed = {
+      title: `${isSuggestion ? '💡' : '🎫'} ${kind}`.slice(0, 256),
+      description: desc,
+      color,
+      fields: [{ name: 'From', value: from, inline: false }],
+      timestamp: new Date().toISOString(),
+      footer: { text: 'CommunityHunts' },
+    };
 
     try {
-      const r = await fetch('https://api.resend.com/emails', {
+      const r = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${RESEND_API_KEY}` },
-        body: JSON.stringify({
-          from: TICKET_FROM,
-          to: TICKET_EMAILS,
-          subject: `🎫 CommunityHunts Ticket — ${type||'General'} (from ${username||'Anonymous'})`,
-          reply_to: username && username.includes('@') ? username : undefined,
-          html
-        })
+        headers: { Authorization: `Bot ${TICKETS_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ embeds: [embed] }),
       });
       if (!r.ok) {
         const detail = await r.text().catch(()=>'');
-        console.error('[ticket] Resend rejected:', r.status, detail);
-        return res.status(500).json({error:`Resend returned ${r.status}`, detail});
+        console.error('[ticket] Discord rejected:', r.status, detail);
+        return res.status(500).json({error:`Discord returned ${r.status}`, detail});
       }
-      const data = await r.json().catch(()=>({}));
-      console.log(`[ticket] emailed to ${TICKET_EMAILS.join(', ')} — id ${data.id || '(no id)'}`);
-      res.json({ ok: true, via: 'email', recipients: TICKET_EMAILS.length });
+      console.log(`[ticket] posted to Discord ${dest} channel — type ${kind}`);
+      res.json({ ok: true, via: 'discord', channel: dest });
     } catch (e) {
-      console.error('[ticket] email delivery failed:', e.message);
-      res.status(500).json({error:'Failed to send ticket email', detail: e.message});
+      console.error('[ticket] Discord delivery failed:', e.message);
+      res.status(500).json({error:'Failed to post ticket to Discord', detail: e.message});
     }
   });
 

@@ -158,7 +158,7 @@ GET  /api/slots/search?q=                   → slot autocomplete (cached 1hr)
 GET  /api/bean-live                         → Twitch live status (polled 5min)
 GET  /api/discord/import-calls              → import calls from Discord channel (20min window)
 GET  /api/discord/parse-winners             → parse VIP winner results from Discord
-POST /api/tickets                           → send bug report via Discord DM
+POST /api/tickets                           → post inquiry/suggestion into the business Discord (type-routed)
 GET  /api/health                            → health check
 
 GET    /api/overdrop                        → OverDrop overlay state (mods/admins)
@@ -228,9 +228,12 @@ overdrop:enabled        → master switch changed ({ enabled })
 DISCORD_CLIENT_ID
 DISCORD_CLIENT_SECRET
 DISCORD_CALLBACK_URL
-DISCORD_BOT_TOKEN              # for Discord API calls (tickets, import, parse-winners)
+DISCORD_BOT_TOKEN              # per-tenant community bot: import calls, parse-winners
 DISCORD_CALLS_CHANNEL_ID       # channel to import slot calls from
 DISCORD_WINNERS_CHANNEL_ID     # channel to parse VIP winner results from
+DISCORD_TICKETS_BOT_TOKEN      # business bot (App 1506278609445191800) — POST /api/tickets posts here
+DISCORD_TICKETS_CHANNEL_ID     # inquiries channel: Bug / Other / Community Request tickets
+DISCORD_SUGGESTIONS_CHANNEL_ID # suggestions channel: "Feature Request" tickets
 SESSION_SECRET
 DATABASE_URL                   # PostgreSQL (Railway)
 FRONTEND_URL                   # for CORS + OAuth redirect (Vercel URL)
