@@ -45,35 +45,39 @@ const SESSION_SECRET = process.env.SESSION_SECRET || (() => {
 const ADMIN_IDS      = [...new Set((process.env.ADMIN_IDS || '').split(',').map(s=>s.trim()).filter(Boolean))];
 const VIP_IDS        = [...new Set((process.env.VIP_IDS || '').split(',').map(s=>s.trim()).filter(Boolean))];
 // Ticket env config (DISCORD_TICKETS_BOT_TOKEN / DISCORD_TICKETS_CHANNEL_ID / DISCORD_SUGGESTIONS_CHANNEL_ID) lives in routes/misc.routes.js.
-const DISCORD_GUILD_ID          = (process.env.DISCORD_GUILD_ID || '').trim();
-const DISCORD_AFFILIATE_ROLE_ID = (process.env.DISCORD_AFFILIATE_ROLE_ID || '').trim();
-const DISCORD_VIP_ROLE_ID       = (process.env.DISCORD_VIP_ROLE_ID || '').trim();
-const DISCORD_MOD_ROLE_ID       = (process.env.DISCORD_MOD_ROLE_ID || '').trim();
+
+// ── Tenant-aware Discord role detection ──────────────────────────────────────
+// Role IDs and guild IDs now live per-tenant in the DB (set via admin console).
+// The functions below accept a tenant object so each community's Discord config
+// is independent — adding a new tenant never touches Railway env vars.
 
 // Derives guild-role flags from a member's role-id list. CRITICAL: a flag is only included
 // when its role ID is actually configured — an unconfigured role stays ABSENT (undetermined),
 // never a hard `false`. Absent flags let the frontend's "no guild flags → allow" net (roles.js
-// hasGuildFlags) fall OPEN, so a missing/mis-set DISCORD_*_ROLE_ID can't mass-deny a role-gated
-// tenant. We only ever emit a definitive true/false for a role we were configured to check.
-function rolesFromMemberRoles(memberRoles) {
+// hasGuildFlags) fall OPEN, so a missing/mis-set role ID can't mass-deny a role-gated tenant.
+function rolesFromMemberRoles(memberRoles, tenant) {
   const flags = {};
-  if (DISCORD_AFFILIATE_ROLE_ID) flags.isAffiliate  = memberRoles.includes(DISCORD_AFFILIATE_ROLE_ID);
-  if (DISCORD_VIP_ROLE_ID)       flags.isDiscordVip = memberRoles.includes(DISCORD_VIP_ROLE_ID);
-  if (DISCORD_MOD_ROLE_ID)       flags.isDiscordMod = memberRoles.includes(DISCORD_MOD_ROLE_ID);
+  const affId = tenant?.discordAffiliateRoleId;
+  const vipId = tenant?.discordVipRoleId;
+  const modId = tenant?.discordModRoleId;
+  if (affId) flags.isAffiliate  = memberRoles.includes(affId);
+  if (vipId) flags.isDiscordVip = memberRoles.includes(vipId);
+  if (modId) flags.isDiscordMod = memberRoles.includes(modId);
   return flags;
 }
 
-// Fetches a user's roles in the configured guild using their OAuth access token
+// Fetches a user's roles in the tenant's guild using their OAuth access token
 // (guilds.members.read scope). Called at login time; results cached in session.
 // Returns null when roles are UNDETERMINED (no guild configured, or the Discord lookup
 // failed) — callers must leave the flags absent in that case, never coerce to false.
-async function fetchGuildRoles(oauthAccessToken) {
-  if (!DISCORD_GUILD_ID || !oauthAccessToken) {
-    console.log(`[discord] fetchGuildRoles skipped (roles undetermined): guild=${!!DISCORD_GUILD_ID} token=${!!oauthAccessToken}`);
+async function fetchGuildRoles(oauthAccessToken, tenant) {
+  const guildId = tenant?.discordGuildId;
+  if (!guildId || !oauthAccessToken) {
+    console.log(`[discord] fetchGuildRoles skipped (roles undetermined): guild=${!!guildId} token=${!!oauthAccessToken}`);
     return null;
   }
   try {
-    const res = await fetch(`https://discord.com/api/v10/users/@me/guilds/${DISCORD_GUILD_ID}/member`, {
+    const res = await fetch(`https://discord.com/api/v10/users/@me/guilds/${guildId}/member`, {
       headers: { Authorization: `Bearer ${oauthAccessToken}` }
     });
     if (!res.ok) {
@@ -82,30 +86,30 @@ async function fetchGuildRoles(oauthAccessToken) {
     }
     const member = await res.json();
     const memberRoles = member.roles || [];
-    console.log(`[discord] fetchGuildRoles: user=${member.user?.id} roles=${JSON.stringify(memberRoles)} affRoleId=${DISCORD_AFFILIATE_ROLE_ID || '(unset)'}`);
-    return rolesFromMemberRoles(memberRoles);
+    console.log(`[discord] fetchGuildRoles: user=${member.user?.id} roles=${JSON.stringify(memberRoles)} affRoleId=${tenant?.discordAffiliateRoleId || '(unset)'}`);
+    return rolesFromMemberRoles(memberRoles, tenant);
   } catch (e) {
     console.error('[discord] guild role fetch failed (roles undetermined):', e.message);
     return null;
   }
 }
 
-const DISCORD_BOT_TOKEN = (process.env.DISCORD_BOT_TOKEN || '').trim();
-
-// Refreshes guild roles via the bot token (no user OAuth token needed).
+// Refreshes guild roles via the tenant's bot token (no user OAuth token needed).
 // Called on /auth/me so roles stay current without re-login.
-async function refreshGuildRoles(discordUserId) {
-  if (!DISCORD_GUILD_ID || !DISCORD_BOT_TOKEN || !discordUserId) return null;
+async function refreshGuildRoles(discordUserId, tenant) {
+  const guildId = tenant?.discordGuildId;
+  const botToken = tenant?.discordBotToken;
+  if (!guildId || !botToken || !discordUserId) return null;
   try {
-    const res = await fetch(`https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/members/${discordUserId}`, {
-      headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}` }
+    const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/members/${discordUserId}`, {
+      headers: { Authorization: `Bot ${botToken}` }
     });
     if (!res.ok) return null;
     const member = await res.json();
     const memberRoles = member.roles || [];
-    const result = rolesFromMemberRoles(memberRoles);
+    const result = rolesFromMemberRoles(memberRoles, tenant);
     if (!result.isAffiliate) {
-      console.log(`[discord] role debug for ${discordUserId}: memberRoles=${JSON.stringify(memberRoles)}, expected affiliate=${DISCORD_AFFILIATE_ROLE_ID || '(unset)'}`);
+      console.log(`[discord] role debug for ${discordUserId}: memberRoles=${JSON.stringify(memberRoles)}, expected affiliate=${tenant?.discordAffiliateRoleId || '(unset)'}`);
     }
     return result;
   } catch (e) {
@@ -181,9 +185,10 @@ passport.use(new DiscordStrategy({
   clientID: process.env.DISCORD_CLIENT_ID,
   clientSecret: process.env.DISCORD_CLIENT_SECRET,
   callbackURL: process.env.DISCORD_CALLBACK_URL || `${FRONTEND_URL}/auth/discord/callback`,
-  scope: ['identify', 'guilds.members.read']
-}, async (access, refresh, profile, done) => {
-  const guildRoles = await fetchGuildRoles(access);
+  scope: ['identify', 'guilds.members.read'],
+  passReqToCallback: true,
+}, async (req, access, refresh, profile, done) => {
+  const guildRoles = await fetchGuildRoles(access, req.tenant);
   done(null, {
     id: profile.id,
     username: profile.username,

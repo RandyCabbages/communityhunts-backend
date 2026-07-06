@@ -191,6 +191,23 @@ module.exports = function adminRoutes(deps) {
     }
   });
 
+  // ── Tenant Discord config ──────────────────────────────────────────
+  // Read/write the tenant's Discord integration settings (bot token, guild ID, role IDs,
+  // channel IDs). Admin-only — secrets are never exposed to non-admins or public endpoints.
+  router.get('/api/admin/discord-config', requireAuth, requireAdmin, (req, res) => {
+    res.json(tenants.getTenantDiscordConfig(req.tenant));
+  });
+
+  router.put('/api/admin/discord-config', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      await tenants.updateTenantDiscordConfig(req.tenant.id, req.body || {});
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[admin] discord-config update failed:', e.message);
+      res.status(500).json({ error: 'Failed to update Discord config' });
+    }
+  });
+
   // Manual trigger for admins — used for verification and on-demand cleanup.
   router.post('/api/admin/hunts/cleanup', requireAdmin, (req, res) => res.json({ ok: true, ...cleanupStaleHunts() }));
 

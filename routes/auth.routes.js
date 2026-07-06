@@ -54,7 +54,7 @@ module.exports = function authRoutes(deps) {
     const [sub, premiumTier, freshRoles] = await Promise.all([
       subscriptions ? subscriptions.getSubscription(req.user.id) : null,
       subscriptions ? subscriptions.getPremiumTier(req.user.id) : 'none',
-      refreshGuildRoles ? refreshGuildRoles(req.user.id) : null,
+      refreshGuildRoles ? refreshGuildRoles(req.user.id, req.tenant) : null,
     ]);
     if (freshRoles) {
       Object.assign(req.user, freshRoles);
