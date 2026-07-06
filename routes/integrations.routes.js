@@ -68,6 +68,9 @@ module.exports = function integrationsRoutes(deps) {
   router.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
     try {
       const type = req.query.type === 'affiliate' ? 'affiliate' : 'vip';
+      const t = req.tenant;
+      const ch = type === 'affiliate' ? t?.discordAffiliateWinnersChannelId : t?.discordVipWinnersChannelId;
+      console.log(`[parse-winners] tenant=${t?.id} type=${type} channel=${ch} tokenStart=${(t?.discordBotToken||'').slice(0,20)} tokenLen=${(t?.discordBotToken||'').length}`);
       res.json(await integrations.parseWinners(req.tenant, type));
     } catch(e) {
       res.status(500).json({ error: e.message });
