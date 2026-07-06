@@ -54,7 +54,18 @@ module.exports = function miscRoutes(deps) {
       const tb = b.at ? new Date(b.at).getTime() : 0;
       return tb - ta || b.mult - a.mult;
     });
-    res.json(out.slice(0, 24));
+    // Cap per user so one hot hunt doesn't dominate the rail.
+    const MAX_PER_USER = 2;
+    const userCount = new Map();
+    const diverse = [];
+    for (const b of out) {
+      const c = userCount.get(b.userId) || 0;
+      if (c >= MAX_PER_USER) continue;
+      userCount.set(b.userId, c + 1);
+      diverse.push(b);
+      if (diverse.length >= 24) break;
+    }
+    res.json(diverse);
   });
 
   router.post('/api/tickets', async (req, res) => {
