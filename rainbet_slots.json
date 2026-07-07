@@ -45638,5 +45638,25 @@
     "rainbetSlug": "trusty-gaming-crownlings-clusters",
     "name": "Crownlings Clusters",
     "thumb": null
+  },
+  {
+    "rainbetSlug": "hacksaw-opa-santorini",
+    "name": "Opa Santorini",
+    "thumb": "https://cdn.softswiss.net/i/s4/hacksaw/OpaSantorini.webp"
+  },
+  {
+    "rainbetSlug": "gamomat-frooty-troupe-gold-club",
+    "name": "Frooty Troupe Gold Club",
+    "thumb": "https://cdn.softswiss.net/i/s4/gamomat/FrootyTroupeGoldClub.webp"
+  },
+  {
+    "rainbetSlug": "relax-agro-culture",
+    "name": "Agro Culture",
+    "thumb": "https://cdn.softswiss.net/i/s4/relax/AgroCulture.webp"
+  },
+  {
+    "rainbetSlug": "pragmatic-play-jade-legends",
+    "name": "Jade Legends",
+    "thumb": "https://cdn.softswiss.net/i/s4/pragmatic/JadeLegends.webp"
   }
 ]
