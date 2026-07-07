@@ -37,6 +37,16 @@ module.exports = function settingsRoutes(deps) {
     if (preferredSlots !== undefined) current.preferredSlots = (preferredSlots || []).filter(Boolean);
     if (req.body.anonymous !== undefined) current.anonymous  = !!req.body.anonymous;
     if (req.body.overlayConfig !== undefined) current.overlayConfig = sanitizeOverlayConfig(req.body.overlayConfig);
+    if (req.body.cosmetics !== undefined) {
+      const c = req.body.cosmetics && typeof req.body.cosmetics === 'object' ? req.body.cosmetics : {};
+      const safe = {};
+      for (const k of ['card','theme','sound','effect','flair','background']) {
+        if (c[k] !== undefined) safe[k] = c[k] ? String(c[k]).slice(0, 64) : null;
+      }
+      if (typeof c.soundVolume === 'number') safe.soundVolume = Math.max(0, Math.min(1, c.soundVolume));
+      if (c.effectsEnabled !== undefined) safe.effectsEnabled = !!c.effectsEnabled;
+      current.cosmetics = { ...(current.cosmetics || {}), ...safe };
+    }
     // Always update Discord identity for name-based lookup by other hunt owners
     current.discordUsername    = req.user.username || '';
     current.discordDisplayName = req.user.displayName || req.user.username || '';
@@ -69,6 +79,7 @@ module.exports = function settingsRoutes(deps) {
       rainbetName: show ? (s.rainbetName || '') : '',
       twitchName:  show ? (s.twitchName  || '') : '',
       anonymous: !!s.anonymous,
+      cosmetics: s.cosmetics || null,
     });
   });
 
@@ -95,6 +106,7 @@ module.exports = function settingsRoutes(deps) {
         rainbetName:    show ? (s.rainbetName || '') : '',
         twitchName:     show ? (s.twitchName  || '') : '',
         anonymous:      !!s.anonymous,
+        cosmetics:      s.cosmetics || null,
         userId,
       });
     }
