@@ -13,6 +13,7 @@
 // hunts/archive are persistence-owned singletons (by reference). hunt:update via publicHuntView.
 
 const express = require('express');
+const { CURRENCIES } = require('../lib/hunts-core');
 
 module.exports = function huntsRoutes(deps) {
   const {
@@ -112,7 +113,7 @@ module.exports = function huntsRoutes(deps) {
     const { huntType = 'community', startingBalance, currency } = req.body;
     if (huntType === 'vip' && !reqIsMod(req))
       return res.status(403).json({error:'Not authorised for VIP hunts'});
-    if (currency !== undefined && !['USD','CAD','ARS'].includes(currency))
+    if (currency !== undefined && !CURRENCIES.includes(currency))
       return res.status(400).json({ error: 'Invalid currency' });
     const bal = (Number.isFinite(+startingBalance) && +startingBalance >= 0) ? +startingBalance : undefined;
     // One active hunt per user: block a new hunt while the current one is still
