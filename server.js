@@ -508,7 +508,7 @@ app.use((err, req, res, next) => {
 // hunts-core so live counts stay coherent.
 require('./sockets')(io, {
   getPublicHunts, publicHuntView, emitHubUpdate, tenantOf, integrations, viewers, hunts,
-  overdrop,
+  overdrop, verifyToken,
 });
 
 server.listen(PORT, () => console.log(`✅ Server on port ${PORT}`));
