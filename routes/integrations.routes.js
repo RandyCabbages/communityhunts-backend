@@ -29,6 +29,9 @@ module.exports = function integrationsRoutes(deps) {
       discordInvite: b.discordInvite || null,
       // Which casino the slot deep-links point at (null = none → linkless slot art).
       casino: b.casino || null,
+      // Community plan (community_starter/pro) drives feature gating; null → TenantLayout
+      // defaults to 'enterprise' (Bean + any pre-plan tenant, unchanged).
+      plan: b.plan || null,
     });
   });
 

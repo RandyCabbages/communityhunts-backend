@@ -193,6 +193,22 @@ module.exports = function adminRoutes(deps) {
     }
   });
 
+  // ── Create a community tenant (platform-admin provisioning) ─────────
+  // Turns the 48h manual provisioning into one action, and is the exact primitive the
+  // (future) Stripe self-serve webhook will call. Platform-admin only for now.
+  router.get('/api/admin/tenants/check-slug', requireAuth, requirePlatformAdmin, async (req, res) => {
+    res.json({ available: await tenants.slugAvailable(req.query.slug) });
+  });
+  router.post('/api/admin/tenants', requireAuth, requirePlatformAdmin, async (req, res) => {
+    try {
+      const { slug, displayName, ownerId, plan, accent, twitchChannel } = req.body || {};
+      const t = await tenants.createTenant({ slug, displayName, ownerId, plan, accent, twitchChannel });
+      res.json({ ok: true, tenant: { slug: t.slug, displayName: t.displayName, plan: (t.branding || {}).plan || null } });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   // ── Tenant Discord config ──────────────────────────────────────────
   // Read/write the tenant's Discord integration settings (bot token, guild ID, role IDs,
   // channel IDs). Admin-only — secrets are never exposed to non-admins or public endpoints.
