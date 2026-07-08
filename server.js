@@ -454,7 +454,7 @@ app.use(require('./routes/misc.routes')({ hunts, archive }));
 
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
-  settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions,
+  settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions, featureGrants,
 }));
 
 // Standalone tracker routes (paid product, no tenant context).

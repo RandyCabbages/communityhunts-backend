@@ -16,7 +16,7 @@ const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions, featureGrants } = deps;
   const { getSettings, saveSettings, resolveUserIdByName } = settings;
   const router = express.Router();
 
@@ -217,6 +217,24 @@ module.exports = function settingsRoutes(deps) {
     } catch (e) {
       console.error('[admin] user profile failed:', e.message);
       res.status(500).json({ error: 'Failed to load user' });
+    }
+  });
+
+  // POST /api/admin/users/:userId/grants — toggle a feature grant (e.g. 'shop') for a user.
+  router.post('/api/admin/users/:userId/grants', requireAuth, requireAdmin, async (req, res) => {
+    const userId = String(req.params.userId);
+    const feature = String(req.body?.feature || '').trim();
+    const on = !!req.body?.on;
+    const ALLOWED = ['shop'];
+    if (!ALLOWED.includes(feature)) return res.status(400).json({ error: 'unknown feature' });
+    if (!featureGrants) return res.status(503).json({ error: 'grants unavailable' });
+    try {
+      if (on) await featureGrants.addGrant(userId, feature, req.user.id);
+      else    await featureGrants.removeGrant(userId, feature);
+      res.json({ ok: true, featureGrants: featureGrants.getGrantsForUser(userId) });
+    } catch (e) {
+      console.error('[grants] toggle failed:', e.message);
+      res.status(500).json({ error: 'Failed to update grant' });
     }
   });
 
