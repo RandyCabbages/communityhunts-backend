@@ -233,6 +233,8 @@ const admins = require('./lib/admins');
 admins.initAdmins({ pgPool }).catch(e => console.error('[admins] init error:', e.message));
 const subscriptions = require('./lib/subscriptions');
 subscriptions.initSubscriptions({ pgPool }).catch(e => console.error('[subscriptions] init error:', e.message));
+const featureGrants = require('./lib/featureGrants');
+featureGrants.initFeatureGrants({ pgPool }).catch(e => console.error('[grants] init error:', e.message));
 
 // Community memberships (which communities a user belongs to). One-time backfill attributes
 // every previously-known user to Bean; new users auto-join the slug they sign in through.
