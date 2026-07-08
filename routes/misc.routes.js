@@ -27,8 +27,12 @@ module.exports = function miscRoutes(deps) {
 
   router.get('/api/bangers', (req, res) => {
     const out = [], seen = new Set();
+    // Tenant isolation: only THIS tenant's hunts. Without it every community's banger rail showed
+    // Bean's wins (tenantOf defaults an untagged hunt to 'bean'). Now live with MULTI_TENANT on.
+    const tid = req.tenant?.id || 'bean';
     const collect = (h, live) => {
       if (!h || !h.user || !Array.isArray(h.bonuses)) return;
+      if ((h.tenantId || 'bean') !== tid) return;
       const at = h.archivedAt || h.startedAt || null;
       for (const b of h.bonuses) {
         const bet = +b.bet || 0, win = +b.win || 0;
