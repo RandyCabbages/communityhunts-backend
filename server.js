@@ -478,7 +478,7 @@ app.use(require('./routes/settings.routes')({
 }));
 
 // Stripe checkout, portal, and webhook routes (routes/stripe.routes.js).
-app.use(require('./routes/stripe.routes')({ requireAuth, stripeLib, FRONTEND_URL }));
+app.use(require('./routes/stripe.routes')({ requireAuth, stripeLib, FRONTEND_URL, tenants }));
 
 // Cosmetics purchase + inventory routes (routes/cosmetics.routes.js).
 const cosmeticsRouter = require('./routes/cosmetics.routes')({
@@ -486,6 +486,27 @@ const cosmeticsRouter = require('./routes/cosmetics.routes')({
 });
 app.use(cosmeticsRouter);
 stripeLib.setCosmeticGrantFn(cosmeticsRouter._grantItem);
+// Community self-serve: a paid community checkout provisions a tenant; a cancelled sub
+// deactivates it. Re-check slug availability at provision time (it could've been claimed since
+// checkout started). Owner becomes the tenant admin; Discord/branding are configured afterward.
+stripeLib.setCommunityProvisionFn(async (action, meta) => {
+  try {
+    if (action === 'provision') {
+      if (!(await tenants.slugAvailable(meta.communitySlug))) {
+        console.error(`[stripe] community slug unavailable at provision: ${meta.communitySlug} — owner ${meta.ownerId} paid, handle manually`);
+        return;
+      }
+      await tenants.createTenant({
+        slug: meta.communitySlug, displayName: meta.communityName, ownerId: meta.ownerId,
+        plan: meta.plan, accent: meta.accent, twitchChannel: meta.twitchChannel,
+      });
+      console.log(`[stripe] community provisioned: /${meta.communitySlug} (owner ${meta.ownerId}, ${meta.plan})`);
+    } else if (action === 'deactivate') {
+      await tenants.setTenantActive(meta.communitySlug, false);
+      console.log(`[stripe] community deactivated (sub cancelled): /${meta.communitySlug}`);
+    }
+  } catch (e) { console.error('[stripe] community provision error:', e.message); }
+});
 
 // Standalone tracker routes (paid product, no tenant context).
 app.use(require('./routes/tracker.routes')({

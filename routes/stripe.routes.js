@@ -4,7 +4,7 @@
 const express = require('express');
 
 module.exports = function stripeRoutes(deps) {
-  const { requireAuth, stripeLib, FRONTEND_URL } = deps;
+  const { requireAuth, stripeLib, FRONTEND_URL, tenants } = deps;
   const router = express.Router();
 
   router.post('/api/stripe/create-checkout-session', requireAuth, async (req, res) => {
@@ -24,6 +24,28 @@ module.exports = function stripeRoutes(deps) {
       res.json(result);
     } catch (e) {
       console.error('[stripe] create-checkout-session error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Self-serve community checkout — pay to provision a whole tenant. Validates the slug is free
+  // before creating the session; the webhook re-checks + calls createTenant on success. (The
+  // tenant only serves its own data once MULTI_TENANT is enabled — see server.js.)
+  router.post('/api/stripe/create-community-checkout', requireAuth, async (req, res) => {
+    try {
+      if (!stripeLib.isEnabled()) return res.status(503).json({ error: 'Stripe not configured' });
+      const { plan, slug, displayName, accent, twitchChannel } = req.body || {};
+      if (!slug || !displayName) return res.status(400).json({ error: 'slug and displayName required' });
+      if (!tenants || !(await tenants.slugAvailable(slug))) return res.status(400).json({ error: 'That community URL is taken or invalid' });
+      const successUrl = `${FRONTEND_URL}/${slug}?welcome=1`;
+      const cancelUrl = `${FRONTEND_URL}/add-community`;
+      const result = await stripeLib.createCommunityCheckoutSession(
+        req.user.id, plan, { slug, displayName, accent, twitchChannel },
+        successUrl, cancelUrl, req.user.email || null, req.user.displayName || req.user.username,
+      );
+      res.json(result);
+    } catch (e) {
+      console.error('[stripe] create-community-checkout error:', e.message);
       res.status(500).json({ error: e.message });
     }
   });
