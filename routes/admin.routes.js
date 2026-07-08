@@ -234,6 +234,22 @@ module.exports = function adminRoutes(deps) {
     }
   });
 
+  // ── Community socials (owner-editable) ──────────────────────────────
+  // The tenant admin (owner) sets THIS community's public social links, stored in branding.
+  // Sanitized in lib/tenants (whitelisted platforms, http(s) only). Tenant-scoped via req.tenant.
+  router.get('/api/admin/socials', requireAuth, requireAdmin, (req, res) => {
+    res.json({ socials: (req.tenant.branding && req.tenant.branding.socials) || [] });
+  });
+  router.put('/api/admin/socials', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const saved = await tenants.updateTenantSocials(req.tenant.id, req.body && req.body.socials);
+      res.json({ ok: true, socials: saved });
+    } catch (e) {
+      console.error('[admin] socials update failed:', e.message);
+      res.status(500).json({ error: 'Failed to update socials' });
+    }
+  });
+
   // Manual trigger for admins — used for verification and on-demand cleanup.
   router.post('/api/admin/hunts/cleanup', requireAdmin, (req, res) => res.json({ ok: true, ...cleanupStaleHunts() }));
 
