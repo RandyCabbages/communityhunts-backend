@@ -215,7 +215,7 @@ module.exports = function adminRoutes(deps) {
 
   router.post('/api/admin/hunts/:userId/golive', requireAdmin, (req, res) => {
     const h = hunts[req.params.userId];
-    if (!h) return res.status(404).json({error:'Not found'});
+    if (!h || !inTenant(h, req.tenant.id)) return res.status(404).json({error:'Not found'});
     h.isLive = true;
     h.startedAt = h.startedAt || new Date().toISOString();
     h.updatedAt = new Date().toISOString();
@@ -226,7 +226,7 @@ module.exports = function adminRoutes(deps) {
 
   router.post('/api/admin/hunts/:userId/gooffline', requireAdmin, (req, res) => {
     const h = hunts[req.params.userId];
-    if (!h) return res.status(404).json({error:'Not found'});
+    if (!h || !inTenant(h, req.tenant.id)) return res.status(404).json({error:'Not found'});
     h.isLive = false;
     h.updatedAt = new Date().toISOString();
     emitHubUpdate(req.tenant.id); emitHuntUpdate(req.params.userId);
@@ -235,7 +235,7 @@ module.exports = function adminRoutes(deps) {
 
   router.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
     const h = hunts[req.params.userId];
-    if (!h) return res.status(404).json({error:'Not found'});
+    if (!h || !inTenant(h, req.tenant.id)) return res.status(404).json({error:'Not found'});
     h.isLive = false;
     if (!h.huntId) h.huntId = uid();
     if (!h.archivedAt) h.archivedAt = new Date().toISOString();
@@ -246,7 +246,7 @@ module.exports = function adminRoutes(deps) {
 
   router.post('/api/admin/hunts/:userId/reopen', requireAdmin, (req, res) => {
     const h = hunts[req.params.userId];
-    if (!h) return res.status(404).json({error:'Not found'});
+    if (!h || !inTenant(h, req.tenant.id)) return res.status(404).json({error:'Not found'});
     unarchiveHunt(h);
     h.isLive = true; h.archivedAt = null;
     if (!h.startedAt) h.startedAt = new Date().toISOString();
@@ -255,7 +255,8 @@ module.exports = function adminRoutes(deps) {
   });
 
   router.delete('/api/admin/hunts/:userId', requireAdmin, (req, res) => {
-    if (!hunts[req.params.userId]) return res.status(404).json({error:'Not found'});
+    const h = hunts[req.params.userId];
+    if (!h || !inTenant(h, req.tenant.id)) return res.status(404).json({error:'Not found'});
     delete hunts[req.params.userId]; emitHubUpdate(req.tenant.id);
     res.json({ok:true});
   });
@@ -296,7 +297,7 @@ module.exports = function adminRoutes(deps) {
   // so we need archivedAt as a tiebreaker to identify the exact entry.
   router.delete('/api/admin/hunts/archived/:userId/:archivedAt', requireAdmin, (req, res) => {
     const { userId, archivedAt } = req.params;
-    const idx = archive.findIndex(h => h.user?.id === userId && h.archivedAt === archivedAt);
+    const idx = archive.findIndex(h => h.user?.id === userId && h.archivedAt === archivedAt && inTenant(h, req.tenant.id));
     if (idx === -1) return res.status(404).json({error:'Archived hunt not found'});
     archive.splice(idx, 1);
     persistArchive();
@@ -305,13 +306,15 @@ module.exports = function adminRoutes(deps) {
   });
 
   // ── Subscription management ──────────────────────────────────────
-  router.get('/api/admin/subscriptions', requireAdmin, async (req, res) => {
+  // Individual subscriptions are a PLATFORM-level (global) product, not per-tenant — a community
+  // mod/admin must never grant tiers or read every user's subscription PII. Platform-admin only.
+  router.get('/api/admin/subscriptions', requireAuth, requirePlatformAdmin, async (req, res) => {
     try {
       res.json({ subscriptions: await subscriptions.listSubscriptions() });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  router.post('/api/admin/subscriptions', requireAdmin, async (req, res) => {
+  router.post('/api/admin/subscriptions', requireAuth, requirePlatformAdmin, async (req, res) => {
     const { userId, tier, expiresAt } = req.body || {};
     if (!userId || !tier) return res.status(400).json({ error: 'userId and tier required' });
     try {
