@@ -6,7 +6,7 @@
 //   GET  /auth/discord/callback        — OAuth callback (records user, auto-joins, signs token)
 //   GET  /auth/logout                  — clear session
 //   GET  /auth/me                      — current user + isAdmin/isVipHost/isPlatformAdmin
-//   GET  /api/known-users              — public equity-name autocomplete list
+//   GET  /api/known-users              — equity-name autocomplete list (auth required)
 //   GET  /api/my-communities           — tenant slugs the user belongs to
 //   POST /api/communities/:slug/join   — join a community
 //   POST /api/communities/:slug/leave  — leave a community
@@ -66,9 +66,10 @@ module.exports = function authRoutes(deps) {
       token: signToken(req.user) });
   });
 
-  // Public list of known users for equity-name autocomplete.
-  // Returns {id, displayName, avatar} for everyone who's ever logged in, sorted by recency.
-  router.get('/api/known-users', async (req, res) => {
+  // Known-users list for equity-name autocomplete — {id, displayName, avatar} for everyone
+  // who's logged in, by recency. Auth-gated: logged-in users adding people to a hunt need it;
+  // anonymous callers don't, and leaving it public exposed the whole roster + Discord IDs.
+  router.get('/api/known-users', requireAuth, async (req, res) => {
     if (!pgPool) return res.json([]);
     try {
       const r = await pgPool.query(

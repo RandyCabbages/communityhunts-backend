@@ -3,6 +3,7 @@ const session         = require('express-session');
 const passport        = require('passport');
 const DiscordStrategy = require('passport-discord').Strategy;
 const cors            = require('cors');
+const helmet          = require('helmet');
 const http            = require('http');
 const { Server }      = require('socket.io');
 const fs              = require('fs');
@@ -138,6 +139,16 @@ const {
 
 // ── Middleware ─────────────────────────────────────────────────────
 app.set('trust proxy', 1);
+// Security headers (HSTS, nosniff, frameguard, referrer-policy, …). This is a JSON + media
+// API — the frontend on Vercel owns its own CSP — so CSP is disabled here. Critically,
+// Cross-Origin-Resource-Policy is set to cross-origin: the frontend (communityhunts.gg)
+// loads backend-served images (img-proxy thumbnails, OverDrop media) from api.communityhunts.gg,
+// and helmet's default (same-origin) would block them.
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginEmbedderPolicy: false,
+}));
 app.use(cors({ origin: corsOrigin, credentials: true }));
 // Stripe webhook needs the raw body for signature verification — mount
 // before the global JSON parser so it gets the unparsed Buffer.
