@@ -208,6 +208,14 @@ module.exports = function adminRoutes(deps) {
       res.status(400).json({ error: e.message });
     }
   });
+  router.delete('/api/admin/tenants/:slug', requireAuth, requirePlatformAdmin, async (req, res) => {
+    try {
+      await tenants.deleteTenant(req.params.slug);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
 
   // ── Tenant Discord config ──────────────────────────────────────────
   // Read/write the tenant's Discord integration settings (bot token, guild ID, role IDs,
