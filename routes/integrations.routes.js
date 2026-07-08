@@ -27,6 +27,8 @@ module.exports = function integrationsRoutes(deps) {
       twitchChannel: t.twitchChannel || null,
       requiredRoles: b.requiredRoles || null,
       discordInvite: b.discordInvite || null,
+      // Which casino the slot deep-links point at (null = none → linkless slot art).
+      casino: b.casino || null,
     });
   });
 
