@@ -17,7 +17,7 @@ module.exports = function authRoutes(deps) {
   const {
     passport, FRONTEND_URL, requireAuth,
     reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken, guildFlags,
-    recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles,
+    recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles, featureGrants,
   } = deps;
   const router = express.Router();
 
@@ -62,7 +62,8 @@ module.exports = function authRoutes(deps) {
     }
     res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isCommunityMod: reqIsMod(req), isPlatformAdmin: isPlatformAdmin(req.user),
       ...guildFlags(req.user),
-      subscription: sub || { tier: 'free' }, premiumTier: premiumTier || 'none' },
+      subscription: sub || { tier: 'free' }, premiumTier: premiumTier || 'none',
+      featureGrants: featureGrants ? featureGrants.getGrantsForUser(req.user.id) : [] },
       token: signToken(req.user) });
   });
 

@@ -281,7 +281,7 @@ const {
 app.use(require('./routes/auth.routes')({
   passport, FRONTEND_URL, requireAuth,
   reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken, guildFlags,
-  recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles,
+  recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles, featureGrants,
 }));
 
 
