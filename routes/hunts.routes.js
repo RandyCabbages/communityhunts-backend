@@ -21,8 +21,25 @@ module.exports = function huntsRoutes(deps) {
     hunts, archive, getPublicHunts, getArchivedHunts,
     emitHubUpdate, emitHuntUpdate, publicHuntView, uid, touch,
     persistHunts, archiveHunt, unarchiveHunt, io, rejectBadHuntInput,
+    resolveUserIdByName,
   } = deps;
   const router = express.Router();
+
+  // ── Invited-editor helper ──────────────────────────────────────────
+  // invitedEditors holds Discord ID strings (matched by id in canEditHunt — never by name).
+  // Resolve an invite request to a real Discord ID: new clients send { userId }; legacy clients
+  // send { username } (resolved via known settings, best-effort). Returns null when no real user
+  // can be identified — they must have signed in at least once. IDs (not objects) so the current
+  // frontend, which renders each entry as a React child, keeps working through the deploy.
+  async function resolveInviteeId({ userId, username }) {
+    const id = String(userId || '').trim();
+    if (/^\d{5,}$/.test(id)) return id;
+    if (resolveUserIdByName && username) {
+      const resolved = await resolveUserIdByName(username);
+      if (resolved) return String(resolved);
+    }
+    return null;
+  }
 
   // ── Public hunt endpoints ──────────────────────────────────────────
   router.get('/api/hunts',          (req, res) => res.json(getPublicHunts(req.tenant.id)));
@@ -251,55 +268,55 @@ module.exports = function huntsRoutes(deps) {
   });
 
   // ── Invite editor ──────────────────────────────────────────────────
-  router.post('/api/my-hunt/invite', requireAuth, (req, res) => {
-    const { username } = req.body;
-    if (!username) return res.status(400).json({error:'username required'});
-    if (!hunts[req.user.id]) return res.status(404).json({error:'No hunt'});
-    if (!hunts[req.user.id].invitedEditors) hunts[req.user.id].invitedEditors = [];
-    const lower = username.toLowerCase().trim();
-    if (!hunts[req.user.id].invitedEditors.includes(lower))
-      hunts[req.user.id].invitedEditors.push(lower);
+  // Body: { userId } (new) or { username } (legacy → resolved to an id). Stored as a Discord
+  // ID and matched by id in canEditHunt — never by display name.
+  router.post('/api/my-hunt/invite', requireAuth, async (req, res) => {
+    const hunt = hunts[req.user.id];
+    if (!hunt) return res.status(404).json({error:'No hunt'});
+    const id = await resolveInviteeId(req.body || {});
+    if (!id) return res.status(400).json({error:'Pick a user who has signed in at least once'});
+    if (!hunt.invitedEditors) hunt.invitedEditors = [];
+    if (!hunt.invitedEditors.includes(id)) hunt.invitedEditors.push(id);
     persistHunts();
     io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
-    res.json({ok:true, invitedEditors: hunts[req.user.id].invitedEditors});
+    res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
   router.delete('/api/my-hunt/invite', requireAuth, (req, res) => {
-    const { username } = req.body;
-    if (!hunts[req.user.id]) return res.status(404).json({error:'No hunt'});
-    hunts[req.user.id].invitedEditors = (hunts[req.user.id].invitedEditors||[])
-      .filter(u => u !== username.toLowerCase().trim());
+    const hunt = hunts[req.user.id];
+    if (!hunt) return res.status(404).json({error:'No hunt'});
+    const target = String(req.body?.id ?? req.body?.userId ?? req.body?.username ?? '').trim().toLowerCase();
+    hunt.invitedEditors = (hunt.invitedEditors || []).filter(u => String(u).toLowerCase() !== target);
     persistHunts();
     io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
-    res.json({ok:true, invitedEditors: hunts[req.user.id].invitedEditors});
+    res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
   // ── Invite editor on another user's hunt (admin/editor) ────────────
-  router.post('/api/hunts/:userId/invite', requireAuth, (req, res) => {
+  router.post('/api/hunts/:userId/invite', requireAuth, async (req, res) => {
     const { userId } = req.params;
     if (!canEditHunt(req, userId)) return res.status(403).json({error:'Not authorised'});
-    const { username } = req.body;
-    if (!username) return res.status(400).json({error:'username required'});
-    if (!hunts[userId]) return res.status(404).json({error:'Hunt not found'});
-    if (!hunts[userId].invitedEditors) hunts[userId].invitedEditors = [];
-    const lower = username.toLowerCase().trim();
-    if (!hunts[userId].invitedEditors.includes(lower))
-      hunts[userId].invitedEditors.push(lower);
+    const hunt = hunts[userId];
+    if (!hunt) return res.status(404).json({error:'Hunt not found'});
+    const id = await resolveInviteeId(req.body || {});
+    if (!id) return res.status(400).json({error:'Pick a user who has signed in at least once'});
+    if (!hunt.invitedEditors) hunt.invitedEditors = [];
+    if (!hunt.invitedEditors.includes(id)) hunt.invitedEditors.push(id);
     persistHunts();
     io.to(`hunt:${userId}`).emit('hunt:reinvite', { huntUserId: userId });
-    res.json({ok:true, invitedEditors: hunts[userId].invitedEditors});
+    res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
   router.delete('/api/hunts/:userId/invite', requireAuth, (req, res) => {
     const { userId } = req.params;
     if (!canEditHunt(req, userId)) return res.status(403).json({error:'Not authorised'});
-    const { username } = req.body;
-    if (!hunts[userId]) return res.status(404).json({error:'Hunt not found'});
-    hunts[userId].invitedEditors = (hunts[userId].invitedEditors||[])
-      .filter(u => u !== username.toLowerCase().trim());
+    const hunt = hunts[userId];
+    if (!hunt) return res.status(404).json({error:'Hunt not found'});
+    const target = String(req.body?.id ?? req.body?.userId ?? req.body?.username ?? '').trim().toLowerCase();
+    hunt.invitedEditors = (hunt.invitedEditors || []).filter(u => String(u).toLowerCase() !== target);
     persistHunts();
     io.to(`hunt:${userId}`).emit('hunt:reinvite', { huntUserId: userId });
-    res.json({ok:true, invitedEditors: hunts[userId].invitedEditors});
+    res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
   return router;
