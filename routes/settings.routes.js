@@ -259,10 +259,15 @@ module.exports = function settingsRoutes(deps) {
   // so writes hit the same record reads find; falls back to a synthetic manual: id when missing.
   router.post('/api/admin/set-user-field', requireAdmin, async (req, res) => {
     const field = String(req.body?.field || '').trim();
-    if (!['rainbetName', 'twitchName'].includes(field))
-      return res.status(400).json({ error: "field must be 'rainbetName' or 'twitchName'" });
+    if (!['rainbetName', 'twitchName', 'premiumTier'].includes(field))
+      return res.status(400).json({ error: "field must be 'rainbetName', 'twitchName', or 'premiumTier'" });
     const value = String(req.body?.value || '').trim().slice(0, 64);
-    if (!value) return res.status(400).json({ error: 'value required' });
+    if (field === 'premiumTier') {
+      if (!['none', 'supporter', 'champion'].includes(value))
+        return res.status(400).json({ error: 'invalid premiumTier' });
+    } else if (!value) {
+      return res.status(400).json({ error: 'value required' });
+    }
     const userId = (req.body?.userId || '').toString().trim();
     const name   = (req.body?.name   || '').toString().trim();
     if (!userId && !name) return res.status(400).json({ error: 'Provide userId or name' });
