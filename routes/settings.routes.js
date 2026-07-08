@@ -235,6 +235,8 @@ module.exports = function settingsRoutes(deps) {
         preferredSlots: Array.isArray(userSettings.preferredSlots) ? userSettings.preferredSlots : [],
         communities,
         featureGrants: featureGrants ? featureGrants.getGrantsForUser(userId) : [],
+        cosmetics: (userSettings.cosmetics && typeof userSettings.cosmetics === 'object') ? userSettings.cosmetics : {},
+        cosmeticsOwned: Array.isArray(userSettings.cosmeticsOwned) ? userSettings.cosmeticsOwned : [],
         stats: computeUserHuntStats(rawTenantHunts(tenantId), userId),
       });
     } catch (e) {
@@ -258,6 +260,58 @@ module.exports = function settingsRoutes(deps) {
     } catch (e) {
       console.error('[grants] toggle failed:', e.message);
       res.status(500).json({ error: 'Failed to update grant' });
+    }
+  });
+
+  // POST /api/admin/users/:userId/cosmetics — admin manages another user's cosmetics.
+  // Body: { action: 'grant'|'revoke'|'equip', itemId?, category? }
+  //   grant  { itemId }            → add to cosmeticsOwned
+  //   revoke { itemId }            → remove from cosmeticsOwned; unequip anywhere it's active
+  //   equip  { category, itemId? } → set the active item (null/'' = unequip). Equip implies
+  //     grant when the target's subscription tier doesn't already cover the item — otherwise
+  //     the user's own next PUT /api/settings would strip the equip as inaccessible.
+  const COSMETIC_CATEGORIES = ['card', 'theme', 'sound', 'effect', 'background'];
+  router.post('/api/admin/users/:userId/cosmetics', requireAuth, requireAdmin, async (req, res) => {
+    const userId = String(req.params.userId);
+    const action = String(req.body?.action || '');
+    const rawItem = req.body?.itemId;
+    const itemId = (rawItem === undefined || rawItem === null || rawItem === '') ? null : String(rawItem).slice(0, 64);
+    const category = req.body?.category != null ? String(req.body.category) : null;
+    try {
+      const s = await getSettings(userId);
+      const owned = Array.isArray(s.cosmeticsOwned) ? [...s.cosmeticsOwned] : [];
+      const active = (s.cosmetics && typeof s.cosmetics === 'object') ? { ...s.cosmetics } : {};
+
+      if (action === 'grant') {
+        if (!itemId || !(itemId in ITEM_TIERS)) return res.status(400).json({ error: 'Invalid item' });
+        if (!owned.includes(itemId)) owned.push(itemId);
+      } else if (action === 'revoke') {
+        if (!itemId) return res.status(400).json({ error: 'itemId required' });
+        const i = owned.indexOf(itemId);
+        if (i !== -1) owned.splice(i, 1);
+        for (const k of COSMETIC_CATEGORIES) if (active[k] === itemId) active[k] = null;
+      } else if (action === 'equip') {
+        if (!COSMETIC_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
+        if (itemId) {
+          if (!(itemId in ITEM_TIERS)) return res.status(400).json({ error: 'Invalid item' });
+          let userTier = 'free';
+          if (subscriptions) {
+            try { const sub = await subscriptions.getSubscription(userId); userTier = sub?.tier || 'free'; } catch {}
+          }
+          if (!isItemAccessible(itemId, userTier, owned) && !owned.includes(itemId)) owned.push(itemId);
+        }
+        active[category] = itemId;
+      } else {
+        return res.status(400).json({ error: "action must be 'grant', 'revoke', or 'equip'" });
+      }
+
+      s.cosmeticsOwned = owned;
+      s.cosmetics = active;
+      await saveSettings(userId, s);
+      res.json({ ok: true, cosmetics: active, cosmeticsOwned: owned });
+    } catch (e) {
+      console.error('[admin] cosmetics update failed:', e.message);
+      res.status(500).json({ error: 'Failed to update cosmetics' });
     }
   });
 
