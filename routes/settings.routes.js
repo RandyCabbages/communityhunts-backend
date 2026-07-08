@@ -16,8 +16,20 @@ const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions, featureGrants } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive } = deps;
   const { getSettings, saveSettings, resolveUserIdByName } = settings;
+  const { computeUserHuntStats } = require('../lib/userStats');
+
+  // Raw hunts (with bonuses/equity) for a tenant — union of current + archived, deduped by
+  // huntId. Mirrors lib/hunts-core.getAllHunts but WITHOUT the summary map (aggregation needs
+  // the raw bonuses/equity that huntSummary strips).
+  function rawTenantHunts(tenantId) {
+    const tid = tenantId || 'bean';
+    const current = Object.values(hunts || {}).filter(h => (h.tenantId || 'bean') === tid);
+    const seen = new Set(current.map(h => h.huntId).filter(Boolean));
+    const archivedOnly = (archive || []).filter(h => (h.tenantId || 'bean') === tid && (!h.huntId || !seen.has(h.huntId)));
+    return [...current, ...archivedOnly];
+  }
   const router = express.Router();
 
   // Overlay/widget config — cosmetic per-streamer prefs stored in user_settings JSONB.
@@ -211,8 +223,11 @@ module.exports = function settingsRoutes(deps) {
         ...identity,
         rainbetName: userSettings.rainbetName || null,
         twitchName: userSettings.twitchName || null,
+        premiumTier: subscriptions ? await subscriptions.getPremiumTier(userId) : (userSettings.premiumTier || 'none'),
         preferredSlots: Array.isArray(userSettings.preferredSlots) ? userSettings.preferredSlots : [],
         communities,
+        featureGrants: featureGrants ? featureGrants.getGrantsForUser(userId) : [],
+        stats: computeUserHuntStats(rawTenantHunts(tenantId), userId),
       });
     } catch (e) {
       console.error('[admin] user profile failed:', e.message);
