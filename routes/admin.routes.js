@@ -201,8 +201,8 @@ module.exports = function adminRoutes(deps) {
   });
   router.post('/api/admin/tenants', requireAuth, requirePlatformAdmin, async (req, res) => {
     try {
-      const { slug, displayName, ownerId, plan, accent, twitchChannel } = req.body || {};
-      const t = await tenants.createTenant({ slug, displayName, ownerId, plan, accent, twitchChannel });
+      const { slug, displayName, ownerId, plan, accent, twitchChannel, socials } = req.body || {};
+      const t = await tenants.createTenant({ slug, displayName, ownerId, plan, accent, twitchChannel, socials });
       res.json({ ok: true, tenant: { slug: t.slug, displayName: t.displayName, plan: (t.branding || {}).plan || null } });
     } catch (e) {
       res.status(400).json({ error: e.message });
