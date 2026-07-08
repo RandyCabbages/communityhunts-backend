@@ -320,26 +320,5 @@ module.exports = function adminRoutes(deps) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── Payment claims ─────────────────────────────────────────────
-  router.get('/api/admin/payment-claims', requireAdmin, async (req, res) => {
-    try {
-      res.json({ claims: await subscriptions.listPaymentClaims() });
-    } catch (e) { res.status(500).json({ error: e.message }); }
-  });
-
-  router.post('/api/admin/payment-claims/:id/approve', requireAdmin, async (req, res) => {
-    try {
-      await subscriptions.approvePaymentClaim(req.params.id, req.user.id);
-      res.json({ ok: true });
-    } catch (e) { res.status(400).json({ error: e.message }); }
-  });
-
-  router.post('/api/admin/payment-claims/:id/reject', requireAdmin, async (req, res) => {
-    try {
-      await subscriptions.rejectPaymentClaim(req.params.id, req.user.id, req.body?.reason);
-      res.json({ ok: true });
-    } catch (e) { res.status(400).json({ error: e.message }); }
-  });
-
   return router;
 };

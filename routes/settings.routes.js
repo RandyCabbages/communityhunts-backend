@@ -14,6 +14,7 @@
 
 const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
+const { isItemAccessible, ITEM_TIERS } = require('./cosmetics.routes');
 
 module.exports = function settingsRoutes(deps) {
   const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive } = deps;
@@ -51,9 +52,17 @@ module.exports = function settingsRoutes(deps) {
     if (req.body.overlayConfig !== undefined) current.overlayConfig = sanitizeOverlayConfig(req.body.overlayConfig);
     if (req.body.cosmetics !== undefined) {
       const c = req.body.cosmetics && typeof req.body.cosmetics === 'object' ? req.body.cosmetics : {};
+      let userTier = 'free';
+      if (subscriptions) {
+        try { const sub = await subscriptions.getSubscription(req.user.id); userTier = sub?.tier || 'free'; } catch {}
+      }
+      const owned = current.cosmeticsOwned || [];
       const safe = {};
       for (const k of ['card','theme','sound','effect','flair','background']) {
-        if (c[k] !== undefined) safe[k] = c[k] ? String(c[k]).slice(0, 64) : null;
+        if (c[k] === undefined) continue;
+        const itemId = c[k] ? String(c[k]).slice(0, 64) : null;
+        if (itemId && !isItemAccessible(itemId, userTier, owned)) continue;
+        safe[k] = itemId;
       }
       if (typeof c.soundVolume === 'number') safe.soundVolume = Math.max(0, Math.min(1, c.soundVolume));
       if (c.effectsEnabled !== undefined) safe.effectsEnabled = !!c.effectsEnabled;
@@ -223,7 +232,6 @@ module.exports = function settingsRoutes(deps) {
         ...identity,
         rainbetName: userSettings.rainbetName || null,
         twitchName: userSettings.twitchName || null,
-        premiumTier: subscriptions ? await subscriptions.getPremiumTier(userId) : (userSettings.premiumTier || 'none'),
         preferredSlots: Array.isArray(userSettings.preferredSlots) ? userSettings.preferredSlots : [],
         communities,
         featureGrants: featureGrants ? featureGrants.getGrantsForUser(userId) : [],
@@ -259,13 +267,10 @@ module.exports = function settingsRoutes(deps) {
   // so writes hit the same record reads find; falls back to a synthetic manual: id when missing.
   router.post('/api/admin/set-user-field', requireAdmin, async (req, res) => {
     const field = String(req.body?.field || '').trim();
-    if (!['rainbetName', 'twitchName', 'premiumTier'].includes(field))
-      return res.status(400).json({ error: "field must be 'rainbetName', 'twitchName', or 'premiumTier'" });
+    if (!['rainbetName', 'twitchName'].includes(field))
+      return res.status(400).json({ error: "field must be 'rainbetName' or 'twitchName'" });
     const value = String(req.body?.value || '').trim().slice(0, 64);
-    if (field === 'premiumTier') {
-      if (!['none', 'supporter', 'champion'].includes(value))
-        return res.status(400).json({ error: 'invalid premiumTier' });
-    } else if (!value) {
+    if (!value) {
       return res.status(400).json({ error: 'value required' });
     }
     const userId = (req.body?.userId || '').toString().trim();
@@ -338,20 +343,6 @@ module.exports = function settingsRoutes(deps) {
     current.discordUsername    = current.discordUsername    || name;
     await saveSettings(syntheticId, current);
     res.json({ ok: true, scope: 'name', name, syntheticId, count: cleaned.length });
-  });
-
-  // ── Payment claim submission (user-facing) ─────────────────────
-  router.post('/api/payment/claim', requireAuth, async (req, res) => {
-    if (!subscriptions) return res.status(503).json({ error: 'Subscriptions not available' });
-    const { tier, method, reference } = req.body || {};
-    if (!tier || !method || !reference) return res.status(400).json({ error: 'tier, method, and reference required' });
-    if (!['basic', 'pro', 'ultimate', 'supporter', 'champion'].includes(tier)) return res.status(400).json({ error: 'Invalid tier' });
-    if (!['eth', 'rainbet'].includes(method)) return res.status(400).json({ error: 'Method must be eth or rainbet' });
-    if (typeof reference !== 'string' || reference.length > 256) return res.status(400).json({ error: 'Invalid reference' });
-    try {
-      const id = await subscriptions.createPaymentClaim(req.user.id, tier, method, reference);
-      res.json({ ok: true, claimId: id });
-    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   return router;

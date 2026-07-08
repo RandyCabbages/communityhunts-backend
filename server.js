@@ -139,6 +139,9 @@ const {
 // ── Middleware ─────────────────────────────────────────────────────
 app.set('trust proxy', 1);
 app.use(cors({ origin: corsOrigin, credentials: true }));
+// Stripe webhook needs the raw body for signature verification — mount
+// before the global JSON parser so it gets the unparsed Buffer.
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '256kb' }));
 
 // Postgres pool — shared by session store and user_settings
@@ -235,6 +238,10 @@ const subscriptions = require('./lib/subscriptions');
 subscriptions.initSubscriptions({ pgPool }).catch(e => console.error('[subscriptions] init error:', e.message));
 const featureGrants = require('./lib/featureGrants');
 featureGrants.initFeatureGrants({ pgPool }).catch(e => console.error('[grants] init error:', e.message));
+const stripeLib = require('./lib/stripe');
+stripeLib.initStripe({ pgPool, subscriptions }).catch(e => console.error('[stripe] init error:', e.message));
+const features = require('./lib/features');
+features.initFeatures({ subscriptions });
 
 // Community memberships (which communities a user belongs to). One-time backfill attributes
 // every previously-known user to Bean; new users auto-join the slug they sign in through.
@@ -457,6 +464,16 @@ app.use(require('./routes/settings.routes')({
   settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions, featureGrants,
   hunts, archive,
 }));
+
+// Stripe checkout, portal, and webhook routes (routes/stripe.routes.js).
+app.use(require('./routes/stripe.routes')({ requireAuth, stripeLib, FRONTEND_URL }));
+
+// Cosmetics purchase + inventory routes (routes/cosmetics.routes.js).
+const cosmeticsRouter = require('./routes/cosmetics.routes')({
+  requireAuth, settings, stripeLib, subscriptions, FRONTEND_URL,
+});
+app.use(cosmeticsRouter);
+stripeLib.setCosmeticGrantFn(cosmeticsRouter._grantItem);
 
 // Standalone tracker routes (paid product, no tenant context).
 app.use(require('./routes/tracker.routes')({

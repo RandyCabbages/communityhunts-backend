@@ -51,9 +51,8 @@ module.exports = function authRoutes(deps) {
     if (!req.user) return res.json({ user: null });
     recordKnownUser(req.user);
     memberships.joinCommunity(req.user.id, req.tenant.id).catch(() => {});
-    const [sub, premiumTier, freshRoles] = await Promise.all([
+    const [sub, freshRoles] = await Promise.all([
       subscriptions ? subscriptions.getSubscription(req.user.id) : null,
-      subscriptions ? subscriptions.getPremiumTier(req.user.id) : 'none',
       refreshGuildRoles ? refreshGuildRoles(req.user.id, req.tenant) : null,
     ]);
     if (freshRoles) {
@@ -62,7 +61,7 @@ module.exports = function authRoutes(deps) {
     }
     res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isCommunityMod: reqIsMod(req), isPlatformAdmin: isPlatformAdmin(req.user),
       ...guildFlags(req.user),
-      subscription: sub || { tier: 'free' }, premiumTier: premiumTier || 'none',
+      subscription: sub || { tier: 'free' },
       featureGrants: featureGrants ? featureGrants.getGrantsForUser(req.user.id) : [] },
       token: signToken(req.user) });
   });
