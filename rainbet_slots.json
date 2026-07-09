@@ -45683,5 +45683,15 @@
     "rainbetSlug": "blueprint-meerkat-mayhem",
     "name": "Meerkat Mayhem",
     "thumb": "https://cdn.softswiss.net/i/s4/blueprint/MeerkatMayhem.webp"
+  },
+  {
+    "rainbetSlug": "play-n-go-legion-gold-and-the-throne-of-dead",
+    "name": "Legion Gold and the Throne of Dead",
+    "thumb": "https://cdn.softswiss.net/i/s4/playngo/LegionGoldAndTheThroneOfDead.webp"
+  },
+  {
+    "rainbetSlug": "nownow-gaming-skull-fiesta",
+    "name": "Skull Fiesta",
+    "thumb": null
   }
 ]
