@@ -91,7 +91,7 @@ async function isPurchaseEligible(u, subscriptions, isAdmin) {
 const NOT_ELIGIBLE_MSG = 'Join a community or get an individual plan to purchase.';
 
 module.exports = function cosmeticsRoutes(deps) {
-  const { requireAuth, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin } = deps;
+  const { requireAuth, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension } = deps;
   const { getSettings, saveSettings } = settings;
   const router = express.Router();
 
@@ -140,6 +140,8 @@ module.exports = function cosmeticsRoutes(deps) {
     try {
       if (!stripeLib || !stripeLib.isEnabled()) return res.status(503).json({ error: 'Payments not configured' });
       if (!process.env.STRIPE_PRICE_EXT_FULL) return res.status(503).json({ error: 'Extension subscription not configured yet' });
+      // Already entitled (VIP/mod/guild-VIP/plan/grant) → never create a paid sub for it.
+      if (await reqHasFullExtension(req)) return res.json({ alreadyEntitled: true });
       if (!(await isPurchaseEligible(req.user, subscriptions, isAdmin))) return res.status(403).json({ error: NOT_ELIGIBLE_MSG });
       const { url } = await stripeLib.createExtensionSubscriptionSession(
         req.user.id,

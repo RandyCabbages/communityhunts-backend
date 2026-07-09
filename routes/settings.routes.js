@@ -15,10 +15,10 @@
 const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
 const { isItemAccessible, ITEM_TIERS } = require('./cosmetics.routes');
-const { userCanUse, hasFullExtension } = require('../lib/features');
+const { userCanUse } = require('../lib/features');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive } = deps;
   const { getSettings, saveSettings, resolveUserIdByName } = settings;
   const { computeUserHuntStats } = require('../lib/userStats');
 
@@ -111,10 +111,10 @@ module.exports = function settingsRoutes(deps) {
 
   // GET /api/extension/entitlement — does the caller have Full (Rainbet) extension access?
   // The self-distributed Full extension calls this on load to gate its Rainbet features
-  // (Sub-project B). CORS already allows chrome-extension:// / moz-extension:// origins.
+  // (Sub-project B). Tenant VIPs/mods/guild-VIPs get it free (see reqHasFullExtension in
+  // server.js). CORS already allows chrome-extension:// / moz-extension:// origins.
   router.get('/api/extension/entitlement', requireAuth, async (req, res) => {
-    const fullAccess = await hasFullExtension(req.user.id, req.tenant?.plan);
-    res.json({ fullAccess });
+    res.json({ fullAccess: await reqHasFullExtension(req) });
   });
 
   // POST /api/admin/grandfather-full-extension — one-time backfill granting Full-extension

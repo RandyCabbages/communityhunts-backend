@@ -293,6 +293,17 @@ const {
   uid, touch,
 } = huntsCore;
 
+// Full (Rainbet) extension entitlement, request-scoped. A tenant's VIP roles (VIP host,
+// mod, Discord-guild VIP) unlock it for free; otherwise fall back to the plan-ladder / grant
+// check in features.hasFullExtension. Injected into the entitlement route (gates the download
+// page view AND the extension's in-app Rainbet features) and the subscribe route (so a VIP is
+// never charged). reqIsAdmin is folded into both reqIsVipHost and reqIsMod.
+async function reqHasFullExtension(req) {
+  if (!req.user) return false;
+  const isTenantVip = reqIsVipHost(req) || reqIsMod(req) || !!req.user.isDiscordVip;
+  return isTenantVip || await features.hasFullExtension(req.user.id, req.tenant?.plan);
+}
+
 // Auth + community-membership routes (routes/auth.routes.js). Mounted here, after the lib deps
 // exist. Passport strategy is configured above; resolveTenant (global) already set req.tenant.
 app.use(require('./routes/auth.routes')({
@@ -486,7 +497,7 @@ app.use(require('./routes/misc.routes')({ hunts, archive }));
 
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
-  settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions, featureGrants,
+  settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants,
   hunts, archive,
 }));
 
@@ -495,7 +506,7 @@ app.use(require('./routes/stripe.routes')({ requireAuth, stripeLib, FRONTEND_URL
 
 // Cosmetics purchase + inventory routes (routes/cosmetics.routes.js).
 const cosmeticsRouter = require('./routes/cosmetics.routes')({
-  requireAuth, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin,
+  requireAuth, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension,
 });
 app.use(cosmeticsRouter);
 stripeLib.setCosmeticGrantFn(cosmeticsRouter._grantItem);
