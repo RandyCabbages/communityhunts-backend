@@ -15,7 +15,7 @@
 const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
 const { isItemAccessible, ITEM_TIERS } = require('./cosmetics.routes');
-const { userCanUse } = require('../lib/features');
+const { userCanUse, hasFullExtension } = require('../lib/features');
 
 module.exports = function settingsRoutes(deps) {
   const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive } = deps;
@@ -104,6 +104,26 @@ module.exports = function settingsRoutes(deps) {
     !s.anonymous
     || (req.user && String(req.user.id) === String(targetId))
     || (typeof reqIsMod === 'function' && reqIsMod(req));
+
+  // GET /api/extension/entitlement — does the caller have Full (Rainbet) extension access?
+  // The self-distributed Full extension calls this on load to gate its Rainbet features
+  // (Sub-project B). CORS already allows chrome-extension:// / moz-extension:// origins.
+  router.get('/api/extension/entitlement', requireAuth, async (req, res) => {
+    const s = await getSettings(req.user.id);
+    const fullAccess = await hasFullExtension(req.user.id, req.tenant?.plan, s.cosmeticsOwned || []);
+    res.json({ fullAccess });
+  });
+
+  // POST /api/admin/grandfather-full-extension — one-time backfill granting Full-extension
+  // access to all existing users (run once at Sub-project B launch so updates don't cut
+  // anyone off). Idempotent.
+  router.post('/api/admin/grandfather-full-extension', requireAuth, requireAdmin, async (req, res) => {
+    if (!featureGrants?.grandfatherGrant) return res.status(503).json({ error: 'grants unavailable' });
+    try {
+      const granted = await featureGrants.grandfatherGrant('full_extension', `grandfather-by-${req.user.id}`);
+      res.json({ ok: true, granted });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
 
   // GET /api/settings/:userId — get another user's preferred slots and rainbet name by Discord ID
   router.get('/api/settings/:userId', requireAuth, async (req, res) => {

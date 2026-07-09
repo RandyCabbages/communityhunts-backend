@@ -252,7 +252,7 @@ featureGrants.initFeatureGrants({ pgPool }).catch(e => console.error('[grants] i
 const stripeLib = require('./lib/stripe');
 stripeLib.initStripe({ pgPool, subscriptions }).catch(e => console.error('[stripe] init error:', e.message));
 const features = require('./lib/features');
-features.initFeatures({ subscriptions });
+features.initFeatures({ subscriptions, featureGrants });
 
 // Community memberships (which communities a user belongs to). One-time backfill attributes
 // every previously-known user to Bean; new users auto-join the slug they sign in through.
