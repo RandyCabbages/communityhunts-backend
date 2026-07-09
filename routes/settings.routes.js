@@ -205,20 +205,20 @@ module.exports = function settingsRoutes(deps) {
     res.json({ ok: true, scope: 'name', name, syntheticId, rainbetName });
   });
 
-  // GET /api/admin/users — list users in the CURRENT tenant (community_members ⨝ known_users ⨝ user_settings).
-  // Tenant-scoped: a community admin only sees their own community's members.
+  // GET /api/admin/users — list users (known_users ⨝ user_settings). INTERIM: not tenant-scoped
+  // (known_users has no tenant column); fine while Bean is the only user-bearing tenant. Per-tenant
+  // scoping is P4. Membership (community_members) is now affiliate-only, so it can't back this list.
   router.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
     if (!pgPool) return res.json({ users: [] });
-    const tenantId = req.tenant?.id || 'bean';
     const q = String(req.query.q || '').trim().toLowerCase();
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     try {
-      const params = [tenantId];
-      let where = `cm.tenant_id = $1`;
+      const params = [];
+      let where = '';
       if (q) {
         params.push(`%${q}%`);
-        where += ` AND (LOWER(ku.display_name) LIKE $${params.length}
+        where = `WHERE (LOWER(ku.display_name) LIKE $${params.length}
                      OR LOWER(ku.username) LIKE $${params.length}
                      OR ku.user_id LIKE $${params.length})`;
       }
@@ -226,10 +226,9 @@ module.exports = function settingsRoutes(deps) {
       const sql = `
         SELECT ku.user_id, ku.display_name, ku.username, ku.avatar, ku.last_seen,
                us.settings
-        FROM community_members cm
-        JOIN known_users ku ON ku.user_id = cm.user_id
-        LEFT JOIN user_settings us ON us.user_id = cm.user_id
-        WHERE ${where}
+        FROM known_users ku
+        LEFT JOIN user_settings us ON us.user_id = ku.user_id
+        ${where}
         ORDER BY ku.last_seen DESC NULLS LAST
         LIMIT $${params.length - 1} OFFSET $${params.length}`;
       const r = await pgPool.query(sql, params);
@@ -254,13 +253,7 @@ module.exports = function settingsRoutes(deps) {
   router.get('/api/admin/users/:userId', requireAuth, requireAdmin, async (req, res) => {
     const userId = String(req.params.userId);
     const tenantId = req.tenant?.id || 'bean';
-    const platform = isPlatformAdmin(req.user);
     try {
-      if (pgPool && !platform) {
-        const m = await pgPool.query(
-          'SELECT 1 FROM community_members WHERE user_id=$1 AND tenant_id=$2', [userId, tenantId]);
-        if (m.rowCount === 0) return res.status(404).json({ error: 'User not in this community' });
-      }
       let identity = { id: userId, displayName: null, username: null, avatar: null, lastSeen: null };
       if (pgPool) {
         const r = await pgPool.query(
