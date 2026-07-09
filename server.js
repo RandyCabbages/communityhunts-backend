@@ -345,7 +345,11 @@ app.use(require('./routes/mods.routes')({
 // Platform-wide announcements ("patch notes") — public read, owner-only publish.
 const announcements = require('./lib/announcements');
 announcements.initAnnouncements({ pgPool }).catch(e => console.error('[announce] init error:', e.message));
-app.use(require('./routes/announcements.routes')({ requireAuth, requirePlatformAdmin, announcements }));
+app.use(require('./routes/announcements.routes')({
+  requireAuth, requirePlatformAdmin, announcements,
+  botToken: process.env.DISCORD_BOT_TOKEN,
+  announcementsChannelId: process.env.DISCORD_ANNOUNCEMENTS_CHANNEL_ID,
+}));
 
 // OverDrop — mod-controlled stream overlay (routes/overdrop.routes.js). State + socket
 // broadcasts live in lib/overdrop.js; sockets stay read-only (see that file's security note).
