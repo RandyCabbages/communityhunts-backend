@@ -10,6 +10,7 @@
 // huntCallRequests is process-local pending-request state, owned here.
 
 const express = require('express');
+const { sanitizeBonusReplayUrls } = require('../lib/hunts-core');
 
 module.exports = function callsRoutes(deps) {
   const {
@@ -92,7 +93,7 @@ module.exports = function callsRoutes(deps) {
     if (!hunt) return res.status(404).json({error:'Hunt not found'});
     if (rejectBadHuntInput(req, res)) return;
     const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
-    if (bonuses     !== undefined) hunt.bonuses     = bonuses;
+    if (bonuses     !== undefined) hunt.bonuses     = sanitizeBonusReplayUrls(bonuses);
     if (equity      !== undefined) hunt.equity      = equity;
     if (calls       !== undefined) hunt.calls       = calls;
     if (huntType    !== undefined) hunt.huntType    = huntType;
