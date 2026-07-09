@@ -347,7 +347,7 @@ const announcements = require('./lib/announcements');
 announcements.initAnnouncements({ pgPool }).catch(e => console.error('[announce] init error:', e.message));
 app.use(require('./routes/announcements.routes')({
   requireAuth, requirePlatformAdmin, announcements,
-  botToken: process.env.DISCORD_BOT_TOKEN,
+  envBotToken: process.env.DISCORD_BOT_TOKEN,
   announcementsChannelId: process.env.DISCORD_ANNOUNCEMENTS_CHANNEL_ID,
 }));
 
