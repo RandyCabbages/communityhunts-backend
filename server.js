@@ -511,6 +511,13 @@ stripeLib.setCommunityProvisionFn(async (action, meta) => {
     }
   } catch (e) { console.error('[stripe] community provision error:', e.message); }
 });
+// Full-extension subscription lifecycle → grant/revoke the featureGrants entry.
+stripeLib.setFullExtensionFn(async (action, userId) => {
+  try {
+    if (action === 'grant') await featureGrants.addGrant(userId, 'full_extension', 'stripe-sub');
+    else await featureGrants.removeGrant(userId, 'full_extension');
+  } catch (e) { console.error('[stripe] full_extension grant error:', e.message); }
+});
 
 // Standalone tracker routes (paid product, no tenant context).
 app.use(require('./routes/tracker.routes')({

@@ -109,8 +109,7 @@ module.exports = function settingsRoutes(deps) {
   // The self-distributed Full extension calls this on load to gate its Rainbet features
   // (Sub-project B). CORS already allows chrome-extension:// / moz-extension:// origins.
   router.get('/api/extension/entitlement', requireAuth, async (req, res) => {
-    const s = await getSettings(req.user.id);
-    const fullAccess = await hasFullExtension(req.user.id, req.tenant?.plan, s.cosmeticsOwned || []);
+    const fullAccess = await hasFullExtension(req.user.id, req.tenant?.plan);
     res.json({ fullAccess });
   });
 
