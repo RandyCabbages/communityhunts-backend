@@ -38,7 +38,10 @@ module.exports = function settingsRoutes(deps) {
 
   // GET /api/settings — get current user's settings
   router.get('/api/settings', requireAuth, async (req, res) => {
-    res.json(await getSettings(req.user.id));
+    const s = await getSettings(req.user.id);
+    // Big-win replay capture threshold (x). Absent for existing users → default 300.
+    if (typeof s.replayThreshold !== 'number') s.replayThreshold = 300;
+    res.json(s);
   });
 
   // PUT /api/settings — save current user's settings (also stores their Discord names for lookup)
@@ -49,6 +52,11 @@ module.exports = function settingsRoutes(deps) {
     if (twitchName  !== undefined)    current.twitchName     = String(twitchName).trim().slice(0, 64);
     if (preferredSlots !== undefined) current.preferredSlots = (preferredSlots || []).filter(Boolean);
     if (req.body.anonymous !== undefined) current.anonymous  = !!req.body.anonymous;
+    if (req.body.replayThreshold !== undefined) {
+      // Big-win replay threshold (x). 0 disables prompting. Garbage falls back to the default.
+      const n = Number(req.body.replayThreshold);
+      current.replayThreshold = Number.isFinite(n) && n >= 0 ? Math.min(n, 1000000) : 300;
+    }
     if (req.body.overlayConfig !== undefined) current.overlayConfig = sanitizeOverlayConfig(req.body.overlayConfig);
     if (req.body.cosmetics !== undefined) {
       const c = req.body.cosmetics && typeof req.body.cosmetics === 'object' ? req.body.cosmetics : {};

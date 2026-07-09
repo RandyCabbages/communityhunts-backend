@@ -3,6 +3,7 @@
 // Hunts stored in the same hunts singleton with a 'tracker:' prefixed key.
 
 const express = require('express');
+const { sanitizeBonusReplayUrls } = require('../lib/hunts-core');
 
 module.exports = function trackerRoutes(deps) {
   const {
@@ -70,7 +71,7 @@ module.exports = function trackerRoutes(deps) {
     const allowed = ['bonuses', 'equity', 'calls', 'callLimit', 'huntMode', 'lockTop4',
       'roundRobin', 'currentSlot', 'manualOrder', 'huntType', 'currency'];
     for (const f of allowed) {
-      if (req.body[f] !== undefined) hunt[f] = req.body[f];
+      if (req.body[f] !== undefined) hunt[f] = f === 'bonuses' ? sanitizeBonusReplayUrls(req.body[f]) : req.body[f];
     }
     touch(hunt);
     persistHunts();

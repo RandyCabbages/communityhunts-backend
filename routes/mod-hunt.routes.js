@@ -9,6 +9,7 @@
 // Behavior unchanged from the inline routes; every hunt:update goes through publicHuntView.
 
 const express = require('express');
+const { sanitizeBonusReplayUrls } = require('../lib/hunts-core');
 
 module.exports = function modHuntRoutes(deps) {
   const {
@@ -52,7 +53,7 @@ module.exports = function modHuntRoutes(deps) {
     const key = modHuntKey(req.tenant.id);
     if (!hunts[key]) hunts[key] = emptyModHunt(req.tenant.id);
     const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
-    if (bonuses    !== undefined) hunts[key].bonuses    = bonuses;
+    if (bonuses    !== undefined) hunts[key].bonuses    = sanitizeBonusReplayUrls(bonuses);
     if (equity     !== undefined) hunts[key].equity     = equity;
     if (calls      !== undefined) hunts[key].calls      = calls;
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
@@ -176,7 +177,7 @@ module.exports = function modHuntRoutes(deps) {
     const key = affiliateHuntKey(req.tenant.id);
     if (!hunts[key]) hunts[key] = emptyAffiliateHunt(req.tenant.id);
     const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
-    if (bonuses    !== undefined) hunts[key].bonuses    = bonuses;
+    if (bonuses    !== undefined) hunts[key].bonuses    = sanitizeBonusReplayUrls(bonuses);
     if (equity     !== undefined) hunts[key].equity     = equity;
     if (calls      !== undefined) hunts[key].calls      = calls;
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
