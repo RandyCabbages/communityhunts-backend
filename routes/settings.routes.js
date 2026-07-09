@@ -248,8 +248,9 @@ module.exports = function settingsRoutes(deps) {
     }
   });
 
-  // GET /api/admin/users/:userId — one user's full profile. Tenant-guarded: 404 unless the target
-  // is a member of req.tenant — UNLESS the caller is a platform admin (who may inspect anyone).
+  // GET /api/admin/users/:userId — one user's full profile. INTERIM: no membership guard (see the
+  // /api/admin/users comment above) — any known user's profile is visible to any tenant admin.
+  // Per-tenant scoping is P4. `stats` below are still computed against req.tenant's hunts.
   router.get('/api/admin/users/:userId', requireAuth, requireAdmin, async (req, res) => {
     const userId = String(req.params.userId);
     const tenantId = req.tenant?.id || 'bean';
