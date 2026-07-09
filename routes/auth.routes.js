@@ -21,6 +21,25 @@ module.exports = function authRoutes(deps) {
   } = deps;
   const router = express.Router();
 
+  // Membership == role. Keep community_members in sync with the user's current role for the
+  // tenant they're authenticating through: join if they qualify, evict if we KNOW they don't,
+  // and do nothing when their guild roles are undetermined (a transient Discord lookup failure
+  // must not churn the table). Replaces the old "auto-join everyone" behavior.
+  function reconcileMembership(req) {
+    const u = req.user;
+    if (!u || !req.tenant || !req.tenant.id) return;
+    const determined = ('isAffiliate' in u) || ('isDiscordVip' in u) || ('isDiscordMod' in u);
+    const qualifies =
+      reqIsAdmin(req) || reqIsVipHost(req) || reqIsMod(req) ||
+      !!u.isAffiliate || !!u.isDiscordVip || !!u.isDiscordMod;
+    if (qualifies) {
+      memberships.joinCommunity(u.id, req.tenant.id).catch(() => {});
+    } else if (determined) {
+      memberships.leaveCommunity(u.id, req.tenant.id).catch(() => {});
+    }
+    // undetermined & not otherwise-qualified → no-op
+  }
+
   router.get('/auth/discord', (req, res, next) => {
     if (req.query.returnTo) req.session.returnTo = req.query.returnTo;
     passport.authenticate('discord')(req, res, next);
@@ -30,8 +49,9 @@ module.exports = function authRoutes(deps) {
     (req, res) => {
       // Record this user as known so they show up in equity-name autocomplete for others
       recordKnownUser(req.user);
-      // Auto-join the community they signed in through (Bean today; the slug they arrived via later).
-      memberships.joinCommunity(req.user.id, req.tenant.id).catch(() => {});
+      // Sync membership to their role for the community they signed in through (Bean today; the
+      // slug they arrived via later). Guild flags are already on req.user from the passport strategy.
+      reconcileMembership(req);
       const userData = Buffer.from(JSON.stringify({
         id: req.user.id, username: req.user.username,
         displayName: req.user.displayName, avatar: req.user.avatar,
@@ -50,7 +70,6 @@ module.exports = function authRoutes(deps) {
   router.get('/auth/me', async (req, res) => {
     if (!req.user) return res.json({ user: null });
     recordKnownUser(req.user);
-    memberships.joinCommunity(req.user.id, req.tenant.id).catch(() => {});
     const [sub, freshRoles] = await Promise.all([
       subscriptions ? subscriptions.getSubscription(req.user.id) : null,
       refreshGuildRoles ? refreshGuildRoles(req.user.id, req.tenant) : null,
@@ -59,6 +78,7 @@ module.exports = function authRoutes(deps) {
       Object.assign(req.user, freshRoles);
       req.session.passport && (req.session.passport.user = req.user);
     }
+    reconcileMembership(req);
     res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isCommunityMod: reqIsMod(req), isPlatformAdmin: isPlatformAdmin(req.user),
       ...guildFlags(req.user),
       subscription: sub || { tier: 'free' },

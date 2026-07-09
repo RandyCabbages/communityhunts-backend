@@ -254,11 +254,10 @@ stripeLib.initStripe({ pgPool, subscriptions }).catch(e => console.error('[strip
 const features = require('./lib/features');
 features.initFeatures({ subscriptions, featureGrants });
 
-// Community memberships (which communities a user belongs to). One-time backfill attributes
-// every previously-known user to Bean; new users auto-join the slug they sign in through.
+// Community memberships (which communities a user belongs to). Membership is reconciled from
+// the user's role at auth time (see reconcileMembership in auth.routes).
 const memberships = require('./lib/memberships');
 memberships.initMemberships({ pgPool })
-  .then(() => memberships.backfillExistingUsersToBean(tenants.BEAN_TENANT.id))
   .catch(e => console.error('[memberships] init error:', e.message));
 
 // Inject auth deps now that every collaborator exists. The gate functions were already
