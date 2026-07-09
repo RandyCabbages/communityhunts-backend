@@ -13,7 +13,7 @@
 // hunts/archive are persistence-owned singletons (by reference). hunt:update via publicHuntView.
 
 const express = require('express');
-const { CURRENCIES, sanitizeBonusReplayUrls } = require('../lib/hunts-core');
+const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent } = require('../lib/hunts-core');
 
 module.exports = function huntsRoutes(deps) {
   const {
@@ -133,11 +133,11 @@ module.exports = function huntsRoutes(deps) {
     if (currency !== undefined && !CURRENCIES.includes(currency))
       return res.status(400).json({ error: 'Invalid currency' });
     const bal = (Number.isFinite(+startingBalance) && +startingBalance >= 0) ? +startingBalance : undefined;
-    // One active hunt per user: block a new hunt while the current one is still
-    // live or has progress (bonuses/calls). The user must End or Reset it first.
-    // An ended hunt (archivedAt set) or an empty fresh shell can be replaced.
+    // One active hunt per user: block a new hunt while the current one still has content
+    // (bonuses / real equity / non-solo calls). Since hunts are born live, an empty shell
+    // or an ended hunt (archivedAt set) can always be replaced.
     const current = hunts[req.user.id];
-    if (current && !current.archivedAt && (current.isLive || current.bonuses?.length > 0 || current.calls?.length > 0)) {
+    if (current && !current.archivedAt && huntHasContent(current)) {
       return res.status(409).json({ error: 'You already have an active hunt. End or reset it before starting a new one.' });
     }
     // Archive previous hunt if it had any bonuses
@@ -146,7 +146,7 @@ module.exports = function huntsRoutes(deps) {
       archiveHunt(hunts[req.user.id]);
     }
     hunts[req.user.id] = {
-      user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
+      user: req.user, huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null, tenantId: req.tenant.id,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant, bal), calls: [], invitedEditors: [], callLimit: huntType === 'solo' ? 0 : huntType === 'community' ? 20 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: currency || 'USD', publicCalls: false, publicCallsPin: null
     };
@@ -216,7 +216,7 @@ module.exports = function huntsRoutes(deps) {
     // Preserve the hunt type across a reset — resetting a VIP hunt should stay
     // VIP (re-seeded with Bean), not silently demote to community.
     const keepType = ['vip','solo'].includes(hunts[req.user.id]?.huntType) ? hunts[req.user.id].huntType : 'community';
-    hunts[req.user.id] = { user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
+    hunts[req.user.id] = { user: req.user, huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null, tenantId: req.tenant.id,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: keepType === 'solo' ? 0 : keepType === 'community' ? 20 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null };
     persistHunts();
