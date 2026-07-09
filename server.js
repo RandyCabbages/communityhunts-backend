@@ -288,7 +288,7 @@ huntsCore.initHuntsCore({
 });
 const {
   MOD_HUNT_ID, AFFILIATE_HUNT_ID, modHuntKey, affiliateHuntKey,
-  huntSummary, huntCompleted, tenantOf, inTenant,
+  huntSummary, huntCompleted, huntHasContent, tenantOf, inTenant,
   getPublicHunts, getArchivedHunts, getAllHunts, getSlotCallCounts, getGotInLog, getHuntsFullExport,
   emitHubUpdate, publicHuntView, emitHuntUpdate,
   uid, touch,
@@ -371,14 +371,16 @@ app.use(require('./routes/share.routes')({
 }));
 
 // ── Stale-hunt janitor ─────────────────────────────────────────────
-// Reap abandoned hunts after 36h of inactivity so the directory stays honest and storage bounded.
-// Idle is measured from updatedAt (created/live) or archivedAt (ended). Rules:
-//   • created, never went live     → delete
-//   • live, abandoned, has bonuses → auto-end + archive (kept as history)
-//   • live, abandoned, 0 bonuses   → delete (nothing worth keeping)
-//   • ended, incomplete            → delete (+ drop its archive snapshot)
-//   • ended/archived, completed    → keep
+// Hunts are born live. Idle is measured from updatedAt (live) or archivedAt (ended). Rules:
+//   • live, no content (empty), idle ≥ 1h  → delete (dead-reap) — regular user hunts only
+//   • live, has content, abandoned ≥ 36h   → auto-end + archive (kept as history)
+//   • ended, incomplete, idle ≥ 36h        → delete (+ drop its archive snapshot)
+//   • ended/archived, completed            → keep
+// The 1h dead-reap skips the persistent shared mod/affiliate hunts and per-user paid tracker
+// hunts (tracker:/__mod_hunt__/__affiliate_hunt__ keys) — those keep the 36h grace so a mod
+// clearing the board or a subscriber's idle tracker isn't nuked mid-session.
 const STALE_MS = 36 * 60 * 60 * 1000;
+const EMPTY_STALE_MS = 60 * 60 * 1000; // 1h — an empty live regular hunt is reaped this fast
 function cleanupStaleHunts() {
   const now = Date.now();
   const idleMs = ts => now - new Date(ts || 0).getTime();
@@ -390,6 +392,14 @@ function cleanupStaleHunts() {
   for (const [id, h] of Object.entries(hunts)) {
     if (!h || !h.user) continue;
     if (h.isLive) {
+      // Dead-reap: an empty regular user hunt idle ≥ 1h → delete outright. Persistent shared
+      // (mod/affiliate) and paid tracker hunts are exempt — they fall through to the 36h rules.
+      const persistentKey = id.startsWith('tracker:') || id.startsWith(MOD_HUNT_ID) || id.startsWith(AFFILIATE_HUNT_ID);
+      if (!persistentKey && !huntHasContent(h) && idleMs(h.updatedAt || h.startedAt) >= EMPTY_STALE_MS) {
+        delete hunts[id]; deleted++;
+        affectedTenants.add(tenantOf(h)); touchedRooms.push(id); huntsChanged = true;
+        continue;
+      }
       if (idleMs(h.updatedAt || h.startedAt) < STALE_MS) continue;
       h.isLive = false;
       h.updatedAt = new Date().toISOString();
@@ -428,7 +438,7 @@ function cleanupStaleHunts() {
 }
 // Run once after persistence settles, then hourly.
 setTimeout(cleanupStaleHunts, 30 * 1000);
-setInterval(cleanupStaleHunts, 60 * 60 * 1000);
+setInterval(cleanupStaleHunts, 10 * 60 * 1000);
 
 // Admin routes (routes/admin.routes.js). The janitor above stays here (composition-root
 // background task); the manual /api/admin/hunts/cleanup trigger calls the injected cleanupStaleHunts.
