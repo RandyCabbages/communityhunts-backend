@@ -138,11 +138,19 @@ GET  /auth/me                               → current user + isAdmin/isVipHost
 GET  /api/hunts                             → public live hunts
 GET  /api/hunts/:userId                     → single hunt (permission-aware)
 GET  /api/my-hunt                           → user's own hunt (auth required)
-POST /api/my-hunt/start                     → create hunt (VIP-gated)
-POST /api/my-hunt/golive                    → go live
-POST /api/my-hunt/end                       → end hunt
-POST /api/my-hunt/reset                     → reset to creating state
+POST /api/my-hunt/start                     → create hunt (VIP-gated) — BORN LIVE (isLive:true)
+POST /api/my-hunt/golive                    → go live (legacy; hunts are born live — kept for back-compat, UI no longer calls it)
+POST /api/my-hunt/end                       → end hunt (called by frontend AUTO-end when all bonuses opened; no manual end button)
+POST /api/my-hunt/reset                     → reset to a fresh (born-live) hunt
 PUT  /api/my-hunt                           → update own hunt
+
+Hunt lifecycle (2026-07-09): hunts are BORN LIVE on /start (no manual go-live/offline/end in the UI).
+A hunt leaves "live" only automatically — the frontend auto-calls /end when every bonus has a win, or
+the stale-hunt janitor (server.js) reaps it. `huntHasContent(h)` (lib/hunts-core.js) — bonuses OR a real
+equity member (amount>0 or non-`creator_auto`/`bean_auto` id) OR non-solo calls — drives BOTH the hub
+filter (getPublicHunts hides empty live hunts) and the janitor's 1h dead-reap (empty regular hunt idle
+≥1h → delete; sweep every 10m). tracker:/__mod_hunt__/__affiliate_hunt__ keys are exempt from the 1h
+reap and keep the 36h grace.
 
 POST /api/hunts/:userId/calls               → add slot call (equity members)
 PUT  /api/hunts/:userId                     → edit any hunt (editors)
