@@ -33,6 +33,11 @@ const ITEM_TIERS = {
   bg_aurora:'pro', bg_nebula:'pro', bg_space:'pro',
   bg_matrix:'ultimate',
   bg_smoke:null, bg_grid:null,
+
+  // The Full (Rainbet) extension — one-time purchase. tier:null = purchase-only via
+  // the cosmetics checkout; ownership ('ext_full' in cosmeticsOwned) is one of the
+  // paths hasFullExtension() accepts. (Ultimate/Enterprise get it via canUse, not here.)
+  ext_full:null,
 };
 
 const TIER_RANK = { free: 0, basic: 1, pro: 2, ultimate: 3, admin: 99 };
@@ -61,6 +66,10 @@ const COSMETIC_PRICES = {
   flair_rocket:     'price_1TqCEPRrpLw0LHPUdak9GC16',
   bg_grid:          'price_1TqCERRrpLw0LHPUdlVzRAX6',
   bg_smoke:         'price_1TqCERRrpLw0LHPUZeuRe0zK',
+  // Full (Rainbet) extension one-time purchase. Set STRIPE_PRICE_EXT_FULL in the
+  // backend env to the LIVE price id once the Stripe product exists; until then the
+  // Shop card shows but checkout returns "not available for individual purchase".
+  ext_full:         process.env.STRIPE_PRICE_EXT_FULL || null,
 };
 
 module.exports = function cosmeticsRoutes(deps) {
