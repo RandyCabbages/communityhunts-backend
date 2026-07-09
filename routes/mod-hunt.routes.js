@@ -34,7 +34,7 @@ module.exports = function modHuntRoutes(deps) {
   function emptyModHunt(tenantId) {
     return {
       user: { id: modHuntKey(tenantId), displayName: hostNameFor(tenantId), avatar: null },
-      huntId: uid(), isLive: false, startedAt: null, archivedAt: null,
+      huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null,
       tenantId: tenantId || 'bean',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       huntType: 'solo', bonuses: [], equity: [{ id: 'bean_auto', name: hostNameFor(tenantId), amount: 0, isRollWinner: false }],
@@ -155,7 +155,7 @@ module.exports = function modHuntRoutes(deps) {
   function emptyAffiliateHunt(tenantId) {
     return {
       user: { id: affiliateHuntKey(tenantId), displayName: hostNameFor(tenantId), avatar: null },
-      huntId: uid(), isLive: false, startedAt: null, archivedAt: null,
+      huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null,
       tenantId: tenantId || 'bean',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       huntType: 'vip', bonuses: [],

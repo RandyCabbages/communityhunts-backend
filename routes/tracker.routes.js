@@ -44,7 +44,8 @@ module.exports = function trackerRoutes(deps) {
     hunts[key] = {
       user: { id: req.user.id, username: req.user.username, displayName: req.user.displayName, avatar: req.user.avatar },
       huntId: uid(),
-      isLive: false,
+      isLive: true,
+      startedAt: new Date().toISOString(),
       huntType,
       bonuses: [],
       calls: [],
