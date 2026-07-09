@@ -63,8 +63,34 @@ const COSMETIC_PRICES = {
   bg_smoke:         'price_1TqCERRrpLw0LHPUZeuRe0zK',
 };
 
+// ── Purchase eligibility ────────────────────────────────────────────────────
+// Mirrors frontend src/auth/purchase.js + roles.isAffiliate. A user may BUY from the Shop
+// (cosmetics + the Full extension) only if they are an admin, OR hold an active individual
+// subscription, OR carry the affiliate/VIP guild role. Fails OPEN when guild-role flags are
+// absent (roles not yet determined — e.g. DISCORD_GUILD_ID unset), matching the frontend's
+// hasGuildFlags net so a config gap can't lock buyers out.
+function subActive(sub) {
+  if (!sub || sub.tier === 'free') return false;
+  if (!sub.expiresAt) return true;
+  return new Date(sub.expiresAt) > new Date();
+}
+function hasGuildFlags(u) {
+  return !!(u && ('isAffiliate' in u || 'isDiscordVip' in u || 'isDiscordMod' in u));
+}
+function isAffiliateLike(u, isAdmin) {
+  if (!u) return false;
+  if (isAdmin && isAdmin(u)) return true;
+  if (!hasGuildFlags(u)) return true; // roles undetermined → fail open (matches frontend roles.js)
+  return !!(u.isAffiliate || u.isDiscordVip);
+}
+async function isPurchaseEligible(u, subscriptions, isAdmin) {
+  if (isAffiliateLike(u, isAdmin)) return true;
+  return subActive(await subscriptions.getSubscription(u.id));
+}
+const NOT_ELIGIBLE_MSG = 'Join a community or get an individual plan to purchase.';
+
 module.exports = function cosmeticsRoutes(deps) {
-  const { requireAuth, settings, stripeLib, subscriptions, FRONTEND_URL } = deps;
+  const { requireAuth, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin } = deps;
   const { getSettings, saveSettings } = settings;
   const router = express.Router();
 
@@ -76,6 +102,7 @@ module.exports = function cosmeticsRoutes(deps) {
   router.post('/api/cosmetics/purchase', requireAuth, async (req, res) => {
     try {
       if (!stripeLib || !stripeLib.isEnabled()) return res.status(503).json({ error: 'Payments not configured' });
+      if (!(await isPurchaseEligible(req.user, subscriptions, isAdmin))) return res.status(403).json({ error: NOT_ELIGIBLE_MSG });
       const { itemId } = req.body || {};
       if (!itemId || !(itemId in ITEM_TIERS)) return res.status(400).json({ error: 'Invalid item' });
 
@@ -112,10 +139,11 @@ module.exports = function cosmeticsRoutes(deps) {
     try {
       if (!stripeLib || !stripeLib.isEnabled()) return res.status(503).json({ error: 'Payments not configured' });
       if (!process.env.STRIPE_PRICE_EXT_FULL) return res.status(503).json({ error: 'Extension subscription not configured yet' });
+      if (!(await isPurchaseEligible(req.user, subscriptions, isAdmin))) return res.status(403).json({ error: NOT_ELIGIBLE_MSG });
       const { url } = await stripeLib.createExtensionSubscriptionSession(
         req.user.id,
-        `${FRONTEND_URL}/extension?subscribed=1`,
-        `${FRONTEND_URL}/extension`,
+        `${FRONTEND_URL}/shop/extension?subscribed=1`,
+        `${FRONTEND_URL}/shop/extension`,
         req.user.email || null,
         req.user.displayName || req.user.username
       );
