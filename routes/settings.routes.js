@@ -66,8 +66,12 @@ module.exports = function settingsRoutes(deps) {
     if (req.body.overlayConfig !== undefined) current.overlayConfig = sanitizeOverlayConfig(req.body.overlayConfig);
     if (req.body.cosmetics !== undefined) {
       const c = req.body.cosmetics && typeof req.body.cosmetics === 'object' ? req.body.cosmetics : {};
-      let userTier = 'free';
-      if (subscriptions) {
+      // Platform admins get the same "everything unlocked" bypass the Shop UI grants them
+      // (frontend isAdmin ⇒ tier 'admin'). Without this, an owner (who has no Stripe sub, so
+      // tier resolves to 'free') has every paid equip silently dropped by isItemAccessible
+      // below — and the tracker, which trusts the backend as source of truth, then shows nothing.
+      let userTier = isPlatformAdmin(req.user) ? 'admin' : 'free';
+      if (userTier !== 'admin' && subscriptions) {
         try { const sub = await subscriptions.getSubscription(req.user.id); userTier = sub?.tier || 'free'; } catch {}
       }
       const owned = current.cosmeticsOwned || [];
