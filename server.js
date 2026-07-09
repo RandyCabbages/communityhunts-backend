@@ -506,7 +506,7 @@ app.use(require('./routes/stripe.routes')({ requireAuth, stripeLib, FRONTEND_URL
 
 // Cosmetics purchase + inventory routes (routes/cosmetics.routes.js).
 const cosmeticsRouter = require('./routes/cosmetics.routes')({
-  requireAuth, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin,
+  requireAuth, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension,
 });
 app.use(cosmeticsRouter);
 stripeLib.setCosmeticGrantFn(cosmeticsRouter._grantItem);
