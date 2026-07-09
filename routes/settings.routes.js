@@ -15,6 +15,7 @@
 const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
 const { isItemAccessible, ITEM_TIERS } = require('./cosmetics.routes');
+const { userCanUse } = require('../lib/features');
 
 module.exports = function settingsRoutes(deps) {
   const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive } = deps;
@@ -41,6 +42,9 @@ module.exports = function settingsRoutes(deps) {
     const s = await getSettings(req.user.id);
     // Big-win replay capture threshold (x). Absent for existing users → default 300.
     if (typeof s.replayThreshold !== 'number') s.replayThreshold = 300;
+    // Replay is a Pro feature — a non-entitled caller gets 0, which disarms the
+    // capture prompt on the site and the extension (both key off threshold > 0).
+    if (!(await userCanUse('replay', req.user.id, req.tenant?.plan))) s.replayThreshold = 0;
     res.json(s);
   });
 
@@ -52,8 +56,10 @@ module.exports = function settingsRoutes(deps) {
     if (twitchName  !== undefined)    current.twitchName     = String(twitchName).trim().slice(0, 64);
     if (preferredSlots !== undefined) current.preferredSlots = (preferredSlots || []).filter(Boolean);
     if (req.body.anonymous !== undefined) current.anonymous  = !!req.body.anonymous;
-    if (req.body.replayThreshold !== undefined) {
+    if (req.body.replayThreshold !== undefined
+        && await userCanUse('replay', req.user.id, req.tenant?.plan)) {
       // Big-win replay threshold (x). 0 disables prompting. Garbage falls back to the default.
+      // Pro-gated: a non-entitled caller's threshold change is ignored (value left as-is).
       const n = Number(req.body.replayThreshold);
       current.replayThreshold = Number.isFinite(n) && n >= 0 ? Math.min(n, 1000000) : 300;
     }
@@ -117,7 +123,13 @@ module.exports = function settingsRoutes(deps) {
   // prefs only (no secrets); always returns a valid, defaults-merged config.
   router.get('/api/overlay-config/:userId', async (req, res) => {
     const s = await getSettings(req.params.userId);
-    res.json({ ...DEFAULT_OVERLAY_CONFIG, ...sanitizeOverlayConfig(s.overlayConfig || {}) });
+    // Big-win celebration + "big" row highlight fire at the streamer's replay
+    // threshold. Gate by the STREAMER's (target's) entitlement — 0 when the
+    // streamer isn't Pro, so the overlay celebrates nothing. Tenant plan comes
+    // from the request's tenant context (global resolveTenant).
+    let replayThreshold = typeof s.replayThreshold === 'number' ? s.replayThreshold : 300;
+    if (!(await userCanUse('replay', req.params.userId, req.tenant?.plan))) replayThreshold = 0;
+    res.json({ ...DEFAULT_OVERLAY_CONFIG, ...sanitizeOverlayConfig(s.overlayConfig || {}), replayThreshold });
   });
 
   // GET /api/settings/by-name/:name — look up another user's preferred slots & rainbet by their Discord username/displayName
