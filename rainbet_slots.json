@@ -45693,5 +45693,25 @@
     "rainbetSlug": "nownow-gaming-skull-fiesta",
     "name": "Skull Fiesta",
     "thumb": null
+  },
+  {
+    "rainbetSlug": "bullshark-games-blood-rebels",
+    "name": "Blood Rebels",
+    "thumb": null
+  },
+  {
+    "rainbetSlug": "bullshark-games-bullshark-brawl",
+    "name": "Bullshark Brawl",
+    "thumb": null
+  },
+  {
+    "rainbetSlug": "elk-studios-langley-street-23",
+    "name": "Langley Street 23",
+    "thumb": "https://cdn.softswiss.net/i/s4/elk/LangleyStreet23.webp"
+  },
+  {
+    "rainbetSlug": "pragmatic-play-super-serge",
+    "name": "Super Serge",
+    "thumb": "https://cdn.softswiss.net/i/s4/pragmatic/SuperSerge.webp"
   }
 ]
