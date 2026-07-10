@@ -287,7 +287,7 @@ module.exports = function settingsRoutes(deps) {
     const userId = String(req.params.userId);
     const feature = String(req.body?.feature || '').trim();
     const on = !!req.body?.on;
-    const ALLOWED = ['shop'];
+    const ALLOWED = ['shop', 'full_extension'];
     if (!ALLOWED.includes(feature)) return res.status(400).json({ error: 'unknown feature' });
     if (!featureGrants) return res.status(503).json({ error: 'grants unavailable' });
     try {
