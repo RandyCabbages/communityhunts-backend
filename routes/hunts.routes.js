@@ -208,20 +208,42 @@ module.exports = function huntsRoutes(deps) {
   });
 
   router.post('/api/my-hunt/reset', requireAuth, (req, res) => {
-    // Archive the hunt before wiping it
-    if (hunts[req.user.id] && hunts[req.user.id].bonuses?.length > 0) {
-      if (!hunts[req.user.id].archivedAt) hunts[req.user.id].archivedAt = new Date().toISOString();
-      archiveHunt(hunts[req.user.id]);
+    const prev = hunts[req.user.id];
+    // Archive the hunt before wiping it — run 1 keeps its own snapshot under its huntId
+    // (archiveHunt upserts by huntId; the new run below gets a fresh huntId, so history
+    // never collapses the two runs together).
+    if (prev && prev.bonuses?.length > 0) {
+      if (!prev.archivedAt) prev.archivedAt = new Date().toISOString();
+      archiveHunt(prev);
     }
     // Preserve the hunt type across a reset — resetting a VIP hunt should stay
     // VIP (re-seeded with Bean), not silently demote to community.
-    const keepType = ['vip','solo'].includes(hunts[req.user.id]?.huntType) ? hunts[req.user.id].huntType : 'community';
+    const keepType = ['vip','solo'].includes(prev?.huntType) ? prev.huntType : 'community';
+
+    // Restart Hunt (next run) carry-over: the client sends the equity members to keep
+    // (checked rows, with possibly-edited amounts) and the un-opened calls to continue with.
+    // Absent → blank reset (legacy behavior). Guard to arrays; coerce equity amounts to numbers.
+    const carryEquity = Array.isArray(req.body?.equity)
+      ? req.body.equity.map(e => ({ ...e, amount: Number.isFinite(+e.amount) ? +e.amount : 0 }))
+      : null;
+    const carryCalls = Array.isArray(req.body?.calls) ? req.body.calls : null;
+
+    // Continue the session's settings on a restart rather than snapping back to type defaults.
+    const keepCallLimit = Number.isFinite(+prev?.callLimit) ? +prev.callLimit
+      : (keepType === 'solo' ? 0 : keepType === 'community' ? 20 : 10);
+
     hunts[req.user.id] = { user: req.user, huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null, tenantId: req.tenant.id,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: keepType === 'solo' ? 0 : keepType === 'community' ? 20 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null };
+      huntType: keepType, bonuses: [],
+      equity: carryEquity != null ? carryEquity : initialEquity(keepType, req.user, req.tenant),
+      calls: carryCalls != null ? carryCalls : [],
+      invitedEditors: prev?.invitedEditors || [],
+      callLimit: keepCallLimit, huntMode: 'hunting', roundRobin: prev?.roundRobin !== false, lockTop4: false,
+      currency: prev?.currency || 'USD', publicCalls: !!prev?.publicCalls, publicCallsPin: prev?.publicCallsPin ?? null };
     persistHunts();
     emitHubUpdate(req.tenant.id);
-    res.json({ok:true});
+    emitHuntUpdate(req.user.id);
+    res.json({ ok: true, hunt: hunts[req.user.id] });
   });
 
   // Delete the caller's own hunt entirely — removes it from the hub. Distinct from /reset (which
