@@ -76,14 +76,17 @@ module.exports = function settingsRoutes(deps) {
       }
       const owned = current.cosmeticsOwned || [];
       const safe = {};
+      // Community mods + platform admins get the ENTIRE cosmetics catalog free (mirrors the frontend
+      // isItemAccessible/getAccessLabel mod grant): any KNOWN item is equippable. Everyone else goes
+      // through the unchanged tier/ownership gate.
+      const priv = isPlatformAdmin(req.user) || reqIsMod(req);
       for (const k of ['card','theme','sound','effect','flair','background']) {
         if (c[k] === undefined) continue;
         const itemId = c[k] ? String(c[k]).slice(0, 64) : null;
-        // Mod-only items (e.g. card_mod): only community mods (reqIsMod) or platform admins may
-        // equip — silently drop for anyone else. This is the authoritative gate (the frontend
-        // just hides the card); ITEM_TIERS has it as 'free' so isItemAccessible alone wouldn't stop them.
-        if (itemId && MOD_ONLY_ITEMS && MOD_ONLY_ITEMS.has(itemId) && !reqIsMod(req) && !isPlatformAdmin(req.user)) continue;
-        if (itemId && !isItemAccessible(itemId, userTier, owned)) continue;
+        // Mod-only items (e.g. card_mod): only community mods or platform admins may equip.
+        if (itemId && MOD_ONLY_ITEMS && MOD_ONLY_ITEMS.has(itemId) && !priv) continue;
+        // priv → allow any known item; non-priv → normal accessibility gate (unchanged behaviour).
+        if (itemId && (priv ? !(itemId in ITEM_TIERS) : !isItemAccessible(itemId, userTier, owned))) continue;
         safe[k] = itemId;
       }
       if (typeof c.soundVolume === 'number') safe.soundVolume = Math.max(0, Math.min(1, c.soundVolume));
