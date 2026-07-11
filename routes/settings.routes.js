@@ -14,7 +14,7 @@
 
 const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
-const { isItemAccessible, ITEM_TIERS } = require('./cosmetics.routes');
+const { isItemAccessible, ITEM_TIERS, MOD_ONLY_ITEMS } = require('./cosmetics.routes');
 const { userCanUse } = require('../lib/features');
 
 module.exports = function settingsRoutes(deps) {
@@ -79,6 +79,10 @@ module.exports = function settingsRoutes(deps) {
       for (const k of ['card','theme','sound','effect','flair','background']) {
         if (c[k] === undefined) continue;
         const itemId = c[k] ? String(c[k]).slice(0, 64) : null;
+        // Mod-only items (e.g. card_mod): only community mods (reqIsMod) or platform admins may
+        // equip — silently drop for anyone else. This is the authoritative gate (the frontend
+        // just hides the card); ITEM_TIERS has it as 'free' so isItemAccessible alone wouldn't stop them.
+        if (itemId && MOD_ONLY_ITEMS && MOD_ONLY_ITEMS.has(itemId) && !reqIsMod(req) && !isPlatformAdmin(req.user)) continue;
         if (itemId && !isItemAccessible(itemId, userTier, owned)) continue;
         safe[k] = itemId;
       }

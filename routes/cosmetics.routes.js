@@ -9,7 +9,7 @@ const express = require('express');
 // null = purchase-only (must be in cosmeticsOwned).
 const ITEM_TIERS = {
   card_standard:'free', card_slate:'free', card_jeter:'free', card_backnine:'free',
-  card_walker:'free', card_goofer:'free', card_cabbage:'free', card_upgrade:'free',
+  card_walker:'free', card_goofer:'free', card_cabbage:'free', card_upgrade:'free', card_mod:'free',
   card_emerald:'basic', card_copper:'basic', card_ocean:'basic',
   card_neon:'pro', card_arctic:'pro', card_toxic:'pro',
   card_holo:'ultimate', card_obsidian:'ultimate', card_celestial:'ultimate',
@@ -35,6 +35,11 @@ const ITEM_TIERS = {
   bg_matrix:'ultimate',
   bg_smoke:null, bg_grid:null,
 };
+
+// Mod-only items — equippable only by community mods (reqIsMod) or platform admins. Tier above is
+// 'free' so grant/purchase validation passes; the real mod gate is enforced on the equip path
+// (settings.routes.js PUT /api/settings cosmetics save loop) where `req` (and thus reqIsMod) exists.
+const MOD_ONLY_ITEMS = new Set(['card_mod']);
 
 const TIER_RANK = { free: 0, basic: 1, pro: 2, ultimate: 3, admin: 99 };
 
@@ -178,3 +183,4 @@ module.exports = function cosmeticsRoutes(deps) {
 
 module.exports.isItemAccessible = isItemAccessible;
 module.exports.ITEM_TIERS = ITEM_TIERS;
+module.exports.MOD_ONLY_ITEMS = MOD_ONLY_ITEMS;
