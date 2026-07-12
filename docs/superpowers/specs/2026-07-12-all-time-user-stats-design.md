@@ -30,6 +30,26 @@ Durable, extensive, **true all-time** per-user hunt history, scoped **per-commun
 Non-goals (YAGNI for now): cross-user leaderboards, global (cross-tenant) user view, crypto
 currencies. The schema is keyed by tenant so a global toggle can be added later without migration.
 
+## Existing stats surfaces (reuse, don't duplicate)
+
+Discovered during design — the durable store must plug into these, not reinvent them:
+
+- **`lib/hunts-core.js` `getHuntStats(tenantId, tz)`** → served at `GET /api/admin/hunt-stats`
+  (admin, tenant-wide, **all hunters combined**, grouped by currency with no cross-currency sums).
+  Not per-user. Left as-is.
+- **`lib/userStats.js` `computeUserHuntStats(hunts, userId)`** → `GET /api/admin/users/:userId`
+  (admin, **per-user**) → rendered by `admin/userProfile/{ProfileCharts,PastHunts}.js`. This is the
+  function we extend and cache.
+- **Frontend `src/stats/StatsView.js`** exports the shared renderer (`StatsBlock`, `CurrencyTabs`,
+  `BarChart`, `moneyIn`, …) used by the admin console. **Reuse it** for the new dropdown box.
+- **`src/stats/MyStats.js` (`/tracker/stats`, Pro-gated)** calls `GET /api/tracker/stats` — **which
+  does not exist on the backend today** (the personal page is wired to a missing endpoint). The new
+  per-user rollup is the natural backing for a real personal-stats endpoint; wiring/repairing that
+  Pro page is out of scope here but the rollup makes it a small follow-up.
+
+The one genuinely new capability neither existing system has: **cross-currency USD normalization**
+(both deliberately keep currencies separate). This design adds it on top, opt-in via a toggle.
+
 ## Storage approach — C: materialized rollup (chosen)
 
 One row per completed hunt in a real per-row table (unbounded, cheap O(1) writes), **plus** a
@@ -100,13 +120,21 @@ same (currency, date) and conversions are reproducible.
 - **`lib/statsStore.js`** (new) — owns the three stats tables + `fx_rates`; table init, upserts,
   per-user recompute, and read helpers. Keeps `persistence.js` focused; injected `pgPool` like the
   existing modules.
-- **`lib/fxRates.js`** (new) — pluggable FX adapter. `getUsdRate(currency, date)`:
+- **`lib/fxRates.js`** (new) — FX adapter over the **same source the frontend already uses**:
+  `https://open.er-api.com/v6/latest/USD` (free, keyless, USD-based, updates daily, covers ARS).
+  `getUsdRate(currency, date)`:
   1. `USD` → `1.0`.
-  2. Look up `fx_rates` cache; return if present.
-  3. Else fetch from a free fiat FX provider that covers **ARS** and **historical daily** rates
-     (ECB-based sources like frankfurter omit ARS — provider selected at implementation time; some
-     free tiers require a key, to be flagged then), cache into `fx_rates`, return.
+  2. Look up `fx_rates` cache for `(currency, date)`; return if present.
+  3. Else fetch the latest er-api table (itself cached in-process ~12h, mirroring the frontend's
+     TTL), derive `usd_rate = 1 / table[currency]`, write `(currency, date)` into `fx_rates`, return.
   4. On failure → return `null` (caller stores the hunt unconverted; see Failure handling).
+
+  **Historical caveat:** er-api's free endpoint is **latest-only** — no by-date history. This is
+  exact for the going-forward path (we capture the rate *at archive time*, which is the hunt's own
+  time) but for the ≤100 **backfilled** hunts we can only stamp today's rate as a best-effort
+  approximation. Backfilled rows are flagged `approx: true` in `snapshot` so the UI can mark them.
+  (Accepted: user confirmed backfill scope of ~100 is fine; new hunts — the vast majority over
+  time — are converted correctly.)
 - **`lib/userStats.js`** (extend) — stays a **pure** function. Now reads `usdRate` off each hunt
   (data on the row) and emits native per-currency **and** USD-normalized aggregates, plus the new
   metric categories. No network in the compute path.
@@ -157,9 +185,12 @@ Added:
 
 ## FX / currency conversion
 
-- **Rate captured at hunt-time** and stored per `hunt_history` row → all-time USD totals sum
-  pre-converted values and stay correct as ARS inflates.
-- **Backfill** fetches the historical daily rate by each hunt's `ended_at` date.
+- **Source:** `open.er-api.com/v6/latest/USD` — the same free, keyless table the frontend's
+  `CurrencySwitch.js` already uses (consistency + no new dependency/keys).
+- **Rate captured at hunt-time** (at archive) and stored per `hunt_history` row → all-time USD
+  totals sum pre-converted values and stay correct as ARS inflates.
+- **Backfill** stamps today's rate as a best-effort approximation (er-api is latest-only; see the
+  `fxRates` caveat above) and flags those rows `approx`.
 - **Display:** the stats box defaults to USD-normalized totals with a **native ⇄ USD toggle**; the
   per-currency breakdown is expandable.
 - **Failure handling:** FX fetch failure → hunt stored with `usd_rate = NULL`, counted natively;
@@ -168,18 +199,28 @@ Added:
 
 ## Frontend (communityhunts-frontend)
 
-- **User dropdown:** new "My Stats" box → fetches `/api/my-stats`, renders tiles + charts using the
-  existing HuntTracker design tokens (Chakra Petch; `#c6f135` gold, `#4ade80` gains, `#f87171`
-  losses). Native ⇄ USD toggle.
-- **Admin/users section:** extend the existing stats render to show the new metric sections
-  (records, breakdowns, trends) for the selected user.
+Follow repo **File Discipline** (new UI → new file; tokens via `useTheme()` only; no god-files) and
+**never push to `main`** — branch + Vercel preview URL, `CI=true npm run build` must pass.
+
+- **User dropdown:** new "My Stats" box (its own component file, not an inline block) → fetches
+  `GET /api/my-stats`, **reuses `src/stats/StatsView.js`** (`StatsBlock` / `CurrencyTabs`) as the
+  renderer rather than a bespoke layout. Tokens come from `useTheme()` (canonical violet/Inter
+  palette — near-black aubergine bg `#0a0710`, accent `#a78bfa`→`#7c3aed`, win-green `#b6ff2e`,
+  loss-red `#ff6b6b`; the `#c6f135`/Chakra Petch tokens in the backend CLAUDE.md are stale). Adds
+  the **native ⇄ USD toggle** (the one thing `StatsView` doesn't do yet — money is currently
+  currency-grouped only).
+- **Admin/users section:** extend `admin/userProfile/{ProfileCharts,PastHunts}.js` (already consume
+  `GET /api/admin/users/:userId`) with the new metric sections (records, breakdowns, trends).
+- **Note / follow-up:** the existing Pro-gated `MyStats.js` (`/tracker/stats`) points at a missing
+  backend endpoint — out of scope here, but the rollup makes repairing it a small later task.
 
 ## Migration & backfill
 
 One-shot idempotent `scripts/backfill-hunt-history.js`:
 1. Ensure tables exist.
 2. Walk the existing `archive` (≤100) + current live hunts → upsert `hunt_history` +
-   `hunt_participants`, resolving historical `usd_rate` per hunt by `ended_at` date.
+   `hunt_participants`, stamping today's `usd_rate` (best-effort, `approx: true`) since the source
+   is latest-only.
 3. Recompute all `user_hunt_stats` rollups.
 
 **Honest caveat:** the 100-cap has already discarded older hunts; there is no way to recover history
