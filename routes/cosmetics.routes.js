@@ -8,7 +8,7 @@ const express = require('express');
 // 'free' = anyone, 'basic'/'pro'/'ultimate' = subscription tier required,
 // null = purchase-only (must be in cosmeticsOwned).
 const ITEM_TIERS = {
-  card_standard:'free', card_slate:'free', card_jeter:'free', card_backnine:'free',
+  card_standard:'free', card_slate:'free', card_bean:'free', card_jeter:'free', card_backnine:'free',
   card_walker:'free', card_goofer:'free', card_thisisfine:'free', card_cabbage:'free', card_upgrade:'free', card_mod:'free',
   card_emerald:'basic', card_copper:'basic', card_ocean:'basic',
   card_neon:'pro', card_arctic:'pro', card_toxic:'pro',
