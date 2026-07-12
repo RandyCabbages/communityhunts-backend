@@ -361,6 +361,13 @@ app.use(require('./routes/announcements.routes')({
   announcementsChannelId: process.env.DISCORD_ANNOUNCEMENTS_CHANNEL_ID,
 }));
 
+// Global curated slot lists — public read, owner-only writes.
+const slotLists = require('./lib/slotLists');
+slotLists.initSlotLists({ pgPool }).catch(e => console.error('[slotlists] init error:', e.message));
+app.use(require('./routes/slotLists.routes')({
+  requireAuth, requirePlatformAdmin, slotLists,
+}));
+
 // OverDrop — mod-controlled stream overlay (routes/overdrop.routes.js). State + socket
 // broadcasts live in lib/overdrop.js; sockets stay read-only (see that file's security note).
 const overdrop = require('./lib/overdrop');
