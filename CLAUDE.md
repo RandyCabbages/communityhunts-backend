@@ -151,6 +151,11 @@ equity member (amount>0 or non-`creator_auto`/`bean_auto` id) OR non-solo calls 
 filter (getPublicHunts hides empty live hunts) and the janitor's 1h dead-reap (empty regular hunt idle
 ≥1h → delete; sweep every 10m). tracker:/__mod_hunt__/__affiliate_hunt__ keys are exempt from the 1h
 reap and keep the 36h grace.
+The frontend /end is best-effort (one call, no retry), so a COMPLETED hunt (every bonus opened,
+`huntCompleted(h)`) is handled server-side too: `getPublicHunts` also excludes completed hunts (they
+drop off the hub instantly even if still isLive), and the janitor completed-reaps them — regular hunts
+only — into the archive within one ~10m sweep (see server.js cleanupStaleHunts). This is the safety net
+for a closed tab or a failed /end call stranding a finished hunt as "live".
 
 POST /api/hunts/:userId/calls               → add slot call (equity members)
 PUT  /api/hunts/:userId                     → edit any hunt (editors)

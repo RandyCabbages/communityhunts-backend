@@ -383,6 +383,8 @@ app.use(require('./routes/share.routes')({
 // ── Stale-hunt janitor ─────────────────────────────────────────────
 // Hunts are born live. Idle is measured from updatedAt (live) or archivedAt (ended). Rules:
 //   • live, no content (empty), idle ≥ 1h  → delete (dead-reap) — regular user hunts only
+//   • live, completed (every bonus opened) → auto-end + archive now — regular user hunts only
+//     (safety net for the frontend's best-effort, never-retried MyHunt save() → /end)
 //   • live, has content, abandoned ≥ 36h   → auto-end + archive (kept as history)
 //   • ended, incomplete, idle ≥ 36h        → delete (+ drop its archive snapshot)
 //   • ended/archived, completed            → keep
@@ -407,6 +409,20 @@ function cleanupStaleHunts() {
       const persistentKey = id.startsWith('tracker:') || id.startsWith(MOD_HUNT_ID) || id.startsWith(AFFILIATE_HUNT_ID);
       if (!persistentKey && !huntHasContent(h) && idleMs(h.updatedAt || h.startedAt) >= EMPTY_STALE_MS) {
         delete hunts[id]; deleted++;
+        affectedTenants.add(tenantOf(h)); touchedRooms.push(id); huntsChanged = true;
+        continue;
+      }
+      // Completed-reap: a live hunt whose every bonus has been opened is DONE — end + archive it
+      // now, don't wait out the 36h idle window. The prompt end normally comes from the frontend
+      // (MyHunt save() → POST /api/my-hunt/end), but that call is best-effort and never retried:
+      // a closed tab or one failed request otherwise strands a finished hunt as "live" on the hub
+      // until STALE_MS. Mirrors the /api/my-hunt/end route. Regular hunts only — persistent shared
+      // (mod/affiliate) and paid tracker hunts reset/reopen and keep the 36h grace.
+      if (!persistentKey && huntCompleted(h)) {
+        h.isLive = false;
+        h.updatedAt = new Date().toISOString();
+        if (!h.archivedAt) h.archivedAt = new Date().toISOString();
+        archiveHunt(h); archivedN++;
         affectedTenants.add(tenantOf(h)); touchedRooms.push(id); huntsChanged = true;
         continue;
       }
