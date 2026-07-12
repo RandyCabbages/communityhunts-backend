@@ -18,7 +18,7 @@ const { isItemAccessible, ITEM_TIERS, MOD_ONLY_ITEMS } = require('./cosmetics.ro
 const { userCanUse } = require('../lib/features');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore } = deps;
   const { getSettings, saveSettings, resolveUserIdByName } = settings;
   const { computeUserHuntStats } = require('../lib/userStats');
 
@@ -46,6 +46,20 @@ module.exports = function settingsRoutes(deps) {
     // capture prompt on the site and the extension (both key off threshold > 0).
     if (!(await userCanUse('replay', req.user.id, req.tenant?.plan))) s.replayThreshold = 0;
     res.json(s);
+  });
+
+  // GET /api/my-stats — the caller's own all-time hunt stats for the active tenant.
+  router.get('/api/my-stats', requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.tenant?.id || 'bean';
+      const stats = statsStore
+        ? await statsStore.getUserStats(tenantId, String(req.user.id))
+        : computeUserHuntStats(rawTenantHunts(tenantId), String(req.user.id));
+      res.json(stats || {});
+    } catch (e) {
+      console.error('[my-stats] failed:', e.message);
+      res.status(500).json({ error: 'Failed to load stats' });
+    }
   });
 
   // PUT /api/settings — save current user's settings (also stores their Discord names for lookup)
@@ -281,7 +295,8 @@ module.exports = function settingsRoutes(deps) {
         featureGrants: featureGrants ? featureGrants.getGrantsForUser(userId) : [],
         cosmetics: (userSettings.cosmetics && typeof userSettings.cosmetics === 'object') ? userSettings.cosmetics : {},
         cosmeticsOwned: Array.isArray(userSettings.cosmeticsOwned) ? userSettings.cosmeticsOwned : [],
-        stats: computeUserHuntStats(rawTenantHunts(tenantId), userId),
+        stats: statsStore ? await statsStore.getUserStats(tenantId, userId)
+                          : computeUserHuntStats(rawTenantHunts(tenantId), userId),
       });
     } catch (e) {
       console.error('[admin] user profile failed:', e.message);
