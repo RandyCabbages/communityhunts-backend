@@ -234,7 +234,16 @@ const settings = require('./lib/settings');
 settings.initSettings({ pgPool, hunts });
 const { recordKnownUser } = settings;  // called from the auth callback / Bearer middleware
 
-persistence.initPersistence({ pgPool, normalizeSlot })
+// All-time stats: fxRates (currency conversion) + statsStore (durable per-hunt history + per-user
+// rollup, additive to the 100-cap archive). Constructed synchronously; tables are created as part
+// of the init promise chain below (this scope is CommonJS top-level, no top-level await).
+const makeFxRates = require('./lib/fxRates');
+const makeStatsStore = require('./lib/statsStore');
+const fxRates = makeFxRates({ pgPool });
+const statsStore = makeStatsStore({ pgPool, fxRates });
+
+persistence.initPersistence({ pgPool, normalizeSlot, statsStore })
+  .then(() => statsStore.ensureTables())
   .then(() => settings.startupBackfill())
   .then(() => settings.loadAnonymousUsers())   // hydrate the anonymous-user set for name redaction
   .catch(e => console.error('[persist] init error:', e.message));
@@ -514,7 +523,7 @@ app.use(require('./routes/misc.routes')({ hunts, archive }));
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
   settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants,
-  hunts, archive,
+  hunts, archive, statsStore,
 }));
 
 // Stripe checkout, portal, and webhook routes (routes/stripe.routes.js).
