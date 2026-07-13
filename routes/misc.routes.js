@@ -11,12 +11,10 @@ const express = require('express');
 const BANGER_MIN_MULT = 300;
 
 // Ticket config is env-derived (config, not shared state) — read here so the router is self-sufficient.
-// Posts via the one shared community bot — but the LIVE token is per-tenant in the DB
-// (tenant.discordBotToken); the DISCORD_BOT_TOKEN env var is only a seed default and has gone
-// stale in Railway before (announcements 2026-07-08, tickets 2026-07-13 — both prod 401s).
-// Resolve per-request like announcements/cardRequests: req.tenant token first, env fallback.
+// Tickets are PLATFORM-level: they post to communityhunts.gg's OWN channels, so the bot token is
+// the PLATFORM bot (deps.getPlatformBotToken), NOT req.tenant — a ticket from a streamer's hub sets
+// req.tenant to that streamer, whose own bot can't post to our channels. Channels stay global env.
 // Tickets split by type: "Feature Request" → suggestions channel; everything else → tickets channel.
-const ENV_BOT_TOKEN = (process.env.DISCORD_BOT_TOKEN || '').trim();
 const TICKETS_CHANNEL_ID = (process.env.DISCORD_TICKETS_CHANNEL_ID || '').trim();
 const SUGGESTIONS_CHANNEL_ID = (process.env.DISCORD_SUGGESTIONS_CHANNEL_ID || '').trim();
 const SUGGESTION_TYPES = new Set(['Feature Request']);
@@ -24,7 +22,7 @@ const SUGGESTION_TYPES = new Set(['Feature Request']);
 const ticketHits = new Map(); // per-IP ticket timestamps for rate limiting
 
 module.exports = function miscRoutes(deps) {
-  const { hunts, archive } = deps;
+  const { hunts, archive, getPlatformBotToken } = deps;
   const router = express.Router();
 
   router.get('/api/bangers', (req, res) => {
@@ -77,7 +75,7 @@ module.exports = function miscRoutes(deps) {
   router.post('/api/tickets', async (req, res) => {
     const { username, issue, type } = req.body;
 
-    const botToken = ((req.tenant && req.tenant.discordBotToken) || ENV_BOT_TOKEN).trim();
+    const botToken = getPlatformBotToken();
     if (!botToken) return res.status(500).json({error:'Discord bot not configured on the server'});
 
     // Length caps + per-IP throttle to prevent channel spam.

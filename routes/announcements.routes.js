@@ -41,7 +41,7 @@ async function postAnnouncementToDiscord(a, botToken, channelId) {
 }
 
 module.exports = function announcementsRoutes(deps) {
-  const { requireAuth, requirePlatformAdmin, announcements, envBotToken, announcementsChannelId } = deps;
+  const { requireAuth, requirePlatformAdmin, announcements, getPlatformBotToken, announcementsChannelId } = deps;
   const router = express.Router();
 
   router.get('/api/announcements', (req, res) => {
@@ -57,7 +57,7 @@ module.exports = function announcementsRoutes(deps) {
     // failure only flips the status field, it never fails the request.
     // The community bot token lives per-tenant in the DB (same source import-calls /
     // parse-winners use); the DISCORD_BOT_TOKEN env var is only a seed fallback.
-    const botToken = (req.tenant && req.tenant.discordBotToken) || envBotToken;
+    const botToken = getPlatformBotToken();
     let discord = 'skipped';
     if (req.body.postToDiscord && botToken && announcementsChannelId) {
       try {

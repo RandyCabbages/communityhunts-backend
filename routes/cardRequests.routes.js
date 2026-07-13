@@ -42,7 +42,7 @@ function buildRequestEmbed(r) {
 }
 
 module.exports = function cardRequestsRoutes(deps) {
-  const { requireAuth, requirePlatformAdmin, cardRequests, envBotToken, channelId } = deps;
+  const { requireAuth, requirePlatformAdmin, cardRequests, getPlatformBotToken, channelId } = deps;
   const router = express.Router();
   const ipHits = new Map(); // per-IP submit timestamps (same throttle pattern as /api/tickets)
 
@@ -66,7 +66,7 @@ module.exports = function cardRequestsRoutes(deps) {
 
     // Best-effort Discord doorbell (announcements pattern: saved first, failure only logged).
     // Token resolves per-request: tenant override, else the shared community bot.
-    const botToken = (req.tenant && req.tenant.discordBotToken) || envBotToken;
+    const botToken = getPlatformBotToken();
     let discord = 'skipped';
     if (botToken && channelId) {
       try {
@@ -103,7 +103,7 @@ module.exports = function cardRequestsRoutes(deps) {
     // Best-effort: reflect the new phase (emoji + color) on the request's Discord message.
     // Fire after responding — the admin action never blocks on Discord. Skips silently when the
     // request has no stored message id (post failed/skipped, or it predates this feature).
-    const botToken = (req.tenant && req.tenant.discordBotToken) || envBotToken;
+    const botToken = getPlatformBotToken();
     if (r.discordMessageId && r.discordChannelId && botToken) {
       try {
         const resp = await fetch(`https://discord.com/api/v10/channels/${r.discordChannelId}/messages/${r.discordMessageId}`, {
