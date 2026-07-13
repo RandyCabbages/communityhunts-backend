@@ -9,11 +9,22 @@
 const express = require('express');
 
 const MAX_OPEN_PER_USER = 2;
-const EMBED_COLOR = 0xa78bfa; // community accent (violet)
+
+// Phase → title emoji + embed color. Colors mirror the frontend admin STATUS_META so the Discord
+// message and the Shop Requests panel read the same. Unknown status falls back to 'new'.
+const PHASE_META = {
+  new:          { emoji: '🆕', color: 0xa78bfa },
+  awaiting_tip: { emoji: '💰', color: 0xfbbf24 },
+  in_progress:  { emoji: '🔨', color: 0x22d3ee },
+  done:         { emoji: '✅', color: 0x4ade80 },
+  declined:     { emoji: '❌', color: 0xff6b6b },
+};
 
 // Discord embed caps mirror routes/misc.routes.js: title ≤256, description ≤4096
-// (3900 for margin), field value ≤1024.
+// (3900 for margin), field value ≤1024. Rebuilt from the request each call, so an edit reflects
+// current data + phase.
 function buildRequestEmbed(r) {
+  const phase = PHASE_META[r.status] || PHASE_META.new;
   const fields = [
     { name: 'From', value: `${r.displayName} (${r.userId})`.slice(0, 1024), inline: false },
   ];
@@ -21,9 +32,9 @@ function buildRequestEmbed(r) {
   if (r.rainbetUsername) fields.push({ name: 'Rainbet', value: r.rainbetUsername.slice(0, 1024), inline: true });
   if (r.refLinks.length) fields.push({ name: 'References', value: r.refLinks.join('\n').slice(0, 1024), inline: false });
   return {
-    title: '🎨 Custom Card Request',
+    title: `${phase.emoji} Custom Card Request`,
     description: r.idea.slice(0, 3900),
-    color: EMBED_COLOR,
+    color: phase.color,
     fields,
     timestamp: r.createdAt,
     footer: { text: 'CommunityHunts — Shop Requests' },
@@ -31,7 +42,7 @@ function buildRequestEmbed(r) {
 }
 
 module.exports = function cardRequestsRoutes(deps) {
-  const { requireAuth, requirePlatformAdmin, cardRequests, ticketsBotToken, channelId } = deps;
+  const { requireAuth, requirePlatformAdmin, cardRequests, envBotToken, channelId } = deps;
   const router = express.Router();
   const ipHits = new Map(); // per-IP submit timestamps (same throttle pattern as /api/tickets)
 
@@ -54,15 +65,20 @@ module.exports = function cardRequestsRoutes(deps) {
     const r = cardRequests.createRequest(req.body, req.user);
 
     // Best-effort Discord doorbell (announcements pattern: saved first, failure only logged).
+    // Token resolves per-request: tenant override, else the shared community bot.
+    const botToken = (req.tenant && req.tenant.discordBotToken) || envBotToken;
     let discord = 'skipped';
-    if (ticketsBotToken && channelId) {
+    if (botToken && channelId) {
       try {
         const resp = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
           method: 'POST',
-          headers: { Authorization: `Bot ${ticketsBotToken}`, 'Content-Type': 'application/json' },
+          headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ embeds: [buildRequestEmbed(r)] }),
         });
         if (!resp.ok) throw new Error(`Discord returned ${resp.status}`);
+        // Store the message + channel ids so a later status change can PATCH this same message.
+        const msg = await resp.json().catch(() => null);
+        if (msg && msg.id) cardRequests.setDiscordMessage(r.id, { messageId: String(msg.id), channelId: String(channelId) });
         discord = 'posted';
         console.log(`[cardreq] request ${r.id} posted to Discord`);
       } catch (e) {
@@ -77,12 +93,30 @@ module.exports = function cardRequestsRoutes(deps) {
     res.json({ requests: cardRequests.listRequests() });
   });
 
-  router.put('/api/admin/card-requests/:id', requireAuth, requirePlatformAdmin, (req, res) => {
+  router.put('/api/admin/card-requests/:id', requireAuth, requirePlatformAdmin, async (req, res) => {
     const err = cardRequests.validateUpdate(req.body);
     if (err) return res.status(400).json({ error: err });
     const r = cardRequests.updateRequest(String(req.params.id), req.body);
     if (!r) return res.status(404).json({ error: 'Request not found' });
     res.json(r);
+
+    // Best-effort: reflect the new phase (emoji + color) on the request's Discord message.
+    // Fire after responding — the admin action never blocks on Discord. Skips silently when the
+    // request has no stored message id (post failed/skipped, or it predates this feature).
+    const botToken = (req.tenant && req.tenant.discordBotToken) || envBotToken;
+    if (r.discordMessageId && r.discordChannelId && botToken) {
+      try {
+        const resp = await fetch(`https://discord.com/api/v10/channels/${r.discordChannelId}/messages/${r.discordMessageId}`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ embeds: [buildRequestEmbed(r)] }),
+        });
+        if (!resp.ok) throw new Error(`Discord returned ${resp.status}`);
+        console.log(`[cardreq] request ${r.id} embed updated → ${r.status}`);
+      } catch (e) {
+        console.error('[cardreq] Discord embed update failed:', e.message);
+      }
+    }
   });
 
   router.delete('/api/admin/card-requests/:id', requireAuth, requirePlatformAdmin, (req, res) => {
