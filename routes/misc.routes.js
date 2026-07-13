@@ -11,10 +11,11 @@ const express = require('express');
 const BANGER_MIN_MULT = 300;
 
 // Ticket config is env-derived (config, not shared state) — read here so the router is self-sufficient.
-// This is the CommunityHunts *business* Discord bot (App 1506278609445191800), distinct from the
-// per-tenant DISCORD_BOT_TOKEN used for slot-call import / winner parsing in Bean's community server.
+// Posts via the one shared community bot (DISCORD_BOT_TOKEN) — the same bot used for announcements
+// and Shop Requests; there is exactly one bot in the single communityhunts.gg Discord. (The old
+// DISCORD_TICKETS_BOT_TOKEN pointed at a bot that never existed → 401; it is retired.)
 // Tickets split by type: "Feature Request" → suggestions channel; everything else → tickets channel.
-const TICKETS_BOT_TOKEN = (process.env.DISCORD_TICKETS_BOT_TOKEN || '').trim();
+const BOT_TOKEN = (process.env.DISCORD_BOT_TOKEN || '').trim();
 const TICKETS_CHANNEL_ID = (process.env.DISCORD_TICKETS_CHANNEL_ID || '').trim();
 const SUGGESTIONS_CHANNEL_ID = (process.env.DISCORD_SUGGESTIONS_CHANNEL_ID || '').trim();
 const SUGGESTION_TYPES = new Set(['Feature Request']);
@@ -75,7 +76,7 @@ module.exports = function miscRoutes(deps) {
   router.post('/api/tickets', async (req, res) => {
     const { username, issue, type } = req.body;
 
-    if (!TICKETS_BOT_TOKEN) return res.status(500).json({error:'Discord ticket bot not configured on the server'});
+    if (!BOT_TOKEN) return res.status(500).json({error:'Discord bot not configured on the server'});
 
     // Length caps + per-IP throttle to prevent channel spam.
     if (String(issue||'').length > 5000 || String(username||'').length > 120 || String(type||'').length > 40)
@@ -109,7 +110,7 @@ module.exports = function miscRoutes(deps) {
     try {
       const r = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
         method: 'POST',
-        headers: { Authorization: `Bot ${TICKETS_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bot ${BOT_TOKEN}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ embeds: [embed] }),
       });
       if (!r.ok) {
