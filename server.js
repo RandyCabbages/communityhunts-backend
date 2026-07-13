@@ -535,7 +535,7 @@ app.use(require('./routes/slots.routes')({ slots, getSlotCallCounts }));
 require('./lib/rainbetSlotSync').startRainbetSlotSync(slots);
 
 // Misc leaf routes: /api/bangers (reads hunts+archive), /api/tickets, /api/health.
-app.use(require('./routes/misc.routes')({ hunts, archive }));
+app.use(require('./routes/misc.routes')({ hunts, archive, getPlatformBotToken: tenants.getPlatformBotToken }));
 
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({

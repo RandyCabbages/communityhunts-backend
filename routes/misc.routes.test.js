@@ -1,8 +1,7 @@
 // POST /api/tickets — Discord bot token resolution.
-// The Railway DISCORD_BOT_TOKEN env var has gone stale twice (announcements 2026-07-08,
-// tickets 2026-07-13 → prod 401s); the live community-bot token is per-tenant in the DB.
-// These tests pin the resolution order: req.tenant.discordBotToken first, env fallback.
-process.env.DISCORD_BOT_TOKEN = 'env-fallback-token';
+// Tickets are PLATFORM-level: they post to communityhunts.gg's own channels and must always use
+// the PLATFORM bot (getPlatformBotToken), NEVER req.tenant.discordBotToken — which, for a ticket
+// from a streamer's hub, is that streamer's own community bot (→ 403 on our channels).
 process.env.DISCORD_TICKETS_CHANNEL_ID = '111';
 process.env.DISCORD_SUGGESTIONS_CHANNEL_ID = '222';
 
@@ -22,12 +21,12 @@ global.fetch = async (url, opts) => {
 after(() => { global.fetch = realFetch; });
 beforeEach(() => { discordCalls = []; });
 
-// One app per tenant shape; listen on an ephemeral port and hit it with the REAL fetch.
-function appWithTenant(tenant) {
+// Mount the router with an injectable platform-token resolver + an optional req.tenant.
+function appWith({ tenant, platformToken = 'platform-token' } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => { if (tenant) req.tenant = tenant; next(); });
-  app.use(miscRoutes({ hunts: {}, archive: [] }));
+  app.use(miscRoutes({ hunts: {}, archive: [], getPlatformBotToken: () => platformToken }));
   return app;
 }
 
@@ -45,20 +44,26 @@ async function postTicket(app, body) {
   }
 }
 
-test('tickets post with the tenant DB bot token when present', async () => {
-  const app = appWithTenant({ id: 'bean', discordBotToken: 'tenant-db-token' });
+test('REGRESSION GUARD: a non-Bean tenant with its own bot token still posts with the PLATFORM token', async () => {
+  const app = appWith({ tenant: { id: 'streamerX', discordBotToken: 'streamer-x-token' } });
   const r = await postTicket(app, { username: 'tester', issue: 'hello', type: 'Bug' });
   assert.strictEqual(r.status, 200);
   assert.strictEqual(discordCalls.length, 1);
-  assert.strictEqual(discordCalls[0].opts.headers.Authorization, 'Bot tenant-db-token');
-  assert.match(discordCalls[0].url, /\/channels\/111\/messages$/);
+  assert.strictEqual(discordCalls[0].opts.headers.Authorization, 'Bot platform-token');
+  assert.match(discordCalls[0].url, /\/channels\/111\/messages$/); // Bug → tickets channel
 });
 
-test('tickets fall back to the env bot token when the tenant has none', async () => {
-  const app = appWithTenant(null);
-  const r = await postTicket(app, { username: 'tester', issue: 'hello', type: 'Feature Request' });
+test('feature requests post with the platform token to the suggestions channel', async () => {
+  const app = appWith({ tenant: null });
+  const r = await postTicket(app, { username: 'tester', issue: 'idea', type: 'Feature Request' });
   assert.strictEqual(r.status, 200);
-  assert.strictEqual(discordCalls.length, 1);
-  assert.strictEqual(discordCalls[0].opts.headers.Authorization, 'Bot env-fallback-token');
-  assert.match(discordCalls[0].url, /\/channels\/222\/messages$/);
+  assert.strictEqual(discordCalls[0].opts.headers.Authorization, 'Bot platform-token');
+  assert.match(discordCalls[0].url, /\/channels\/222\/messages$/); // Feature Request → suggestions
+});
+
+test('returns 500 when the platform bot token is not configured', async () => {
+  const app = appWith({ tenant: null, platformToken: '' });
+  const r = await postTicket(app, { username: 'tester', issue: 'hi', type: 'Bug' });
+  assert.strictEqual(r.status, 500);
+  assert.strictEqual(discordCalls.length, 0);
 });
