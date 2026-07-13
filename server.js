@@ -384,8 +384,10 @@ const cardRequests = require('./lib/cardRequests');
 cardRequests.initCardRequests({ pgPool }).catch(e => console.error('[cardreq] init error:', e.message));
 app.use(require('./routes/cardRequests.routes')({
   requireAuth, requirePlatformAdmin, cardRequests,
-  ticketsBotToken: process.env.DISCORD_TICKETS_BOT_TOKEN,
-  channelId: process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || process.env.DISCORD_TICKETS_CHANNEL_ID,
+  // .trim() the env values — Railway/paste can leave a trailing space/newline, which makes
+  // the Discord "Bot <token>" header 401. The working /api/tickets flow trims for the same reason.
+  ticketsBotToken: (process.env.DISCORD_TICKETS_BOT_TOKEN || '').trim(),
+  channelId: (process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || process.env.DISCORD_TICKETS_CHANNEL_ID || '').trim(),
 }));
 
 // OverDrop — mod-controlled stream overlay (routes/overdrop.routes.js). State + socket
