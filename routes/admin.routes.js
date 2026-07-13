@@ -238,7 +238,10 @@ module.exports = function adminRoutes(deps) {
   // The tenant admin (owner) sets THIS community's public social links, stored in branding.
   // Sanitized in lib/tenants (whitelisted platforms, http(s) only). Tenant-scoped via req.tenant.
   router.get('/api/admin/socials', requireAuth, requireAdmin, (req, res) => {
-    res.json({ socials: (req.tenant.branding && req.tenant.branding.socials) || [] });
+    res.json({
+      communityName: req.tenant?.displayName || 'Bean',
+      socials: (req.tenant.branding && req.tenant.branding.socials) || [],
+    });
   });
   router.put('/api/admin/socials', requireAuth, requireAdmin, async (req, res) => {
     try {
