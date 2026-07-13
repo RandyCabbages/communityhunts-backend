@@ -31,9 +31,11 @@ module.exports = function integrationsRoutes(deps) {
       discordInvite: b.discordInvite || null,
       // Which casino the slot deep-links point at (null = none → linkless slot art).
       casino: b.casino || null,
-      // Community plan (community_starter/pro) drives feature gating; null → TenantLayout
-      // defaults to 'enterprise' (Bean + any pre-plan tenant, unchanged).
-      plan: b.plan || null,
+      // Community plan drives feature gating. Send the NORMALIZED, stripped form
+      // ('starter'/'pro'/'enterprise') that canUse() ranks — never the raw 'community_*'
+      // Stripe id, which ranks as 0 (free). A tenant with no plan set resolves to 'pro'
+      // (normalizePlan fallback), matching the TenantLayout default. Field name is contract.
+      plan: tenants.normalizePlan(b.plan),
     });
   });
 
