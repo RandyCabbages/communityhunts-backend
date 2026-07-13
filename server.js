@@ -387,6 +387,16 @@ app.use(require('./routes/cardRequests.routes')({
   channelId: (process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || '').trim(),
 }));
 
+// Bug-tickets / feature-suggestions — public submit (POST /api/tickets in misc.routes), owner-only
+// triage here. Persisted (lib/tickets, hunts_kv 'tickets'); the phase-embed edit uses the platform
+// bot, same as Shop Requests. Injected into misc.routes below so the public submit can persist.
+const tickets = require('./lib/tickets');
+tickets.initTickets({ pgPool }).catch(e => console.error('[tickets] init error:', e.message));
+app.use(require('./routes/adminTickets.routes')({
+  requireAuth, requirePlatformAdmin, tickets,
+  getPlatformBotToken: tenants.getPlatformBotToken,
+}));
+
 // OverDrop — mod-controlled stream overlay (routes/overdrop.routes.js). State + socket
 // broadcasts live in lib/overdrop.js; sockets stay read-only (see that file's security note).
 const overdrop = require('./lib/overdrop');
@@ -534,8 +544,8 @@ app.use(require('./routes/slots.routes')({ slots, getSlotCallCounts }));
 // GitHub Actions cron, which was firing every 1.5-5hrs instead of every 30 min).
 require('./lib/rainbetSlotSync').startRainbetSlotSync(slots);
 
-// Misc leaf routes: /api/bangers (reads hunts+archive), /api/tickets, /api/health.
-app.use(require('./routes/misc.routes')({ hunts, archive, getPlatformBotToken: tenants.getPlatformBotToken }));
+// Misc leaf routes: /api/bangers (reads hunts+archive), /api/tickets (persists via tickets store), /api/health.
+app.use(require('./routes/misc.routes')({ hunts, archive, tickets, getPlatformBotToken: tenants.getPlatformBotToken }));
 
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
