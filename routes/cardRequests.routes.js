@@ -7,8 +7,12 @@
 // the request is already saved — a Discord failure never fails the request.
 
 const express = require('express');
+const { ASSIGNEES } = require('../lib/cardRequests');
 
 const MAX_OPEN_PER_USER = 2;
+
+// Discord-owner-id → label, for the embed's "Assigned to" field. Mirrors the admin panel.
+const ASSIGNEE_LABEL = Object.fromEntries(ASSIGNEES.map(a => [a.id, a.label]));
 
 // Phase → title emoji + embed color. Colors mirror the frontend admin STATUS_META so the Discord
 // message and the Shop Requests panel read the same. Unknown status falls back to 'new'.
@@ -28,6 +32,7 @@ function buildRequestEmbed(r) {
   const fields = [
     { name: 'From', value: `${r.displayName} (${r.userId})`.slice(0, 1024), inline: false },
   ];
+  if (r.assignee) fields.push({ name: 'Assigned to', value: ASSIGNEE_LABEL[r.assignee] || r.assignee, inline: true });
   if (r.cardName) fields.push({ name: 'Card name', value: r.cardName.slice(0, 1024), inline: true });
   if (r.rainbetUsername) fields.push({ name: 'Rainbet', value: r.rainbetUsername.slice(0, 1024), inline: true });
   if (r.refLinks.length) fields.push({ name: 'References', value: r.refLinks.join('\n').slice(0, 1024), inline: false });
