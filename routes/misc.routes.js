@@ -11,11 +11,12 @@ const express = require('express');
 const BANGER_MIN_MULT = 300;
 
 // Ticket config is env-derived (config, not shared state) — read here so the router is self-sufficient.
-// Posts via the one shared community bot (DISCORD_BOT_TOKEN) — the same bot used for announcements
-// and Shop Requests; there is exactly one bot in the single communityhunts.gg Discord. (The old
-// DISCORD_TICKETS_BOT_TOKEN pointed at a bot that never existed → 401; it is retired.)
+// Posts via the one shared community bot — but the LIVE token is per-tenant in the DB
+// (tenant.discordBotToken); the DISCORD_BOT_TOKEN env var is only a seed default and has gone
+// stale in Railway before (announcements 2026-07-08, tickets 2026-07-13 — both prod 401s).
+// Resolve per-request like announcements/cardRequests: req.tenant token first, env fallback.
 // Tickets split by type: "Feature Request" → suggestions channel; everything else → tickets channel.
-const BOT_TOKEN = (process.env.DISCORD_BOT_TOKEN || '').trim();
+const ENV_BOT_TOKEN = (process.env.DISCORD_BOT_TOKEN || '').trim();
 const TICKETS_CHANNEL_ID = (process.env.DISCORD_TICKETS_CHANNEL_ID || '').trim();
 const SUGGESTIONS_CHANNEL_ID = (process.env.DISCORD_SUGGESTIONS_CHANNEL_ID || '').trim();
 const SUGGESTION_TYPES = new Set(['Feature Request']);
@@ -76,7 +77,8 @@ module.exports = function miscRoutes(deps) {
   router.post('/api/tickets', async (req, res) => {
     const { username, issue, type } = req.body;
 
-    if (!BOT_TOKEN) return res.status(500).json({error:'Discord bot not configured on the server'});
+    const botToken = ((req.tenant && req.tenant.discordBotToken) || ENV_BOT_TOKEN).trim();
+    if (!botToken) return res.status(500).json({error:'Discord bot not configured on the server'});
 
     // Length caps + per-IP throttle to prevent channel spam.
     if (String(issue||'').length > 5000 || String(username||'').length > 120 || String(type||'').length > 40)
@@ -110,7 +112,7 @@ module.exports = function miscRoutes(deps) {
     try {
       const r = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
         method: 'POST',
-        headers: { Authorization: `Bot ${BOT_TOKEN}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ embeds: [embed] }),
       });
       if (!r.ok) {
