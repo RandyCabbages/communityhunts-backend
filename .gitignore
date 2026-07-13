@@ -10,6 +10,7 @@ share_tokens.json
 user_settings.json
 announcements.json
 card_requests.json
+tickets.json
 
 # environment / secrets
 .env
