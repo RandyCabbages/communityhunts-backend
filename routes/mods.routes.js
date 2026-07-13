@@ -45,6 +45,15 @@ module.exports = function modsRoutes(deps) {
     if (!/^\d{5,}$/.test(discordId)) return res.status(400).json({ error: 'Valid Discord ID required' });
     if (tenants.isPlatformOwnerId(discordId)) return res.status(400).json({ error: 'Owner is already admin everywhere' });
     try {
+      // Mod-seat cap by plan (Creator 5 / Pro 10 / Partner ∞; 'bean' exempt). Enforced on add
+      // only — re-adding an existing mod is idempotent and never blocked.
+      const cap = tenants.modSeatCap(req.tenant);
+      if (Number.isFinite(cap)) {
+        const current = await tenants.listTenantMods(req.tenant.id);
+        if (current.length >= cap && !current.map(String).includes(discordId)) {
+          return res.status(403).json({ error: `Your plan includes ${cap} mod seats. Upgrade to add more.` });
+        }
+      }
       await tenants.addTenantMod(req.tenant.id, discordId);
       res.json({ ok: true });
     } catch (e) {

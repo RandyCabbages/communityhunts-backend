@@ -32,7 +32,7 @@ module.exports = function integrationsRoutes(deps) {
       // Which casino the slot deep-links point at (null = none → linkless slot art).
       casino: b.casino || null,
       // Community plan drives feature gating. Send the NORMALIZED, stripped form
-      // ('starter'/'pro'/'enterprise') that canUse() ranks — never the raw 'community_*'
+      // ('starter'/'pro'/'partner') that canUse() ranks — never the raw 'community_*'
       // Stripe id, which ranks as 0 (free). A tenant with no plan set resolves to 'pro'
       // (normalizePlan fallback), matching the TenantLayout default. Field name is contract.
       plan: tenants.normalizePlan(b.plan),
