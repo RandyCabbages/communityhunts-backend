@@ -1,6 +1,6 @@
 // Misc leaf routes that don't belong to a larger concern:
 //   GET  /api/bangers   → top recent big-multiplier wins (reads hunts + archive, read-only)
-//   POST /api/tickets   → post inquiries/suggestions into Discord via the CommunityHunts bot (per-IP rate limited)
+//   POST /api/tickets   → persist an inquiry/suggestion (lib/tickets) + best-effort Discord doorbell (per-IP rate limited)
 //   GET  /api/health    → health check
 // Thin router, mounted from the server.js composition root.
 // hunts/archive are the persistence-owned singletons — injected by reference, read only.
@@ -22,7 +22,7 @@ const SUGGESTION_TYPES = new Set(['Feature Request']);
 const ticketHits = new Map(); // per-IP ticket timestamps for rate limiting
 
 module.exports = function miscRoutes(deps) {
-  const { hunts, archive, getPlatformBotToken } = deps;
+  const { hunts, archive, tickets, getPlatformBotToken } = deps;
   const router = express.Router();
 
   router.get('/api/bangers', (req, res) => {
@@ -75,9 +75,6 @@ module.exports = function miscRoutes(deps) {
   router.post('/api/tickets', async (req, res) => {
     const { username, issue, type } = req.body;
 
-    const botToken = getPlatformBotToken();
-    if (!botToken) return res.status(500).json({error:'Discord bot not configured on the server'});
-
     // Length caps + per-IP throttle to prevent channel spam.
     if (String(issue||'').length > 5000 || String(username||'').length > 120 || String(type||'').length > 40)
       return res.status(400).json({error:'Ticket content too long'});
@@ -92,38 +89,48 @@ module.exports = function miscRoutes(deps) {
     const isSuggestion = SUGGESTION_TYPES.has(kind);
     const channelId = isSuggestion ? SUGGESTIONS_CHANNEL_ID : TICKETS_CHANNEL_ID;
     const dest = isSuggestion ? 'suggestions' : 'tickets';
-    if (!channelId) return res.status(500).json({error:`No Discord ${dest} channel configured on the server`});
 
-    // Discord embed. description limit is 4096 and a field value 1024 — keep margins.
-    const from = String(username || 'Anonymous').slice(0, 256);
-    const desc = String(issue || '(no message)').slice(0, 3900);
-    const color = isSuggestion ? 0x22c55e : (kind.toLowerCase() === 'bug' ? 0xef4444 : 0x7c3aed);
-    const embed = {
-      title: `${isSuggestion ? '💡' : '🎫'} ${kind}`.slice(0, 256),
-      description: desc,
-      color,
-      fields: [{ name: 'From', value: from, inline: false }],
-      timestamp: new Date().toISOString(),
-      footer: { text: 'CommunityHunts' },
-    };
+    // Persist FIRST — the store is the source of truth for the admin queue. Identity is
+    // snapshotted when the submitter is signed in; anonymous submits keep userId null.
+    const t = tickets.createTicket({ type: kind, issue, username, discordChannel: dest }, req.user || null);
 
-    try {
-      const r = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-        method: 'POST',
-        headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ embeds: [embed] }),
-      });
-      if (!r.ok) {
-        const detail = await r.text().catch(()=>'');
-        console.error('[ticket] Discord rejected:', r.status, detail);
-        return res.status(500).json({error:`Discord returned ${r.status}`, detail});
+    // Best-effort Discord doorbell — a failure NEVER fails the submit (the ticket is already saved).
+    // Token is the PLATFORM bot; channels are the global ticket/suggestion env ids.
+    const botToken = getPlatformBotToken();
+    let discord = 'skipped';
+    if (botToken && channelId) {
+      // Discord embed. description limit is 4096 and a field value 1024 — keep margins.
+      const from = String(username || 'Anonymous').slice(0, 256);
+      const desc = String(issue || '(no message)').slice(0, 3900);
+      const color = isSuggestion ? 0x22c55e : (kind.toLowerCase() === 'bug' ? 0xef4444 : 0x7c3aed);
+      const embed = {
+        title: `${isSuggestion ? '💡' : '🎫'} ${kind}`.slice(0, 256),
+        description: desc,
+        color,
+        fields: [{ name: 'From', value: from, inline: false }],
+        timestamp: new Date().toISOString(),
+        footer: { text: 'CommunityHunts' },
+      };
+      try {
+        const r = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+          method: 'POST',
+          headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ embeds: [embed] }),
+        });
+        if (!r.ok) throw new Error(`Discord returned ${r.status}`);
+        // Store the posted message ids so an admin status change can PATCH this same embed.
+        const msg = await r.json().catch(() => null);
+        if (msg && msg.id) tickets.setDiscordMessage(t.id, { messageId: String(msg.id), channelId: String(channelId) });
+        discord = 'posted';
+        console.log(`[ticket] ${t.id} posted to Discord ${dest} channel — type ${kind}`);
+      } catch (e) {
+        discord = 'failed';
+        console.error('[ticket] Discord delivery failed:', e.message);
       }
-      console.log(`[ticket] posted to Discord ${dest} channel — type ${kind}`);
-      res.json({ ok: true, via: 'discord', channel: dest });
-    } catch (e) {
-      console.error('[ticket] Discord delivery failed:', e.message);
-      res.status(500).json({error:'Failed to post ticket to Discord', detail: e.message});
+    } else {
+      console.warn(`[ticket] ${t.id} stored but Discord skipped (token=${!!botToken}, channel=${!!channelId})`);
     }
+    res.json({ ok: true, id: t.id, discord });
   });
 
   router.get('/api/health', (req, res) => res.json({ok:true}));
