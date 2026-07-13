@@ -377,6 +377,17 @@ app.use(require('./routes/slotLists.routes')({
   requireAuth, requirePlatformAdmin, slotLists,
 }));
 
+// Custom card commission requests ("Shop Requests") — signed-in submit, owner-only review.
+// Discord doorbell uses the business tickets bot; dedicated channel env falls back to the
+// tickets channel so it works with zero new Railway config.
+const cardRequests = require('./lib/cardRequests');
+cardRequests.initCardRequests({ pgPool }).catch(e => console.error('[cardreq] init error:', e.message));
+app.use(require('./routes/cardRequests.routes')({
+  requireAuth, requirePlatformAdmin, cardRequests,
+  ticketsBotToken: process.env.DISCORD_TICKETS_BOT_TOKEN,
+  channelId: process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || process.env.DISCORD_TICKETS_CHANNEL_ID,
+}));
+
 // OverDrop — mod-controlled stream overlay (routes/overdrop.routes.js). State + socket
 // broadcasts live in lib/overdrop.js; sockets stay read-only (see that file's security note).
 const overdrop = require('./lib/overdrop');
