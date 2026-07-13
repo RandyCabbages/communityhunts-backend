@@ -366,7 +366,7 @@ const announcements = require('./lib/announcements');
 announcements.initAnnouncements({ pgPool }).catch(e => console.error('[announce] init error:', e.message));
 app.use(require('./routes/announcements.routes')({
   requireAuth, requirePlatformAdmin, announcements,
-  envBotToken: process.env.DISCORD_BOT_TOKEN,
+  getPlatformBotToken: tenants.getPlatformBotToken,
   announcementsChannelId: process.env.DISCORD_ANNOUNCEMENTS_CHANNEL_ID,
 }));
 
@@ -383,7 +383,7 @@ const cardRequests = require('./lib/cardRequests');
 cardRequests.initCardRequests({ pgPool }).catch(e => console.error('[cardreq] init error:', e.message));
 app.use(require('./routes/cardRequests.routes')({
   requireAuth, requirePlatformAdmin, cardRequests,
-  envBotToken: (process.env.DISCORD_BOT_TOKEN || '').trim(),
+  getPlatformBotToken: tenants.getPlatformBotToken,
   channelId: (process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || '').trim(),
 }));
 
