@@ -413,6 +413,8 @@ app.use(require('./routes/public.routes')({
   huntCompleted: huntsCore.huntCompleted,
   modHuntKey: huntsCore.modHuntKey,
   affiliateHuntKey: huntsCore.affiliateHuntKey,
+  getGotInLog: huntsCore.getGotInLog,
+  collectBangers: require('./lib/bangers').collectBangers,
 }));
 
 // Global curated slot lists — public read, owner-only writes.

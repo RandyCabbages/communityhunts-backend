@@ -16,6 +16,7 @@ module.exports = function publicRoutes(deps) {
     requireApiKey, requireApiFeature, rateLimit, serializers,
     getHuntStats, hunts, archive, tenantOf,
     huntHasContent, huntCompleted, modHuntKey, affiliateHuntKey,
+    getGotInLog, collectBangers,
   } = deps;
   const router = express.Router();
 
@@ -71,6 +72,22 @@ module.exports = function publicRoutes(deps) {
     const stats = getHuntStats(req.apiTenantId);
     res.set('Cache-Control', 'public, max-age=60');
     res.json({ data: serializers.publicStats(stats) });
+  });
+
+  // Premium tier (developer_api_premium): got-in event log + banger rail, same selection
+  // logic as the session-authed admin export / public /api/bangers route respectively.
+  router.get('/api/public/v1/got-in', requireApiFeature('developer_api_premium'), (req, res) => {
+    const rows = getGotInLog(req.apiTenantId);
+    const { limit, offset } = paginate(req);
+    const page = serializers.publicGotIn(rows.slice(offset, offset + limit));
+    res.set('Cache-Control', 'no-store');
+    res.json({ data: page, pagination: { limit, offset, total: rows.length } });
+  });
+
+  router.get('/api/public/v1/bangers', requireApiFeature('developer_api_premium'), (req, res) => {
+    const list = collectBangers(hunts, archive, req.apiTenantId).map(serializers.publicBanger);
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json({ data: list, pagination: { limit: list.length, offset: 0, total: list.length } });
   });
 
   // Public-scoped error envelope (the global handler returns a bare string — wrong shape).

@@ -9,9 +9,7 @@
 const express = require('express');
 
 const { collectHallOfFame } = require('../lib/hallOfFame');
-
-// Bangers threshold: a "banger" is a win at >=300x bet.
-const BANGER_MIN_MULT = 300;
+const { collectBangers } = require('../lib/bangers');
 
 // Ticket config is env-derived (config, not shared state) — read here so the router is self-sufficient.
 // Tickets are PLATFORM-level: they post to communityhunts.gg's OWN channels, so the bot token is
@@ -28,51 +26,12 @@ module.exports = function miscRoutes(deps) {
   const { hunts, archive, tickets, getPlatformBotToken } = deps;
   const router = express.Router();
 
+  // Selection (300x floor, dedupe, recency sort, 2-per-user cap, 24-window) lives in
+  // lib/bangers.js — tested there; this stays a thin pass-through. Tenant isolation: only
+  // THIS tenant's hunts (tenantOf defaults an untagged hunt to 'bean'). Without it every
+  // community's banger rail showed Bean's wins. Now live with MULTI_TENANT on.
   router.get('/api/bangers', (req, res) => {
-    const out = [], seen = new Set();
-    // Tenant isolation: only THIS tenant's hunts. Without it every community's banger rail showed
-    // Bean's wins (tenantOf defaults an untagged hunt to 'bean'). Now live with MULTI_TENANT on.
-    const tid = req.tenant?.id || 'bean';
-    const collect = (h, live) => {
-      if (!h || !h.user || !Array.isArray(h.bonuses)) return;
-      if ((h.tenantId || 'bean') !== tid) return;
-      const at = h.archivedAt || h.startedAt || null;
-      for (const b of h.bonuses) {
-        const bet = +b.bet || 0, win = +b.win || 0;
-        if (bet <= 0 || win <= 0) continue;
-        const mult = win / bet;
-        if (mult < BANGER_MIN_MULT) continue;
-        const key = `${h.user.id}|${(b.slot||'').toLowerCase()}|${bet}|${win}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push({
-          slot: b.slot || 'Unknown', bet, win, mult: +mult.toFixed(2),
-          userId: h.user.id, username: h.user.displayName, avatar: h.user.avatar,
-          huntType: h.huntType || 'community', live: !!live,
-          at, archivedAt: h.archivedAt || null,
-        });
-      }
-    };
-    // Live hunts first so their fresher copy wins the dedupe over an archived snapshot.
-    Object.values(hunts).forEach(h => { if (h.isLive) collect(h, true); });
-    archive.forEach(h => collect(h, false));
-    out.sort((a, b) => {
-      const ta = a.at ? new Date(a.at).getTime() : 0;
-      const tb = b.at ? new Date(b.at).getTime() : 0;
-      return tb - ta || b.mult - a.mult;
-    });
-    // Cap per user so one hot hunt doesn't dominate the rail.
-    const MAX_PER_USER = 2;
-    const userCount = new Map();
-    const diverse = [];
-    for (const b of out) {
-      const c = userCount.get(b.userId) || 0;
-      if (c >= MAX_PER_USER) continue;
-      userCount.set(b.userId, c + 1);
-      diverse.push(b);
-      if (diverse.length >= 24) break;
-    }
-    res.json(diverse);
+    res.json(collectBangers(hunts, archive, req.tenant?.id || 'bean'));
   });
 
   // Hall of Fame: all-time top-multiplier hits that carry a replay link.
