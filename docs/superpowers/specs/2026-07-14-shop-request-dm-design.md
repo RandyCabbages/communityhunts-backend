@@ -49,7 +49,7 @@ merges (the frontend calls the new endpoint). Standard backend-first order for t
 
 **New route** in `routes/cardRequests.routes.js`:
 
-```
+```text
 POST /api/admin/card-requests/:id/dm      (requireAuth, requirePlatformAdmin)
   body: { message: string }               // final edited text, composed on the frontend
   → 200 { ok: boolean, error?: string, request: <updated request> }
@@ -73,9 +73,16 @@ Handler flow:
 7. Record the outcome via `recordDm(...)` (below) and return the updated request so the
    frontend can refresh the row.
 
+**When `recordDm` is called:** only for attempts that reach Discord — the success path
+(step 5) and a Discord delivery failure (step 6), i.e. any outcome with a real `ok`
+true/false from Discord. The pre-flight exits do **not** write to `dmLog`: `400`
+(invalid message) and `404` (not found) return plainly, and the "no bot configured" case
+returns `{ ok:false, ... }` **without** recording (it's an env misconfiguration affecting
+every request, not this one's delivery history).
+
 **New helper** in `lib/cardRequests.js`:
 
-```
+```text
 recordDm(id, { template, ok, error }) → updated request | null
 ```
 
