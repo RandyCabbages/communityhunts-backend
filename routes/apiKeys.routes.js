@@ -2,12 +2,7 @@
 // (mods excluded). Tenant from X-Tenant-Slug as usual (this is NOT the public key-authed layer).
 
 const express = require('express');
-
-// Tier → published rate limits (mirrors lib/rateLimit.js LIMITS; shown on the admin card).
-const TIER_LIMITS = {
-  pro:     { perMin: 100, perHour: 2000 },
-  partner: { perMin: 300, perHour: 10000 },
-};
+const { LIMITS } = require('../lib/rateLimit');
 
 module.exports = function apiKeysRoutes(deps) {
   const { requireAuth, apiKeys, tenants, isPlatformAdmin, canUse } = deps;
@@ -26,7 +21,7 @@ module.exports = function apiKeysRoutes(deps) {
       key: apiKeys.getKeyMeta(req.tenant.slug),      // null if none
       qualifies: qualifies(req),
       tier,
-      limits: TIER_LIMITS[tier] || null,
+      limits: LIMITS[tier] || null,
       premium: canUse('developer_api_premium', null, tier),
     });
   });
