@@ -10,6 +10,7 @@ const express = require('express');
 const { ASSIGNEES } = require('../lib/cardRequests');
 
 const MAX_OPEN_PER_USER = 2;
+const MAX_DM = 2000; // DM message cap — mirrors lib/cardRequests MAX_IDEA / MAX_NOTES
 
 // Discord-owner-id → label, for the embed's "Assigned to" field. Mirrors the admin panel.
 const ASSIGNEE_LABEL = Object.fromEntries(ASSIGNEES.map(a => [a.id, a.label]));
@@ -127,6 +128,56 @@ module.exports = function cardRequestsRoutes(deps) {
   router.delete('/api/admin/card-requests/:id', requireAuth, requirePlatformAdmin, (req, res) => {
     if (!cardRequests.deleteRequest(String(req.params.id))) return res.status(404).json({ error: 'Request not found' });
     res.json({ ok: true });
+  });
+
+  // Manual, best-effort DM to the requester (a canned/edited message composed on the frontend).
+  // Two Discord calls: open the DM channel with the requester, then post the message. A Discord
+  // failure never errors the request — it returns { ok:false } and records the attempt in dmLog.
+  router.post('/api/admin/card-requests/:id/dm', requireAuth, requirePlatformAdmin, async (req, res) => {
+    const message = typeof (req.body && req.body.message) === 'string' ? req.body.message.trim() : '';
+    if (!message) return res.status(400).json({ error: 'Message required' });
+    if (message.length > MAX_DM) return res.status(400).json({ error: `Message too long (max ${MAX_DM} characters)` });
+
+    const r = cardRequests.getRequest(String(req.params.id));
+    if (!r) return res.status(404).json({ error: 'Request not found' });
+
+    const template = (req.body && req.body.template) || '';
+    const botToken = getPlatformBotToken();
+    if (!botToken) return res.json({ ok: false, error: 'Discord bot not configured', request: r });
+
+    const CANT_DM = "Couldn't DM — they may have DMs disabled or left the server";
+    try {
+      // 1) Open (or reuse) the DM channel with the requester.
+      const dmResp = await fetch('https://discord.com/api/v10/users/@me/channels', {
+        method: 'POST',
+        headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipient_id: r.userId }),
+      });
+      if (!dmResp.ok) throw new Error(`open DM channel → ${dmResp.status}`);
+      const dm = await dmResp.json().catch(() => null);
+      if (!dm || !dm.id) throw new Error('no DM channel id');
+
+      // 2) Post the message as plain text.
+      const msgResp = await fetch(`https://discord.com/api/v10/channels/${dm.id}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: message }),
+      });
+      if (!msgResp.ok) {
+        const error = msgResp.status === 403 ? CANT_DM : 'Discord error — try again';
+        const updated = cardRequests.recordDm(r.id, { template, ok: false, error });
+        console.error(`[cardreq] DM to ${r.userId} failed: ${msgResp.status}`);
+        return res.json({ ok: false, error, request: updated || r });
+      }
+
+      const updated = cardRequests.recordDm(r.id, { template, ok: true });
+      console.log(`[cardreq] DM sent to ${r.userId} for request ${r.id}`);
+      return res.json({ ok: true, request: updated || r });
+    } catch (e) {
+      console.error('[cardreq] DM error:', e.message);
+      const updated = cardRequests.recordDm(r.id, { template, ok: false, error: CANT_DM });
+      return res.json({ ok: false, error: CANT_DM, request: updated || r });
+    }
   });
 
   return router;
