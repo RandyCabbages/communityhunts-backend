@@ -392,6 +392,22 @@ app.use(require('./routes/apiKeys.routes')({
   requireAuth, apiKeys, tenants, isPlatformAdmin, canUse: features.canUse,
 }));
 
+// Public Developer API (key-authed, tier-gated). requireApiKey derives the tenant from the key
+// and overrides req.tenant, so a post-resolveTenant mount is safe. Handlers use req.apiTenantId.
+const serializers = require('./lib/publicSerializers');
+serializers._setPublicHuntView(huntsCore.publicHuntView);
+const rateLimitLib = require('./lib/rateLimit');
+app.use(require('./routes/public.routes')({
+  requireApiKey: apiKeys.requireApiKey,
+  requireApiFeature: apiKeys.requireApiFeature,
+  rateLimit: rateLimitLib.rateLimit,
+  serializers,
+  getPublicHunts: huntsCore.getPublicHunts,
+  getArchivedHunts: huntsCore.getArchivedHunts,
+  getHuntStats: huntsCore.getHuntStats,
+  hunts, archive, tenantOf: huntsCore.tenantOf,
+}));
+
 // Global curated slot lists — public read, owner-only writes.
 const slotLists = require('./lib/slotLists');
 slotLists.initSlotLists({ pgPool }).catch(e => console.error('[slotlists] init error:', e.message));
