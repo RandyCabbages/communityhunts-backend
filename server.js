@@ -338,6 +338,15 @@ function rejectBadHuntInput(req, res) {
   return false;
 }
 
+// Creator Twitch live-check (lib/integrations): hunts routes read the cache (wire
+// enrichment) + trigger an immediate refresh on /start; the poller starts in startPolling().
+const integrations = require('./lib/integrations');
+const creatorPollDeps = {
+  getAllTenants: () => tenants.getAllTenants(),
+  getPublicHunts,
+  getSettings: settings.getSettings,
+};
+
 // Public-hunt + my-hunt routes (routes/hunts.routes.js). Declaration order inside the router is
 // load-bearing: /api/hunts/archived before /api/hunts/:userId.
 app.use(require('./routes/hunts.routes')({
@@ -346,6 +355,8 @@ app.use(require('./routes/hunts.routes')({
   emitHubUpdate, emitHuntUpdate, publicHuntView, uid, touch,
   persistHunts, archiveHunt, unarchiveHunt, io, rejectBadHuntInput,
   resolveUserIdByName: settings.resolveUserIdByName,
+  getCreatorLive: integrations.getCreatorLive,
+  refreshCreatorsLive: () => integrations.checkCreatorsLive(io, creatorPollDeps),
 }));
 
 // Mod hunt + Affiliate hunt — two fixed-key shared hunts (routes/mod-hunt.routes.js).
@@ -521,10 +532,13 @@ app.use(require('./routes/admin.routes')({
 // /api/tickets moved to routes/misc.routes.js (mounted below near the slots router).
 
 // ── External integrations (Twitch live, leaderboard, Discord) ──────
-// Logic lives in lib/integrations.js; routes in routes/integrations.routes.js.
-const integrations = require('./lib/integrations');
-// Poll each active tenant's Twitch channel. Runs after tenants load.
-function startPolling() { integrations.startTenantPolling(io, tenants.getAllTenants()); }
+// Logic lives in lib/integrations.js (required above the hunts routes, which consume the
+// creator live cache); routes in routes/integrations.routes.js.
+// Poll each active tenant's Twitch channel + every live hunt creator. Runs after tenants load.
+function startPolling() {
+  integrations.startTenantPolling(io, tenants.getAllTenants());
+  integrations.startCreatorPolling(io, creatorPollDeps);
+}
 // initTenants() is async; give it a beat, then start polling (Bean is in cache immediately anyway).
 setTimeout(startPolling, 3000);
 

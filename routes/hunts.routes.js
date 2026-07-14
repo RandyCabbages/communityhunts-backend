@@ -21,7 +21,7 @@ module.exports = function huntsRoutes(deps) {
     hunts, archive, getPublicHunts, getArchivedHunts,
     emitHubUpdate, emitHuntUpdate, publicHuntView, uid, touch,
     persistHunts, archiveHunt, unarchiveHunt, io, rejectBadHuntInput,
-    resolveUserIdByName,
+    resolveUserIdByName, getCreatorLive, refreshCreatorsLive,
   } = deps;
   const router = express.Router();
 
@@ -42,7 +42,14 @@ module.exports = function huntsRoutes(deps) {
   }
 
   // ── Public hunt endpoints ──────────────────────────────────────────
-  router.get('/api/hunts',          (req, res) => res.json(getPublicHunts(req.tenant.id)));
+  // Each summary is enriched (route layer — huntSummary is contract-frozen) with the
+  // creator's Twitch live state so hub cards can show "LIVE ON TWITCH".
+  router.get('/api/hunts', (req, res) => res.json(
+    getPublicHunts(req.tenant.id).map(h => {
+      const t = getCreatorLive(h.userId);
+      return { ...h, twitchLive: t.isLive, twitchLogin: t.login };
+    })
+  ));
   router.get('/api/hunts/archived', (req, res) => res.json(getArchivedHunts(req.tenant.id)));
 
   // Fetch a specific archived hunt snapshot. One user can have many archived hunts so the
@@ -151,6 +158,8 @@ module.exports = function huntsRoutes(deps) {
       huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant, bal), calls: [], invitedEditors: [], callLimit: huntType === 'solo' ? 0 : huntType === 'community' ? 20 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: currency || 'USD', publicCalls: false, publicCallsPin: null
     };
     persistHunts();
+    // Fire-and-forget: pick up the new hunt's creator without waiting a poll cycle.
+    refreshCreatorsLive();
     res.json({ok:true});
   });
 
