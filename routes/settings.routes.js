@@ -70,6 +70,9 @@ module.exports = function settingsRoutes(deps) {
     if (twitchName  !== undefined)    current.twitchName     = String(twitchName).trim().slice(0, 64);
     if (preferredSlots !== undefined) current.preferredSlots = (preferredSlots || []).filter(Boolean);
     if (req.body.anonymous !== undefined) current.anonymous  = !!req.body.anonymous;
+    // Viewer-side equity-card display prefs (see frontend CardPrefsContext). Booleans, default off.
+    if (req.body.hideEquityCards       !== undefined) current.hideEquityCards       = !!req.body.hideEquityCards;
+    if (req.body.disableEquityCardAnim !== undefined) current.disableEquityCardAnim = !!req.body.disableEquityCardAnim;
     if (req.body.replayThreshold !== undefined
         && await userCanUse('replay', req.user.id, req.tenant?.plan)) {
       // Big-win replay threshold (x). 0 disables prompting. Garbage falls back to the default.
