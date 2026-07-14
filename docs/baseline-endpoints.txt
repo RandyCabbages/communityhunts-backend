@@ -34,6 +34,8 @@ HTTP ROUTES (71) — grouped by concern, with gating middleware
 
 # --- Public hunts (5) ---
 451:  GET    /api/hunts                                     # getPublicHunts(req.tenant.id)
+      # 2026-07-14: items additionally carry twitchLive (bool) + twitchLogin (string|null) —
+      # creator Twitch live state, enriched at route layer (huntSummary unchanged).
 452:  GET    /api/hunts/archived                            # MUST stay declared BEFORE /api/hunts/:userId
 457:  GET    /api/bangers
 491:  GET    /api/hunts/:userId/archived/:archivedAt
@@ -135,6 +137,7 @@ SOCKET.IO — io.on('connection') @ 2081
 #                                                              850,861,872,885,897,947,1000,1153,1170,1180,2096
 #   hunt:reinvite         ({huntUserId})                     698, 708
 #   bean:live             (live state)                       2088, and lib/integrations.js:28 (Twitch poll)
+#   hunts:twitchlive      ({ userId: { isLive, login } })    lib/integrations.js checkCreatorsLive (2026-07-14)
 #   calls:request:new     ({requests})                       2037
 #   calls:granted         ({userId})                         2067
 #   calls:denied          ({userId})                         2069

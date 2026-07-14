@@ -213,7 +213,8 @@ hunt:reinvite           → tell watchers to re-fetch permissions
 calls:request:new       → new call permission request
 calls:granted           → call permission granted
 calls:denied            → call permission denied
-bean:live               → Twitch live status update
+bean:live               → Twitch live status update (tenant channel)
+hunts:twitchlive        → per-creator Twitch live map for the hub ({ userId: { isLive, login } })
 
 watch:overdrop          ← client joins overdrop:<slug> room (read-only)
 overdrop:sync           → full OverDrop state on join (incl. `enabled`)
