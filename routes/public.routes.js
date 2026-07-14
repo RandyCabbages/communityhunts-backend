@@ -14,15 +14,22 @@ function paginate(req) {
 module.exports = function publicRoutes(deps) {
   const {
     requireApiKey, requireApiFeature, rateLimit, serializers,
-    getPublicHunts, getArchivedHunts, getHuntStats, hunts, archive, tenantOf,
+    getHuntStats, hunts, archive, tenantOf,
+    huntHasContent, huntCompleted, modHuntKey, affiliateHuntKey,
   } = deps;
   const router = express.Router();
 
-  // Own CORS: open to any origin, NO credentials (Bearer-key auth, no cookies).
-  router.use((req, res, next) => {
+  // Own CORS: open to any origin, NO credentials (Bearer-key auth, no cookies). Path-scoped —
+  // this router is mounted app-wide (server.js), so an unscoped `router.use` would run on every
+  // request in the app and clobber the global cors() headers on unrelated routes.
+  router.use('/api/public/v1', (req, res, next) => {
     res.set('Access-Control-Allow-Origin', '*');
     res.set('Access-Control-Allow-Methods', 'GET,OPTIONS');
     res.set('Access-Control-Allow-Headers', 'Authorization,Content-Type');
+    // ACAO:* + ACAC:true is an invalid combination (browsers reject it). The global CORS
+    // middleware now skips /api/public/* entirely (server.js), but strip defensively in case
+    // something upstream ever sets it again.
+    res.removeHeader('Access-Control-Allow-Credentials');
     if (req.method === 'OPTIONS') return res.status(204).end();
     next();
   });
@@ -34,8 +41,18 @@ module.exports = function publicRoutes(deps) {
     const tid = req.apiTenantId;
     const status = String(req.query.status || 'all');
     let list = [];
-    if (status === 'live' || status === 'all')     list = list.concat(Object.values(hunts).filter(h => h.isLive && tenantOf(h) === tid));
-    if (status === 'archived' || status === 'all') list = list.concat(archive.filter(h => tenantOf(h) === tid));
+    // Mirrors lib/hunts-core.js getPublicHunts/getArchivedHunts eligibility predicates EXACTLY,
+    // applied to the raw hunt objects (not huntSummary — serializers.publicHunt needs the full
+    // hunt). Keep this in sync with hunts-core.js by hand; do not call getPublicHunts/
+    // getArchivedHunts directly here.
+    if (status === 'live' || status === 'all') {
+      list = list.concat(Object.values(hunts).filter(h =>
+        h.isLive && huntHasContent(h) && !huntCompleted(h) && tenantOf(h) === tid &&
+        h.user?.id !== modHuntKey(tid) && h.user?.id !== affiliateHuntKey(tid)));
+    }
+    if (status === 'archived' || status === 'all') {
+      list = list.concat(archive.filter(h => tenantOf(h) === tid && huntCompleted(h)));
+    }
     list.sort((a, b) => new Date(b.archivedAt || b.startedAt || 0) - new Date(a.archivedAt || a.startedAt || 0));
     const { limit, offset } = paginate(req);
     const page = list.slice(offset, offset + limit).map(serializers.publicHunt);

@@ -149,7 +149,12 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   crossOriginEmbedderPolicy: false,
 }));
-app.use(cors({ origin: corsOrigin, credentials: true }));
+// The public Developer API (routes/public.routes.js) governs its own CORS (open to any origin,
+// no credentials — Bearer-key auth, not cookies). This credentialed, origin-allowlisted CORS
+// would otherwise 500 on any non-allowlisted browser origin before the public router ever runs,
+// blocking third-party browser consumers of the public API — so it's skipped for those paths.
+const globalCors = cors({ origin: corsOrigin, credentials: true });
+app.use((req, res, next) => req.path.startsWith('/api/public/') ? next() : globalCors(req, res, next));
 // Stripe webhook needs the raw body for signature verification — mount
 // before the global JSON parser so it gets the unparsed Buffer.
 app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }));
@@ -402,10 +407,12 @@ app.use(require('./routes/public.routes')({
   requireApiFeature: apiKeys.requireApiFeature,
   rateLimit: rateLimitLib.rateLimit,
   serializers,
-  getPublicHunts: huntsCore.getPublicHunts,
-  getArchivedHunts: huntsCore.getArchivedHunts,
   getHuntStats: huntsCore.getHuntStats,
   hunts, archive, tenantOf: huntsCore.tenantOf,
+  huntHasContent: huntsCore.huntHasContent,
+  huntCompleted: huntsCore.huntCompleted,
+  modHuntKey: huntsCore.modHuntKey,
+  affiliateHuntKey: huntsCore.affiliateHuntKey,
 }));
 
 // Global curated slot lists — public read, owner-only writes.
