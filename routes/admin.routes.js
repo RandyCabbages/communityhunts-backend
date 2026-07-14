@@ -14,6 +14,8 @@
 //   DELETE /api/admin/platform-admins/:id                — remove a DB platform admin
 //   POST   /api/admin/hunts/cleanup                      — manual stale-hunt sweep
 //   POST   /api/admin/hunts/retag-currency               — fix a hunt's currency tag (single or all-untagged)
+//   PATCH  /api/admin/hunt-history/:huntKey/currency     — correct a stored hunt's currency (+recompute)
+//   DELETE /api/admin/hunt-history/:huntKey              — delete a stored hunt (+recompute)
 //   POST   /api/admin/hunts/:userId/end                  — force-end + archive a hunt
 //   POST   /api/admin/hunts/:userId/reopen               — reopen an ended hunt
 //   DELETE /api/admin/hunts/:userId                      — delete a hunt
@@ -27,7 +29,7 @@ module.exports = function adminRoutes(deps) {
   const {
     requireAuth, requireAdmin, requirePlatformAdmin,
     getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats,
-    pgPool, admins, tenants, ADMIN_IDS,
+    pgPool, admins, tenants, ADMIN_IDS, statsStore,
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
     subscriptions,
@@ -334,6 +336,33 @@ module.exports = function adminRoutes(deps) {
     persistArchive();
     emitHubUpdate(tid); // also persists current hunts
     res.json({ ok: true, updated });
+  });
+
+  // Correct a past hunt's currency in the DURABLE stats store (hunt_history) and recompute the
+  // rollup for the host + every participant. Distinct from retag-currency above, which only
+  // touches the live/file-archive copies (not the stats source of truth). Optional usdRate lets
+  // an admin supply the rate that applied at hunt time (fxRates otherwise stamps today's rate for
+  // an old date — meaningful for volatile currencies like ARS). :huntKey may contain '|'.
+  router.patch('/api/admin/hunt-history/:huntKey/currency', requireAuth, requireAdmin, async (req, res) => {
+    const { currency, usdRate } = req.body || {};
+    if (!CURRENCIES.includes(currency)) return res.status(400).json({ error: 'Invalid currency' });
+    if (usdRate != null && !(Number(usdRate) > 0)) return res.status(400).json({ error: 'Invalid rate' });
+    if (!statsStore) return res.status(503).json({ error: 'Stats store unavailable' });
+    try {
+      const r = await statsStore.correctHuntCurrency(req.tenant.id, req.params.huntKey,
+        { currency, usdRate: usdRate != null ? Number(usdRate) : undefined });
+      if (r && r.notFound) return res.status(404).json({ error: 'Hunt not found in history' });
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Delete a past hunt from the durable stats store and recompute affected participants.
+  router.delete('/api/admin/hunt-history/:huntKey', requireAuth, requireAdmin, async (req, res) => {
+    if (!statsStore) return res.status(503).json({ error: 'Stats store unavailable' });
+    try {
+      await statsStore.deleteHuntByKey(req.tenant.id, req.params.huntKey);
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // Delete an archived hunt. Two archived hunts can share a userId (same user, multiple completed hunts),

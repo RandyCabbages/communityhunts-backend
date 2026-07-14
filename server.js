@@ -507,7 +507,7 @@ setInterval(cleanupStaleHunts, 10 * 60 * 1000);
 app.use(require('./routes/admin.routes')({
   requireAuth, requireAdmin, requirePlatformAdmin,
   getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats: huntsCore.getHuntStats,
-  pgPool, admins, tenants, ADMIN_IDS,
+  pgPool, admins, tenants, ADMIN_IDS, statsStore,
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
   emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
   subscriptions,
