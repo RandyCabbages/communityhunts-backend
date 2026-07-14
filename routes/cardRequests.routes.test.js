@@ -28,6 +28,7 @@ function fakeCardRequests(initial) {
   const list = initial.slice();
   return {
     _list: list,
+    listRequests: () => list,
     getRequest: (id) => list.find(x => x.id === id) || null,
     recordDm: (id, entry) => {
       const r = list.find(x => x.id === id);
@@ -40,13 +41,14 @@ function fakeCardRequests(initial) {
   };
 }
 
-function appWith({ requests = [], admin = true, platformToken = 'ptok' } = {}) {
+function appWith({ requests = [], admin = true, platformToken = 'ptok', getSettings } = {}) {
   const app = express();
   app.use(express.json());
   const requireAuth = (req, res, next) => { req.user = { id: 'admin1', displayName: 'Cabbage' }; next(); };
   const requirePlatformAdmin = admin ? (req, res, next) => next() : (req, res, next) => res.status(403).json({ error: 'forbidden' });
   const cardRequests = fakeCardRequests(requests);
-  app.use(cardRequestsRoutes({ requireAuth, requirePlatformAdmin, cardRequests, getPlatformBotToken: () => platformToken, channelId: '999' }));
+  const gs = getSettings || (async () => ({ rainbetName: '' }));
+  app.use(cardRequestsRoutes({ requireAuth, requirePlatformAdmin, cardRequests, getPlatformBotToken: () => platformToken, getSettings: gs, channelId: '999' }));
   app._cardRequests = cardRequests;
   return app;
 }
@@ -134,4 +136,33 @@ test('a non-platform-admin is blocked (403)', async () => {
   const app = appWith({ requests: [{ ...REQ }], admin: false });
   const r = await postDm(app, 'cr_1', { message: 'hi' });
   assert.strictEqual(r.status, 403);
+});
+
+async function getRequests(app) {
+  const server = await new Promise(resolve => { const s = app.listen(0, () => resolve(s)); });
+  try {
+    const r = await realFetch(`http://127.0.0.1:${server.address().port}/api/admin/card-requests`);
+    return { status: r.status, body: await r.json().catch(() => null) };
+  } finally {
+    server.close();
+  }
+}
+
+test("GET returns assignees with each owner's rainbet handle from getSettings", async () => {
+  const handles = { '135203806676779008': 'RandyCabbage', '168055630916091904': 'GooferBeans' };
+  const app = appWith({ requests: [{ ...REQ }], getSettings: async (id) => ({ rainbetName: handles[id] || '' }) });
+  const r = await getRequests(app);
+  assert.strictEqual(r.status, 200);
+  assert.ok(Array.isArray(r.body.assignees), 'assignees present');
+  const cab = r.body.assignees.find(a => a.id === '135203806676779008');
+  const goof = r.body.assignees.find(a => a.id === '168055630916091904');
+  assert.strictEqual(cab.rainbet, 'RandyCabbage');
+  assert.strictEqual(goof.rainbet, 'GooferBeans');
+  assert.strictEqual(r.body.requests.length, 1, 'requests still returned');
+});
+
+test('GET yields empty rainbet when a handle is unset', async () => {
+  const app = appWith({ requests: [], getSettings: async () => ({ rainbetName: '' }) });
+  const r = await getRequests(app);
+  assert.strictEqual(r.body.assignees.every(a => a.rainbet === ''), true);
 });

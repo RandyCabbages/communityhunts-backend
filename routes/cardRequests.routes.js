@@ -48,7 +48,7 @@ function buildRequestEmbed(r) {
 }
 
 module.exports = function cardRequestsRoutes(deps) {
-  const { requireAuth, requirePlatformAdmin, cardRequests, getPlatformBotToken, channelId } = deps;
+  const { requireAuth, requirePlatformAdmin, cardRequests, getPlatformBotToken, getSettings, channelId } = deps;
   const router = express.Router();
   const ipHits = new Map(); // per-IP submit timestamps (same throttle pattern as /api/tickets)
 
@@ -95,8 +95,16 @@ module.exports = function cardRequestsRoutes(deps) {
     res.json({ ok: true, discord });
   });
 
-  router.get('/api/admin/card-requests', requireAuth, requirePlatformAdmin, (req, res) => {
-    res.json({ requests: cardRequests.listRequests() });
+  router.get('/api/admin/card-requests', requireAuth, requirePlatformAdmin, async (req, res) => {
+    // Resolve each owner's live Rainbet tip handle from their profile (rainbetName). Small
+    // fixed set (the platform owners); computed at read time so it always reflects the profile.
+    const getS = typeof getSettings === 'function' ? getSettings : async () => ({});
+    const assignees = await Promise.all(ASSIGNEES.map(async (a) => {
+      let rainbet = '';
+      try { const s = await getS(a.id); rainbet = (s && s.rainbetName) ? String(s.rainbetName) : ''; } catch (e) {}
+      return { id: a.id, label: a.label, rainbet };
+    }));
+    res.json({ requests: cardRequests.listRequests(), assignees });
   });
 
   router.put('/api/admin/card-requests/:id', requireAuth, requirePlatformAdmin, async (req, res) => {
