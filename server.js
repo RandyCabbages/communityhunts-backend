@@ -395,6 +395,7 @@ cardRequests.initCardRequests({ pgPool }).catch(e => console.error('[cardreq] in
 app.use(require('./routes/cardRequests.routes')({
   requireAuth, requirePlatformAdmin, cardRequests,
   getPlatformBotToken: tenants.getPlatformBotToken,
+  getSettings: settings.getSettings,
   channelId: (process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || '').trim(),
 }));
 

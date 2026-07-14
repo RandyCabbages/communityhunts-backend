@@ -48,7 +48,7 @@ function buildRequestEmbed(r) {
 }
 
 module.exports = function cardRequestsRoutes(deps) {
-  const { requireAuth, requirePlatformAdmin, cardRequests, getPlatformBotToken, channelId } = deps;
+  const { requireAuth, requirePlatformAdmin, cardRequests, getPlatformBotToken, getSettings, channelId } = deps;
   const router = express.Router();
   const ipHits = new Map(); // per-IP submit timestamps (same throttle pattern as /api/tickets)
 
@@ -95,8 +95,16 @@ module.exports = function cardRequestsRoutes(deps) {
     res.json({ ok: true, discord });
   });
 
-  router.get('/api/admin/card-requests', requireAuth, requirePlatformAdmin, (req, res) => {
-    res.json({ requests: cardRequests.listRequests() });
+  router.get('/api/admin/card-requests', requireAuth, requirePlatformAdmin, async (req, res) => {
+    // Resolve each owner's live Rainbet tip handle from their profile (rainbetName). Small
+    // fixed set (the platform owners); computed at read time so it always reflects the profile.
+    const getS = typeof getSettings === 'function' ? getSettings : async () => ({});
+    const assignees = await Promise.all(ASSIGNEES.map(async (a) => {
+      let rainbet = '';
+      try { const s = await getS(a.id); rainbet = (s && s.rainbetName) ? String(s.rainbetName) : ''; } catch (e) {}
+      return { id: a.id, label: a.label, rainbet };
+    }));
+    res.json({ requests: cardRequests.listRequests(), assignees });
   });
 
   router.put('/api/admin/card-requests/:id', requireAuth, requirePlatformAdmin, async (req, res) => {
@@ -142,6 +150,7 @@ module.exports = function cardRequestsRoutes(deps) {
     if (!r) return res.status(404).json({ error: 'Request not found' });
 
     const template = (req.body && req.body.template) || '';
+    const by = req.user ? { id: String(req.user.id), name: req.user.displayName || req.user.username || 'admin' } : undefined;
     const botToken = getPlatformBotToken();
     if (!botToken) return res.json({ ok: false, error: 'Discord bot not configured', request: r });
 
@@ -165,17 +174,17 @@ module.exports = function cardRequestsRoutes(deps) {
       });
       if (!msgResp.ok) {
         const error = msgResp.status === 403 ? CANT_DM : 'Discord error — try again';
-        const updated = cardRequests.recordDm(r.id, { template, ok: false, error });
+        const updated = cardRequests.recordDm(r.id, { template, ok: false, error, message, by });
         console.error(`[cardreq] DM to ${r.userId} failed: ${msgResp.status}`);
         return res.json({ ok: false, error, request: updated || r });
       }
 
-      const updated = cardRequests.recordDm(r.id, { template, ok: true });
+      const updated = cardRequests.recordDm(r.id, { template, ok: true, message, by });
       console.log(`[cardreq] DM sent to ${r.userId} for request ${r.id}`);
       return res.json({ ok: true, request: updated || r });
     } catch (e) {
       console.error('[cardreq] DM error:', e.message);
-      const updated = cardRequests.recordDm(r.id, { template, ok: false, error: CANT_DM });
+      const updated = cardRequests.recordDm(r.id, { template, ok: false, error: CANT_DM, message, by });
       return res.json({ ok: false, error: CANT_DM, request: updated || r });
     }
   });
