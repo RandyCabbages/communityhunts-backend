@@ -1,11 +1,14 @@
 // Misc leaf routes that don't belong to a larger concern:
-//   GET  /api/bangers   → top recent big-multiplier wins (reads hunts + archive, read-only)
+//   GET  /api/bangers       → top recent big-multiplier wins (reads hunts + archive, read-only)
+//   GET  /api/hall-of-fame  → all-time top replay-backed wins (reads hunts + archive, read-only)
 //   POST /api/tickets   → persist an inquiry/suggestion (lib/tickets) + best-effort Discord doorbell (per-IP rate limited)
 //   GET  /api/health    → health check
 // Thin router, mounted from the server.js composition root.
 // hunts/archive are the persistence-owned singletons — injected by reference, read only.
 
 const express = require('express');
+
+const { collectHallOfFame } = require('../lib/hallOfFame');
 
 // Bangers threshold: a "banger" is a win at >=300x bet.
 const BANGER_MIN_MULT = 300;
@@ -70,6 +73,14 @@ module.exports = function miscRoutes(deps) {
       if (diverse.length >= 24) break;
     }
     res.json(diverse);
+  });
+
+  // Hall of Fame: all-time top-multiplier hits that carry a replay link.
+  // Selection (300x floor, replay required, mult-desc, cap 12) lives in
+  // lib/hallOfFame.js — tested there; this stays a thin pass-through with the
+  // same tenant guard as /api/bangers.
+  router.get('/api/hall-of-fame', (req, res) => {
+    res.json(collectHallOfFame(hunts, archive, req.tenant?.id || 'bean'));
   });
 
   router.post('/api/tickets', async (req, res) => {
