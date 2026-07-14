@@ -149,7 +149,12 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   crossOriginEmbedderPolicy: false,
 }));
-app.use(cors({ origin: corsOrigin, credentials: true }));
+// The public Developer API (routes/public.routes.js) governs its own CORS (open to any origin,
+// no credentials — Bearer-key auth, not cookies). This credentialed, origin-allowlisted CORS
+// would otherwise 500 on any non-allowlisted browser origin before the public router ever runs,
+// blocking third-party browser consumers of the public API — so it's skipped for those paths.
+const globalCors = cors({ origin: corsOrigin, credentials: true });
+app.use((req, res, next) => req.path.startsWith('/api/public/') ? next() : globalCors(req, res, next));
 // Stripe webhook needs the raw body for signature verification — mount
 // before the global JSON parser so it gets the unparsed Buffer.
 app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }));
@@ -379,6 +384,37 @@ app.use(require('./routes/announcements.routes')({
   requireAuth, requirePlatformAdmin, announcements,
   getPlatformBotToken: tenants.getPlatformBotToken,
   announcementsChannelId: process.env.DISCORD_ANNOUNCEMENTS_CHANNEL_ID,
+}));
+
+// Developer API keys (per-community). initApiKeys gets tenant + feature helpers for the
+// middlewares. `features` was already required + initialized above (~line 263) — reused here,
+// not re-required. Admin router only (session-authed, owner/platform admin); the public
+// key-authed router is mounted by a later task and does NOT re-init apiKeys.
+const apiKeys = require('./lib/apiKeys');
+apiKeys.initApiKeys({ pgPool, getTenantBySlug: tenants.getTenantBySlug, canUse: features.canUse })
+  .catch(e => console.error('[apikeys] init error:', e.message));
+app.use(require('./routes/apiKeys.routes')({
+  requireAuth, apiKeys, tenants, isPlatformAdmin, canUse: features.canUse,
+}));
+
+// Public Developer API (key-authed, tier-gated). requireApiKey derives the tenant from the key
+// and overrides req.tenant, so a post-resolveTenant mount is safe. Handlers use req.apiTenantId.
+const serializers = require('./lib/publicSerializers');
+serializers._setPublicHuntView(huntsCore.publicHuntView);
+const rateLimitLib = require('./lib/rateLimit');
+app.use(require('./routes/public.routes')({
+  requireApiKey: apiKeys.requireApiKey,
+  requireApiFeature: apiKeys.requireApiFeature,
+  rateLimit: rateLimitLib.rateLimit,
+  serializers,
+  getHuntStats: huntsCore.getHuntStats,
+  hunts, archive, tenantOf: huntsCore.tenantOf,
+  huntHasContent: huntsCore.huntHasContent,
+  huntCompleted: huntsCore.huntCompleted,
+  modHuntKey: huntsCore.modHuntKey,
+  affiliateHuntKey: huntsCore.affiliateHuntKey,
+  getGotInLog: huntsCore.getGotInLog,
+  collectBangers: require('./lib/bangers').collectBangers,
 }));
 
 // Global curated slot lists — public read, owner-only writes.
