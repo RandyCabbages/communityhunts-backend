@@ -142,6 +142,7 @@ module.exports = function cardRequestsRoutes(deps) {
     if (!r) return res.status(404).json({ error: 'Request not found' });
 
     const template = (req.body && req.body.template) || '';
+    const by = req.user ? { id: String(req.user.id), name: req.user.displayName || req.user.username || 'admin' } : undefined;
     const botToken = getPlatformBotToken();
     if (!botToken) return res.json({ ok: false, error: 'Discord bot not configured', request: r });
 
@@ -165,17 +166,17 @@ module.exports = function cardRequestsRoutes(deps) {
       });
       if (!msgResp.ok) {
         const error = msgResp.status === 403 ? CANT_DM : 'Discord error — try again';
-        const updated = cardRequests.recordDm(r.id, { template, ok: false, error });
+        const updated = cardRequests.recordDm(r.id, { template, ok: false, error, message, by });
         console.error(`[cardreq] DM to ${r.userId} failed: ${msgResp.status}`);
         return res.json({ ok: false, error, request: updated || r });
       }
 
-      const updated = cardRequests.recordDm(r.id, { template, ok: true });
+      const updated = cardRequests.recordDm(r.id, { template, ok: true, message, by });
       console.log(`[cardreq] DM sent to ${r.userId} for request ${r.id}`);
       return res.json({ ok: true, request: updated || r });
     } catch (e) {
       console.error('[cardreq] DM error:', e.message);
-      const updated = cardRequests.recordDm(r.id, { template, ok: false, error: CANT_DM });
+      const updated = cardRequests.recordDm(r.id, { template, ok: false, error: CANT_DM, message, by });
       return res.json({ ok: false, error: CANT_DM, request: updated || r });
     }
   });

@@ -43,7 +43,7 @@ function fakeCardRequests(initial) {
 function appWith({ requests = [], admin = true, platformToken = 'ptok' } = {}) {
   const app = express();
   app.use(express.json());
-  const requireAuth = (req, res, next) => next();
+  const requireAuth = (req, res, next) => { req.user = { id: 'admin1', displayName: 'Cabbage' }; next(); };
   const requirePlatformAdmin = admin ? (req, res, next) => next() : (req, res, next) => res.status(403).json({ error: 'forbidden' });
   const cardRequests = fakeCardRequests(requests);
   app.use(cardRequestsRoutes({ requireAuth, requirePlatformAdmin, cardRequests, getPlatformBotToken: () => platformToken, channelId: '999' }));
@@ -84,6 +84,9 @@ test('a successful DM opens the channel then posts the message, and records ok:t
   assert.strictEqual(stored.dmLog.length, 1);
   assert.strictEqual(stored.dmLog[0].ok, true);
   assert.strictEqual(r.body.request.dmLog[0].ok, true);
+  // Message text + sender are recorded on the entry.
+  assert.strictEqual(stored.dmLog[0].message, 'hello there');
+  assert.deepStrictEqual(stored.dmLog[0].by, { id: 'admin1', name: 'Cabbage' });
 });
 
 test('a Discord 403 on the message post is best-effort: 200 { ok:false } + recorded failure', async () => {
