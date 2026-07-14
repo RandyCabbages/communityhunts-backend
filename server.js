@@ -381,6 +381,17 @@ app.use(require('./routes/announcements.routes')({
   announcementsChannelId: process.env.DISCORD_ANNOUNCEMENTS_CHANNEL_ID,
 }));
 
+// Developer API keys (per-community). initApiKeys gets tenant + feature helpers for the
+// middlewares. `features` was already required + initialized above (~line 263) — reused here,
+// not re-required. Admin router only (session-authed, owner/platform admin); the public
+// key-authed router is mounted by a later task and does NOT re-init apiKeys.
+const apiKeys = require('./lib/apiKeys');
+apiKeys.initApiKeys({ pgPool, getTenantBySlug: tenants.getTenantBySlug, canUse: features.canUse })
+  .catch(e => console.error('[apikeys] init error:', e.message));
+app.use(require('./routes/apiKeys.routes')({
+  requireAuth, apiKeys, tenants, isPlatformAdmin, canUse: features.canUse,
+}));
+
 // Global curated slot lists — public read, owner-only writes.
 const slotLists = require('./lib/slotLists');
 slotLists.initSlotLists({ pgPool }).catch(e => console.error('[slotlists] init error:', e.message));
