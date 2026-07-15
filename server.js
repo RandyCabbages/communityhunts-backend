@@ -97,7 +97,17 @@ async function fetchGuildRoles(oauthAccessToken, tenant) {
 
 // Refreshes guild roles via the tenant's bot token (no user OAuth token needed).
 // Called on /auth/me so roles stay current without re-login.
-async function refreshGuildRoles(discordUserId, tenant) {
+//
+// Returns null when roles are UNDETERMINED — same contract as fetchGuildRoles: callers must
+// leave the flags absent, never coerce to false (purchase eligibility fails OPEN on absent
+// flags, so coercing would silently lock buyers out).
+//
+// opts.detailed distinguishes the one determinate failure: Discord answers 404 for a user who
+// simply is not a guild member, which is "definitely not a VIP", not "lookup failed". Default
+// callers keep folding it into null so /auth/me and purchase eligibility are untouched; the
+// admin panel opts in so it can tell "no access" from "couldn't verify" instead of warning on
+// every non-member.
+async function refreshGuildRoles(discordUserId, tenant, opts = {}) {
   const guildId = tenant?.discordGuildId;
   const botToken = tenant?.discordBotToken;
   if (!guildId || !botToken || !discordUserId) return null;
@@ -105,6 +115,7 @@ async function refreshGuildRoles(discordUserId, tenant) {
     const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/members/${discordUserId}`, {
       headers: { Authorization: `Bot ${botToken}` }
     });
+    if (res.status === 404 && opts.detailed) return { notGuildMember: true };
     if (!res.ok) return null;
     const member = await res.json();
     const memberRoles = member.roles || [];

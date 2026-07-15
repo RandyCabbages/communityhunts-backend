@@ -301,13 +301,15 @@ module.exports = function settingsRoutes(deps) {
       // console-added admin would be reported as having no access while the extension works
       // fine for them — the same lie this panel exists to kill.
       //
-      // Live guild lookup (bot token, so it works for any target ID). refreshGuildRoles returns
-      // null BOTH when the lookup fails AND when no guild is configured — only the former is
-      // "undetermined"; conflating them would show a permanent spurious warning on tenants
-      // without Discord.
+      // Live guild lookup (bot token, so it works for any target ID). null means UNDETERMINED,
+      // which is not the same as "no access" — so it is reported separately rather than shown
+      // as a definite no. { detailed: true } makes a 404 (not a guild member) come back as a
+      // determinate answer instead of null; without it every non-member would read as
+      // "couldn't verify" and the warning would be permanent noise on most profiles.
+      // No guild configured also returns null, but guildConfigured gates that out.
       const tenant = req.tenant;
       const asTarget = { user: { id: userId }, tenant };
-      const guildRoles = refreshGuildRoles ? await refreshGuildRoles(userId, tenant) : null;
+      const guildRoles = refreshGuildRoles ? await refreshGuildRoles(userId, tenant, { detailed: true }) : null;
       const guildConfigured = !!(tenant?.discordGuildId && tenant?.discordBotToken);
       const fullExtension = await fullExtensionFor(userId, {
         tenantPlan:     tenant?.plan,
