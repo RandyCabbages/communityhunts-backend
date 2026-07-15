@@ -15,10 +15,10 @@
 const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
 const { isItemAccessible, ITEM_TIERS, MOD_ONLY_ITEMS } = require('./cosmetics.routes');
-const { userCanUse } = require('../lib/features');
+const { userCanUse, fullExtensionFor } = require('../lib/features');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore, tenants, refreshGuildRoles } = deps;
   const { getSettings, saveSettings, resolveUserIdByName } = settings;
   const { computeUserHuntStats } = require('../lib/userStats');
 
@@ -289,6 +289,24 @@ module.exports = function settingsRoutes(deps) {
       }
       const userSettings = await getSettings(userId); // existing helper
       const communities = await memberships.getUserCommunities(userId);
+
+      // Effective Full-extension entitlement for the TARGET user (not req.user). The comp grant
+      // is only one of six OR'd paths, so the admin panel must report the computed result and
+      // its sources — a bare grant toggle reads OFF for a VIP who already has access.
+      // Live guild lookup (bot token, so it works for any target ID). refreshGuildRoles returns
+      // null BOTH when the lookup fails AND when no guild is configured — only the former is
+      // "undetermined"; conflating them would show a permanent spurious warning on tenants
+      // without Discord.
+      const tenant = req.tenant;
+      const guildRoles = refreshGuildRoles ? await refreshGuildRoles(userId, tenant) : null;
+      const guildConfigured = !!(tenant?.discordGuildId && tenant?.discordBotToken);
+      const fullExtension = await fullExtensionFor(userId, {
+        tenantPlan:     tenant?.plan,
+        isVipHost:      tenants ? tenants.isTenantVip({ id: userId }, tenant) : false,
+        isCommunityMod: tenants ? tenants.isTenantMod({ id: userId }, tenant) : false,
+        isDiscordVip:   !!guildRoles?.isDiscordVip,
+      });
+
       res.json({
         ...identity,
         rainbetName: userSettings.rainbetName || null,
@@ -296,6 +314,7 @@ module.exports = function settingsRoutes(deps) {
         preferredSlots: Array.isArray(userSettings.preferredSlots) ? userSettings.preferredSlots : [],
         communities,
         featureGrants: featureGrants ? featureGrants.getGrantsForUser(userId) : [],
+        fullExtension: { ...fullExtension, discordVipUndetermined: guildConfigured && !guildRoles },
         cosmetics: (userSettings.cosmetics && typeof userSettings.cosmetics === 'object') ? userSettings.cosmetics : {},
         cosmeticsOwned: Array.isArray(userSettings.cosmeticsOwned) ? userSettings.cosmeticsOwned : [],
         stats: statsStore ? await statsStore.getUserStats(tenantId, userId)
