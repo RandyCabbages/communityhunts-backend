@@ -40,7 +40,10 @@ module.exports = function publicRoutes(deps) {
 
   router.get('/api/public/v1/hunts', requireApiFeature('developer_api'), (req, res) => {
     const tid = req.apiTenantId;
-    const status = String(req.query.status || 'all');
+    const status = req.query.status === undefined ? 'all' : String(req.query.status);
+    if (!['live', 'archived', 'all'].includes(status)) {
+      return res.status(400).json({ error: { code: 'invalid_status', message: 'status must be one of: live, archived, all' } });
+    }
     let list = [];
     // Mirrors lib/hunts-core.js getPublicHunts/getArchivedHunts eligibility predicates EXACTLY,
     // applied to the raw hunt objects (not huntSummary — serializers.publicHunt needs the full
