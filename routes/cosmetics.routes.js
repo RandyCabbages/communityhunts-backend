@@ -98,13 +98,32 @@ async function isPurchaseEligible(u, subscriptions, isAdmin) {
 const NOT_ELIGIBLE_MSG = 'Join a community or get an individual plan to purchase.';
 
 module.exports = function cosmeticsRoutes(deps) {
-  const { requireAuth, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension } = deps;
+  const { requireAuth, requirePlatformAdmin, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension, cardReleases } = deps;
   const { getSettings, saveSettings } = settings;
   const router = express.Router();
 
   router.get('/api/cosmetics/owned', requireAuth, async (req, res) => {
     const s = await getSettings(req.user.id);
     res.json({ owned: s.cosmeticsOwned || [] });
+  });
+
+  // Which `hidden` catalog cards are live in the Shop. requireAuth (not public) because the
+  // Shop hard-returns null for a logged-out visitor — there is no anonymous consumer. Returns
+  // the whole list: the Shop needs all of it on mount, in one call.
+  router.get('/api/cosmetics/releases', requireAuth, (req, res) => {
+    res.json({ released: cardReleases.listReleased() });
+  });
+
+  // Make a card live / hidden. The ONLY writer of release state — both the Shop Requests
+  // "done" flow and the Shop tile toggle call this. Deliberately NOT wired into the request
+  // status write: a status change must never silently publish a card.
+  router.put('/api/admin/cosmetics/releases/:itemId', requireAuth, requirePlatformAdmin, (req, res) => {
+    const { itemId } = req.params;
+    if (!(itemId in ITEM_TIERS)) return res.status(400).json({ error: 'Invalid item' });
+    if (typeof (req.body && req.body.released) !== 'boolean') return res.status(400).json({ error: 'released must be a boolean' });
+    const list = cardReleases.setReleased(itemId, req.body.released);
+    console.log(`[releases] ${req.user.id} set ${itemId} released=${req.body.released}`);
+    res.json({ released: list });
   });
 
   router.post('/api/cosmetics/purchase', requireAuth, async (req, res) => {
