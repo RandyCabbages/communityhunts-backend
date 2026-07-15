@@ -307,12 +307,14 @@ module.exports = function settingsRoutes(deps) {
     }
   });
 
-  // POST /api/admin/users/:userId/grants — toggle a feature grant (e.g. 'shop') for a user.
+  // POST /api/admin/users/:userId/grants — toggle a feature grant for a user.
+  // 'full_extension' is the only grant left: the 'shop' grant died when browsing opened to
+  // everyone (2026-07-09 shop umbrella) — buying is gated by isPurchaseEligible, not a grant.
   router.post('/api/admin/users/:userId/grants', requireAuth, requireAdmin, async (req, res) => {
     const userId = String(req.params.userId);
     const feature = String(req.body?.feature || '').trim();
     const on = !!req.body?.on;
-    const ALLOWED = ['shop', 'full_extension'];
+    const ALLOWED = ['full_extension'];
     if (!ALLOWED.includes(feature)) return res.status(400).json({ error: 'unknown feature' });
     if (!featureGrants) return res.status(503).json({ error: 'grants unavailable' });
     try {
