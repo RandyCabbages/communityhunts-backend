@@ -8,6 +8,7 @@
 
 const express = require('express');
 const { ASSIGNEES } = require('../lib/cardRequests');
+const { ITEM_TIERS } = require('./cosmetics.routes'); // the item allowlist — validates itemId links
 
 const MAX_OPEN_PER_USER = 2;
 const MAX_DM = 2000; // DM message cap — mirrors lib/cardRequests MAX_IDEA / MAX_NOTES
@@ -110,6 +111,10 @@ module.exports = function cardRequestsRoutes(deps) {
   router.put('/api/admin/card-requests/:id', requireAuth, requirePlatformAdmin, async (req, res) => {
     const err = cardRequests.validateUpdate(req.body);
     if (err) return res.status(400).json({ error: err });
+    // The lib type-checks itemId; membership lives here, where the item allowlist is known.
+    if (req.body.itemId !== undefined && req.body.itemId !== null && !(req.body.itemId in ITEM_TIERS)) {
+      return res.status(400).json({ error: 'Invalid item' });
+    }
     const r = cardRequests.updateRequest(String(req.params.id), req.body);
     if (!r) return res.status(404).json({ error: 'Request not found' });
     res.json(r);

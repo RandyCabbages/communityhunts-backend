@@ -448,6 +448,11 @@ app.use(require('./routes/slotLists.routes')({
 // Posts + phase-updates via the one shared community bot (DISCORD_BOT_TOKEN), same as announcements.
 const cardRequests = require('./lib/cardRequests');
 cardRequests.initCardRequests({ pgPool }).catch(e => console.error('[cardreq] init error:', e.message));
+
+// Which `hidden` catalog cards are live in the Shop. Read/written by the cosmetics router
+// (mounted further down) — required here so it inits alongside the other hunts_kv stores.
+const cardReleases = require('./lib/cardReleases');
+cardReleases.initCardReleases({ pgPool }).catch(e => console.error('[releases] init error:', e.message));
 app.use(require('./routes/cardRequests.routes')({
   requireAuth, requirePlatformAdmin, cardRequests,
   getPlatformBotToken: tenants.getPlatformBotToken,
@@ -629,7 +634,7 @@ app.use(require('./routes/stripe.routes')({ requireAuth, stripeLib, FRONTEND_URL
 
 // Cosmetics purchase + inventory routes (routes/cosmetics.routes.js).
 const cosmeticsRouter = require('./routes/cosmetics.routes')({
-  requireAuth, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension,
+  requireAuth, requirePlatformAdmin, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension, cardReleases,
 });
 app.use(cosmeticsRouter);
 stripeLib.setCosmeticGrantFn(cosmeticsRouter._grantItem);
