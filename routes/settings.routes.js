@@ -18,7 +18,7 @@ const { isItemAccessible, ITEM_TIERS, MOD_ONLY_ITEMS } = require('./cosmetics.ro
 const { userCanUse, fullExtensionFor } = require('../lib/features');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore, tenants, refreshGuildRoles } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore, refreshGuildRoles } = deps;
   const { getSettings, saveSettings, resolveUserIdByName } = settings;
   const { computeUserHuntStats } = require('../lib/userStats');
 
@@ -293,17 +293,26 @@ module.exports = function settingsRoutes(deps) {
       // Effective Full-extension entitlement for the TARGET user (not req.user). The comp grant
       // is only one of six OR'd paths, so the admin panel must report the computed result and
       // its sources — a bare grant toggle reads OFF for a VIP who already has access.
+      //
+      // Role flags come from the REAL gate helpers via a synthetic req. reqIsVipHost/reqIsMod
+      // read only .user and .tenant, so this mirrors reqHasFullExtension exactly instead of
+      // re-deriving the roles. Do NOT swap these for tenants.isTenantVip/isTenantMod: those
+      // skip the isPlatformAdmin branch (env ADMIN_IDS + the platform_admins table), so a
+      // console-added admin would be reported as having no access while the extension works
+      // fine for them — the same lie this panel exists to kill.
+      //
       // Live guild lookup (bot token, so it works for any target ID). refreshGuildRoles returns
       // null BOTH when the lookup fails AND when no guild is configured — only the former is
       // "undetermined"; conflating them would show a permanent spurious warning on tenants
       // without Discord.
       const tenant = req.tenant;
+      const asTarget = { user: { id: userId }, tenant };
       const guildRoles = refreshGuildRoles ? await refreshGuildRoles(userId, tenant) : null;
       const guildConfigured = !!(tenant?.discordGuildId && tenant?.discordBotToken);
       const fullExtension = await fullExtensionFor(userId, {
         tenantPlan:     tenant?.plan,
-        isVipHost:      tenants ? tenants.isTenantVip({ id: userId }, tenant) : false,
-        isCommunityMod: tenants ? tenants.isTenantMod({ id: userId }, tenant) : false,
+        isVipHost:      reqIsVipHost ? reqIsVipHost(asTarget) : false,
+        isCommunityMod: reqIsMod ? reqIsMod(asTarget) : false,
         isDiscordVip:   !!guildRoles?.isDiscordVip,
       });
 

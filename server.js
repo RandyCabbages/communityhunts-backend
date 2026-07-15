@@ -316,11 +316,14 @@ const {
 // never charged). reqIsAdmin is folded into both reqIsVipHost and reqIsMod.
 async function reqHasFullExtension(req) {
   if (!req.user) return false;
+  // Role flags decide access with zero I/O — short-circuit before fullExtensionFor, which
+  // always queries Postgres for the subscription tier (it must, to report every source).
+  // This path serves /api/extension/entitlement on every extension load, and the pre-refactor
+  // code short-circuited the same way; dropping it would add a per-load query for every VIP.
+  // Only the boolean is needed here, so the unreported sources cost nothing.
+  if (reqIsVipHost(req) || reqIsMod(req) || !!req.user.isDiscordVip) return true;
   return (await features.fullExtensionFor(req.user.id, {
-    tenantPlan:     req.tenant?.plan,
-    isVipHost:      reqIsVipHost(req),
-    isCommunityMod: reqIsMod(req),
-    isDiscordVip:   !!req.user.isDiscordVip,
+    tenantPlan: req.tenant?.plan,
   })).access;
 }
 
@@ -606,8 +609,8 @@ app.use(require('./routes/misc.routes')({ hunts, archive, tickets, getPlatformBo
 
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
-  settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants,
-  hunts, archive, statsStore, tenants, refreshGuildRoles,
+  settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants,
+  hunts, archive, statsStore, refreshGuildRoles,
 }));
 
 // Stripe checkout, portal, and webhook routes (routes/stripe.routes.js).
