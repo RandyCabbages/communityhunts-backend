@@ -26,6 +26,8 @@ Out: editing user content after submit (still immutable), bulk import, non-platf
 | Requester who isn't in `known_users` | Picker **+ raw Discord ID fallback** | The premise is "they never came to the site". Picker-only would just move the friction from filling a form to signing in. A null `userId` (free-text requester) would break the DM button, `exclusiveUserId` gating, and equip — every downstream feature would grow a null branch. |
 | Starting status | Always `new` | Keeps `new → awaiting_tip → in_progress → done` honest: every request passed every stop, so "did we quote them?" stays answerable from the record. Costs one click when the idea was pre-approved in DM. |
 | Discord doorbell | Always post, same as public | The embed is not just a notification — `setDiscordMessage` stores its id and every status change PATCHes it. Skipping the post leaves `discordMessageId` unset, so `routes/cardRequests.routes.js` silently skips the embed update *forever* and that request is permanently dark in the channel while every other one tracks live. A redundant ping is cheaper than a queue record that lies. Also tells the co-owner a commission landed. |
+| Unverifiable Discord ID | **Hard-fail, never file a placeholder** | The snowflake regex checks shape, not existence, so a typo'd id would otherwise file silently against a real-looking record — discovered only when the DM bounces or the card can't be equipped, long after the context is gone. Better to reject at the point the admin can still read the id off the DM in front of them. |
+| Discord unreachable vs. 404 | Hard-fail both, **distinct messages** | Not the same fact. A 404 means the id is wrong; a transport failure means we don't know. Same outcome (blocked), but conflating them in the copy sends the admin hunting a typo in a good id while Discord is simply down. |
 
 ## Data model
 
@@ -55,14 +57,22 @@ admin. This is what keeps the DM button, `exclusiveUserId`, and equip working un
 ### `POST /api/admin/card-requests` (`requireAuth, requirePlatformAdmin`)
 
 1. `validateAdminCreate(req.body)` → 400 on failure.
-2. Resolve requester identity for `body.userId`, falling through on miss:
+2. Resolve requester identity for `body.userId`. **The id must be proven to exist before the
+   request is created** — there is no placeholder path:
    1. `getKnownUser(userId)` — new injected dep; the same one-row query
       `settings.routes.js` already runs (`SELECT display_name, username, avatar FROM known_users WHERE user_id=$1`).
-   2. Discord `GET /users/{id}` with the platform bot token → on success `recordKnownUser(...)`
-      (already exported from `lib/settings.js`) so they're searchable next time.
-   3. Both fail → `displayName: 'Unknown (<id>)'`, `avatar: null`. **The request still files** —
-      a wrong display name is cosmetic and fixable; `userId`, the load-bearing part, came from
-      the admin.
+      A hit is proof on its own (they signed in with that id), so **no Discord call is made**.
+   2. Miss → Discord `GET /users/{id}` with the platform bot token:
+      - **200** → use `global_name || username` + avatar, and `recordKnownUser(...)` (already
+        exported from `lib/settings.js`) so they're searchable next time.
+      - **404** → `400 { error: "No Discord user with that ID — double-check the id" }`. Nothing
+        is written.
+      - **anything else** (5xx, 429, network error, no bot token) → `503 { error: "Couldn't
+        verify the Discord ID right now — Discord may be down. Try again in a moment." }`.
+        Nothing is written.
+
+   The two failures are deliberately worded apart: a 404 means the id is wrong, a transport
+   failure means we don't know. Same outcome, different next action for the admin.
 3. `createRequest(body, resolvedUser, { createdBy: { id: req.user.id, name: <admin display name> } })`
 4. Post the doorbell (below).
 5. Respond with the created row (**not** the public route's `{ ok, discord }`) so the board can
@@ -92,6 +102,13 @@ if (r.createdBy) fields.push({ name: 'Filed by', value: `${r.createdBy.name} (on
   avatar + display name + id. When nothing matches, a "Use Discord ID" input accepts a raw
   snowflake. Then the same fields the public form collects: idea (required, ≤2000), card name,
   Rainbet username, reference links.
+
+  **Error surface:** the create call's rejection message renders as a red inline error inside the
+  modal, near the submit — matching the existing `setError` + red-div pattern in
+  `AdminShopRequests.js`, not a `window.alert`. The modal **stays open with every field intact**
+  so the admin can correct the id and resubmit; a failed create must never cost them the idea
+  text they just transcribed out of a DM. The backend's message is shown verbatim, since the
+  404-vs-unreachable distinction only pays off if the admin actually reads which one it was.
 - **`src/admin/adminApi.js`** — `createCardRequest(body)` → `POST /api/admin/card-requests`.
 - **`src/admin/AdminShopRequests.js`** — "+ New request" button by the header; on success
   `setRows(rs => [created, ...rs])`.
@@ -103,16 +120,22 @@ Tokens via `useTheme()`; no local token object.
 ## Testing
 
 **`lib/cardRequests.test.js`**
+
 - `createRequest` with `{ createdBy }` sets the field; without it, `createdBy` is absent/null.
 - Identity is snapshotted from the *passed* user object, not a session.
 - `validateAdminCreate`: rejects a non-snowflake `userId`, rejects a missing/empty idea, accepts
   a valid body.
 
 **`routes/cardRequests.routes.test.js`**
-- Admin create → 200 + the created row.
+
+- Admin create, `known_users` hit → 200 + the created row, **and no Discord user-lookup call**.
+- Admin create, `known_users` miss + Discord 200 → 200, name/avatar from Discord, `recordKnownUser` called.
 - Non-platform-admin → 403.
-- Bad snowflake → 400.
-- `known_users` miss + Discord unreachable → placeholder display name, still 200.
+- Bad snowflake → 400 (never reaches identity resolution).
+- `known_users` miss + Discord **404** → 400, and **nothing is written** (assert the list length
+  is unchanged — the regression that matters is a ghost row surviving a rejected create).
+- `known_users` miss + Discord **unreachable** → 503, nothing written, message distinct from the
+  404 case.
 
 Run captured to a **file, not a pipe** — route suites with `app.listen` hang on exit and piped
 exit codes mask failures (see the backend node --test gotcha).
