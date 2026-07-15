@@ -307,15 +307,21 @@ const {
   uid, touch,
 } = huntsCore;
 
-// Full (Rainbet) extension entitlement, request-scoped. A tenant's VIP roles (VIP host,
-// mod, Discord-guild VIP) unlock it for free; otherwise fall back to the plan-ladder / grant
-// check in features.hasFullExtension. Injected into the entitlement route (gates the download
+// Full (Rainbet) extension entitlement, request-scoped. Thin wrapper over
+// features.fullExtensionFor — the OR-list lives there and nowhere else. This passes the
+// CACHED session guild flag (req.user.isDiscordVip), never a live Discord lookup: this path
+// serves /api/extension/entitlement, which the extension calls on every load. The admin
+// panel passes a live lookup instead. Injected into the entitlement route (gates the download
 // page view AND the extension's in-app Rainbet features) and the subscribe route (so a VIP is
 // never charged). reqIsAdmin is folded into both reqIsVipHost and reqIsMod.
 async function reqHasFullExtension(req) {
   if (!req.user) return false;
-  const isTenantVip = reqIsVipHost(req) || reqIsMod(req) || !!req.user.isDiscordVip;
-  return isTenantVip || await features.hasFullExtension(req.user.id, req.tenant?.plan);
+  return (await features.fullExtensionFor(req.user.id, {
+    tenantPlan:     req.tenant?.plan,
+    isVipHost:      reqIsVipHost(req),
+    isCommunityMod: reqIsMod(req),
+    isDiscordVip:   !!req.user.isDiscordVip,
+  })).access;
 }
 
 // Auth + community-membership routes (routes/auth.routes.js). Mounted here, after the lib deps
