@@ -1,6 +1,7 @@
 // Misc leaf routes that don't belong to a larger concern:
 //   GET  /api/bangers       → top recent big-multiplier wins (reads hunts + archive, read-only)
-//   GET  /api/hall-of-fame  → all-time top replay-backed wins (reads hunts + archive, read-only)
+//   GET  /api/hall-of-fame      → all-time top replay-backed wins, top FAME_CAP (shape frozen: bare array)
+//   GET  /api/hall-of-fame/all  → the same, paginated: ?limit=&offset= → { items, total, offset, limit }
 //   POST /api/tickets   → persist an inquiry/suggestion (lib/tickets) + best-effort Discord doorbell (per-IP rate limited)
 //   GET  /api/health    → health check
 // Thin router, mounted from the server.js composition root.
@@ -8,7 +9,7 @@
 
 const express = require('express');
 
-const { collectHallOfFame } = require('../lib/hallOfFame');
+const { collectHallOfFame, pageHallOfFame, FAME_CAP } = require('../lib/hallOfFame');
 const { collectBangers } = require('../lib/bangers');
 
 // Ticket config is env-derived (config, not shared state) — read here so the router is self-sufficient.
@@ -35,11 +36,23 @@ module.exports = function miscRoutes(deps) {
   });
 
   // Hall of Fame: all-time top-multiplier hits that carry a replay link.
-  // Selection (300x floor, replay required, mult-desc, cap 12) lives in
-  // lib/hallOfFame.js — tested there; this stays a thin pass-through with the
-  // same tenant guard as /api/bangers.
+  // Selection (300x floor, replay required, mult-desc) lives in lib/hallOfFame.js and
+  // returns the FULL list; these routes own truncation. Same tenant guard as /api/bangers.
+  //
+  // SHAPE IS FROZEN: a bare array of <= FAME_CAP. The hub rails call .slice() on this
+  // response directly, so returning an envelope here would throw in an older deployed
+  // frontend during the backend-first deploy gap. Page via /api/hall-of-fame/all instead.
   router.get('/api/hall-of-fame', (req, res) => {
-    res.json(collectHallOfFame(hunts, archive, req.tenant?.id || 'bean'));
+    const all = collectHallOfFame(hunts, archive, req.tenant?.id || 'bean');
+    res.json(all.slice(0, FAME_CAP));
+  });
+
+  // Paginated back catalogue for the /:slug/hall-of-fame page — the whole archive, not
+  // just the hub's top 12. Envelope (not a bare array) because the client needs `total`
+  // to render "N more" and to know when to stop. Params are clamped in pageHallOfFame.
+  router.get('/api/hall-of-fame/all', (req, res) => {
+    const all = collectHallOfFame(hunts, archive, req.tenant?.id || 'bean');
+    res.json(pageHallOfFame(all, { limit: req.query.limit, offset: req.query.offset }));
   });
 
   router.post('/api/tickets', async (req, res) => {
