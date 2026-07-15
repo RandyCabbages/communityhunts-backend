@@ -97,7 +97,17 @@ async function fetchGuildRoles(oauthAccessToken, tenant) {
 
 // Refreshes guild roles via the tenant's bot token (no user OAuth token needed).
 // Called on /auth/me so roles stay current without re-login.
-async function refreshGuildRoles(discordUserId, tenant) {
+//
+// Returns null when roles are UNDETERMINED — same contract as fetchGuildRoles: callers must
+// leave the flags absent, never coerce to false (purchase eligibility fails OPEN on absent
+// flags, so coercing would silently lock buyers out).
+//
+// opts.detailed distinguishes the one determinate failure: Discord answers 404 for a user who
+// simply is not a guild member, which is "definitely not a VIP", not "lookup failed". Default
+// callers keep folding it into null so /auth/me and purchase eligibility are untouched; the
+// admin panel opts in so it can tell "no access" from "couldn't verify" instead of warning on
+// every non-member.
+async function refreshGuildRoles(discordUserId, tenant, opts = {}) {
   const guildId = tenant?.discordGuildId;
   const botToken = tenant?.discordBotToken;
   if (!guildId || !botToken || !discordUserId) return null;
@@ -105,6 +115,7 @@ async function refreshGuildRoles(discordUserId, tenant) {
     const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/members/${discordUserId}`, {
       headers: { Authorization: `Bot ${botToken}` }
     });
+    if (res.status === 404 && opts.detailed) return { notGuildMember: true };
     if (!res.ok) return null;
     const member = await res.json();
     const memberRoles = member.roles || [];
@@ -307,15 +318,24 @@ const {
   uid, touch,
 } = huntsCore;
 
-// Full (Rainbet) extension entitlement, request-scoped. A tenant's VIP roles (VIP host,
-// mod, Discord-guild VIP) unlock it for free; otherwise fall back to the plan-ladder / grant
-// check in features.hasFullExtension. Injected into the entitlement route (gates the download
+// Full (Rainbet) extension entitlement, request-scoped. Thin wrapper over
+// features.fullExtensionFor — the OR-list lives there and nowhere else. This passes the
+// CACHED session guild flag (req.user.isDiscordVip), never a live Discord lookup: this path
+// serves /api/extension/entitlement, which the extension calls on every load. The admin
+// panel passes a live lookup instead. Injected into the entitlement route (gates the download
 // page view AND the extension's in-app Rainbet features) and the subscribe route (so a VIP is
 // never charged). reqIsAdmin is folded into both reqIsVipHost and reqIsMod.
 async function reqHasFullExtension(req) {
   if (!req.user) return false;
-  const isTenantVip = reqIsVipHost(req) || reqIsMod(req) || !!req.user.isDiscordVip;
-  return isTenantVip || await features.hasFullExtension(req.user.id, req.tenant?.plan);
+  // Role flags decide access with zero I/O — short-circuit before fullExtensionFor, which
+  // always queries Postgres for the subscription tier (it must, to report every source).
+  // This path serves /api/extension/entitlement on every extension load, and the pre-refactor
+  // code short-circuited the same way; dropping it would add a per-load query for every VIP.
+  // Only the boolean is needed here, so the unreported sources cost nothing.
+  if (reqIsVipHost(req) || reqIsMod(req) || !!req.user.isDiscordVip) return true;
+  return (await features.fullExtensionFor(req.user.id, {
+    tenantPlan: req.tenant?.plan,
+  })).access;
 }
 
 // Auth + community-membership routes (routes/auth.routes.js). Mounted here, after the lib deps
@@ -600,8 +620,8 @@ app.use(require('./routes/misc.routes')({ hunts, archive, tickets, getPlatformBo
 
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
-  settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants,
-  hunts, archive, statsStore,
+  settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants,
+  hunts, archive, statsStore, refreshGuildRoles,
 }));
 
 // Stripe checkout, portal, and webhook routes (routes/stripe.routes.js).

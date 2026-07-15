@@ -15,10 +15,10 @@
 const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
 const { isItemAccessible, ITEM_TIERS, MOD_ONLY_ITEMS } = require('./cosmetics.routes');
-const { userCanUse } = require('../lib/features');
+const { userCanUse, fullExtensionFor } = require('../lib/features');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore, refreshGuildRoles } = deps;
   const { getSettings, saveSettings, resolveUserIdByName } = settings;
   const { computeUserHuntStats } = require('../lib/userStats');
 
@@ -289,6 +289,35 @@ module.exports = function settingsRoutes(deps) {
       }
       const userSettings = await getSettings(userId); // existing helper
       const communities = await memberships.getUserCommunities(userId);
+
+      // Effective Full-extension entitlement for the TARGET user (not req.user). The comp grant
+      // is only one of six OR'd paths, so the admin panel must report the computed result and
+      // its sources — a bare grant toggle reads OFF for a VIP who already has access.
+      //
+      // Role flags come from the REAL gate helpers via a synthetic req. reqIsVipHost/reqIsMod
+      // read only .user and .tenant, so this mirrors reqHasFullExtension exactly instead of
+      // re-deriving the roles. Do NOT swap these for tenants.isTenantVip/isTenantMod: those
+      // skip the isPlatformAdmin branch (env ADMIN_IDS + the platform_admins table), so a
+      // console-added admin would be reported as having no access while the extension works
+      // fine for them — the same lie this panel exists to kill.
+      //
+      // Live guild lookup (bot token, so it works for any target ID). null means UNDETERMINED,
+      // which is not the same as "no access" — so it is reported separately rather than shown
+      // as a definite no. { detailed: true } makes a 404 (not a guild member) come back as a
+      // determinate answer instead of null; without it every non-member would read as
+      // "couldn't verify" and the warning would be permanent noise on most profiles.
+      // No guild configured also returns null, but guildConfigured gates that out.
+      const tenant = req.tenant;
+      const asTarget = { user: { id: userId }, tenant };
+      const guildRoles = refreshGuildRoles ? await refreshGuildRoles(userId, tenant, { detailed: true }) : null;
+      const guildConfigured = !!(tenant?.discordGuildId && tenant?.discordBotToken);
+      const fullExtension = await fullExtensionFor(userId, {
+        tenantPlan:     tenant?.plan,
+        isVipHost:      reqIsVipHost ? reqIsVipHost(asTarget) : false,
+        isCommunityMod: reqIsMod ? reqIsMod(asTarget) : false,
+        isDiscordVip:   !!guildRoles?.isDiscordVip,
+      });
+
       res.json({
         ...identity,
         rainbetName: userSettings.rainbetName || null,
@@ -296,6 +325,7 @@ module.exports = function settingsRoutes(deps) {
         preferredSlots: Array.isArray(userSettings.preferredSlots) ? userSettings.preferredSlots : [],
         communities,
         featureGrants: featureGrants ? featureGrants.getGrantsForUser(userId) : [],
+        fullExtension: { ...fullExtension, discordVipUndetermined: guildConfigured && !guildRoles },
         cosmetics: (userSettings.cosmetics && typeof userSettings.cosmetics === 'object') ? userSettings.cosmetics : {},
         cosmeticsOwned: Array.isArray(userSettings.cosmeticsOwned) ? userSettings.cosmeticsOwned : [],
         stats: statsStore ? await statsStore.getUserStats(tenantId, userId)
