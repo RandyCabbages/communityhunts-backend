@@ -186,7 +186,7 @@ file; `apiFetch` throws `new Error(err.error)`, so the backend's copy surfaces v
 
 - **`lib/userIds.test.js`** — `isRealDiscordId` is pure. Cover: 17/18/19/20-digit snowflakes pass;
   `manual:cabbage`, `''`, `null`, `undefined`, a UUID, `creator_auto`, `bean_auto`, and a 16- or
-  21-digit string all fail. Run with `node --test lib/`.
+  21-digit string all fail. Run with `node --test lib/*.test.js` (the directory form dies on node24).
 - **No route suite.** Route tests that call `app.listen` hang on exit in this repo, and a piped exit
   code masks failures. The route's logic is thin over the pure predicate, which is covered above.
 - **Manual pass** on a Vercel preview + backend branch: the toggle filters, Remove is absent on real

@@ -28,7 +28,7 @@
 - **No `Co-Authored-By` trailers, no Claude attribution** in commits or PR bodies.
 - **Frontend build gate:** `CI=true npm run build` must print "Compiled successfully" before any push (Vercel turns warnings into errors).
 - **Frontend testing rule:** pure-logic modules get a `.test.js`; components do NOT (`@testing-library/react` is not installed — don't add it).
-- **Backend test command:** `node --test lib/`. Do NOT write route suites — they call `app.listen` and hang on exit in this repo, and a piped exit code masks failures.
+- **Backend test command:** `node --test lib/*.test.js`. The directory form (`node --test lib/`) does NOT work on node24 (v24.11.1 here) — it treats `lib` as a test file and dies with `MODULE_NOT_FOUND`, which reads like a broken import rather than a bad command. Always use the glob. Do NOT write route suites — they call `app.listen` and hang on exit in this repo, and a piped exit code masks failures.
 - **Snowflake regex, exact:** `/^\d{17,20}$/`. Discord ids are 17-19 digits today; 20 is deliberate headroom.
 - **Frontend tokens via `useTheme()` only** — never a local `const C = {…}` token object.
 
@@ -132,7 +132,7 @@ Expected: PASS — 6 tests, 0 failures.
 - [ ] **Step 5: Run the whole lib suite to confirm nothing regressed**
 
 ```bash
-node --test lib/
+node --test lib/*.test.js
 ```
 
 Expected: PASS. If a pre-existing suite is red, note it and move on — do not fix unrelated tests in this task.
@@ -222,7 +222,7 @@ with:
 - [ ] **Step 4: Run the suite to confirm the no-op**
 
 ```bash
-node --test lib/
+node --test lib/*.test.js
 ```
 
 Expected: PASS, with `lib/statsStore.test.js` and `lib/userStats.test.js` unchanged from their pre-task result. **These suites are the proof this refactor is behavior-preserving** — if any assertion that passed before now fails, stop and investigate rather than editing the test.
@@ -351,7 +351,7 @@ If there's no `DATABASE_URL`, `backfillKnownUsers` returns early (`if (!pgPool) 
 - [ ] **Step 5: Run the suite**
 
 ```bash
-node --test lib/
+node --test lib/*.test.js
 ```
 
 Expected: PASS.
@@ -541,7 +541,7 @@ Authenticated verification of the 400 rail and the 404 path happens on a real de
 - [ ] **Step 8: Run the suite**
 
 ```bash
-node --test lib/
+node --test lib/*.test.js
 ```
 
 Expected: PASS.
