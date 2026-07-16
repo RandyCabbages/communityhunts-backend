@@ -45738,5 +45738,15 @@
     "rainbetSlug": "print-studios-deck-of-divinity",
     "name": "Deck of Divinity",
     "thumb": null
+  },
+  {
+    "rainbetSlug": "play-n-go-fates-fortune",
+    "name": "Fate's Fortune",
+    "thumb": "https://cdn.softswiss.net/i/s4/playngo/FatesFortune.webp"
+  },
+  {
+    "rainbetSlug": "pragmatic-play-harvest-moon-grave-profits",
+    "name": "Harvest Moon - Grave Profits",
+    "thumb": "https://cdn.softswiss.net/i/s4/pragmatic/HarvestMoonGraveProfits.webp"
   }
 ]
