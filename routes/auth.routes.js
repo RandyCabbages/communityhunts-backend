@@ -89,12 +89,19 @@ module.exports = function authRoutes(deps) {
   // Known-users list for equity-name autocomplete — {id, displayName, avatar} for everyone
   // who's logged in, by recency. Auth-gated: logged-in users adding people to a hunt need it;
   // anonymous callers don't, and leaving it public exposed the whole roster + Discord IDs.
+  // Synthetic manual: rows are excluded (see lib/userIds.js).
   router.get('/api/known-users', requireAuth, async (req, res) => {
     if (!pgPool) return res.json([]);
     try {
+      // Real Discord logins only. Synthetic `manual:<name>` rows reach known_users via the
+      // startup backfill and are indistinguishable from a login once there — they cluttered the
+      // equity dropdown with people who never had an account. Filtering here rather than at the
+      // call site keeps every consumer of this endpoint honest. Mirrors lib/userIds.isRealDiscordId;
+      // the regex is inlined because this runs in Postgres, not Node.
       const r = await pgPool.query(
         `SELECT user_id AS id, display_name AS "displayName", avatar
          FROM known_users
+         WHERE user_id ~ '^[0-9]{17,20}$'
          ORDER BY last_seen DESC
          LIMIT 500`
       );
