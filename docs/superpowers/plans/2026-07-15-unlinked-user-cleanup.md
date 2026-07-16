@@ -10,6 +10,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-15-unlinked-user-cleanup-design.md`
 
+## Starting State (as of 2026-07-15, before Task 1)
+
+- **Backend branch:** `feat/unlinked-user-cleanup`, cut from `origin/main`, holding two commits (the spec and this plan). Not pushed. Implementation commits land here.
+- **Frontend branch:** not yet cut. Task 5 cuts `feat/unlinked-user-cleanup` from a freshly pulled `origin/main` in `communityhunts-frontend/`.
+- **Expected dirty files in the backend tree:** `package-lock.json` (modified) and `hunts_archive.json` (untracked). Both are pre-existing and unrelated — **do not stage them**. `rainbet_slots.json` may go dirty again on any local boot; it's auto-generated, don't stage it either.
+- **Nothing is pushed and no PR is open.** Task 6 is the first step that touches a remote.
+
 ## Global Constraints
 
 - **Backend deploys first.** The frontend Remove button 404s until the route exists. Backend → Railway (auto on push to `main`), frontend → Vercel (auto on push to `main`).
@@ -788,7 +795,7 @@ git commit -m "feat(admin): unlinked-only filter + Remove on /admin/users"
 From `communityhunts-backend/`:
 
 ```bash
-git push -u origin docs/unlinked-user-cleanup-spec
+git push -u origin feat/unlinked-user-cleanup
 gh pr create --title "Unlinked user cleanup: purge manual: rows, filter autocomplete" --body "$(cat <<'EOF'
 Synthetic `manual:<name>` rows masquerade as real users in the equity autocomplete and /admin/users.
 
