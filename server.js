@@ -496,8 +496,10 @@ app.use(require('./routes/share.routes')({
 // ── Stale-hunt janitor ─────────────────────────────────────────────
 // Hunts are born live. Idle is measured from updatedAt (live) or archivedAt (ended). Rules:
 //   • live, no content (empty), idle ≥ 1h  → delete (dead-reap) — regular user hunts only
-//   • live, completed (every bonus opened) → auto-end + archive now — regular user hunts only
-//     (safety net for the frontend's best-effort, never-retried MyHunt save() → /end)
+//   • live, completed (every bonus opened), idle ≥ 10m → auto-end + archive — regular user hunts only
+//     (after the last win the hunt keeps a 10m editable grace window for final tweaks; the host has
+//     no manual end control, so the janitor is the primary ender. Each edit restamps updatedAt →
+//     resets the grace timer; an idle/closed tab ends the hunt ~10-20m later given the 10m sweep.)
 //   • live, has content, abandoned ≥ 36h   → auto-end + archive (kept as history)
 //   • ended, incomplete, idle ≥ 36h        → delete (+ drop its archive snapshot)
 //   • ended/archived, completed            → keep
@@ -506,6 +508,7 @@ app.use(require('./routes/share.routes')({
 // clearing the board or a subscriber's idle tracker isn't nuked mid-session.
 const STALE_MS = 36 * 60 * 60 * 1000;
 const EMPTY_STALE_MS = 60 * 60 * 1000; // 1h — an empty live regular hunt is reaped this fast
+const COMPLETED_GRACE_MS = 10 * 60 * 1000; // 10m — a completed hunt stays live/editable this long before auto-end
 function cleanupStaleHunts() {
   const now = Date.now();
   const idleMs = ts => now - new Date(ts || 0).getTime();
@@ -525,13 +528,13 @@ function cleanupStaleHunts() {
         affectedTenants.add(tenantOf(h)); touchedRooms.push(id); huntsChanged = true;
         continue;
       }
-      // Completed-reap: a live hunt whose every bonus has been opened is DONE — end + archive it
-      // now, don't wait out the 36h idle window. The prompt end normally comes from the frontend
-      // (MyHunt save() → POST /api/my-hunt/end), but that call is best-effort and never retried:
-      // a closed tab or one failed request otherwise strands a finished hunt as "live" on the hub
-      // until STALE_MS. Mirrors the /api/my-hunt/end route. Regular hunts only — persistent shared
-      // (mod/affiliate) and paid tracker hunts reset/reopen and keep the 36h grace.
-      if (!persistentKey && huntCompleted(h)) {
+      // Completed-reap: a live hunt whose every bonus has been opened is DONE — but the host keeps a
+      // 10-minute editable grace window after the last win to do final tweaks (equity/payouts/win
+      // corrections). Only auto-end + archive once it's been idle ≥ COMPLETED_GRACE_MS; each edit
+      // restamps updatedAt and resets the window. The frontend no longer fires an immediate /end, so
+      // this is the primary ender for a finished hunt (not just a safety net). Regular hunts only —
+      // persistent shared (mod/affiliate) and paid tracker hunts reset/reopen and keep the 36h grace.
+      if (!persistentKey && huntCompleted(h) && idleMs(h.updatedAt || h.startedAt) >= COMPLETED_GRACE_MS) {
         h.isLive = false;
         h.updatedAt = new Date().toISOString();
         if (!h.archivedAt) h.archivedAt = new Date().toISOString();
