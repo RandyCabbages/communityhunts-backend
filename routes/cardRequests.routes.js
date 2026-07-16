@@ -53,6 +53,31 @@ module.exports = function cardRequestsRoutes(deps) {
   const router = express.Router();
   const ipHits = new Map(); // per-IP submit timestamps (same throttle pattern as /api/tickets)
 
+  // Post the request's embed to the shop-requests channel and store the message + channel ids, so a
+  // later status change can PATCH that same message. Best-effort by contract: the request is already
+  // saved, so a Discord failure is only logged. Shared by the public submit and the admin
+  // on-behalf create — the embed is the queue's tracking artifact, so BOTH must post it.
+  // Returns 'posted' | 'failed' | 'skipped'.
+  async function postDoorbell(r) {
+    const botToken = getPlatformBotToken();
+    if (!botToken || !channelId) return 'skipped';
+    try {
+      const resp = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ embeds: [buildRequestEmbed(r)] }),
+      });
+      if (!resp.ok) throw new Error(`Discord returned ${resp.status}`);
+      const msg = await resp.json().catch(() => null);
+      if (msg && msg.id) cardRequests.setDiscordMessage(r.id, { messageId: String(msg.id), channelId: String(channelId) });
+      console.log(`[cardreq] request ${r.id} posted to Discord`);
+      return 'posted';
+    } catch (e) {
+      console.error('[cardreq] Discord notify failed:', e.message);
+      return 'failed';
+    }
+  }
+
   router.post('/api/card-requests', requireAuth, async (req, res) => {
     // Per-IP throttle: 5 submits per 10 minutes.
     const ip = req.ip || 'unknown';
@@ -72,27 +97,7 @@ module.exports = function cardRequestsRoutes(deps) {
     const r = cardRequests.createRequest(req.body, req.user);
 
     // Best-effort Discord doorbell (announcements pattern: saved first, failure only logged).
-    // Token resolves per-request: tenant override, else the shared community bot.
-    const botToken = getPlatformBotToken();
-    let discord = 'skipped';
-    if (botToken && channelId) {
-      try {
-        const resp = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-          method: 'POST',
-          headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ embeds: [buildRequestEmbed(r)] }),
-        });
-        if (!resp.ok) throw new Error(`Discord returned ${resp.status}`);
-        // Store the message + channel ids so a later status change can PATCH this same message.
-        const msg = await resp.json().catch(() => null);
-        if (msg && msg.id) cardRequests.setDiscordMessage(r.id, { messageId: String(msg.id), channelId: String(channelId) });
-        discord = 'posted';
-        console.log(`[cardreq] request ${r.id} posted to Discord`);
-      } catch (e) {
-        discord = 'failed';
-        console.error('[cardreq] Discord notify failed:', e.message);
-      }
-    }
+    const discord = await postDoorbell(r);
     res.json({ ok: true, discord });
   });
 

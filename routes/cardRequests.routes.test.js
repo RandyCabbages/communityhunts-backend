@@ -23,13 +23,37 @@ global.fetch = async (url, opts) => {
 after(() => { global.fetch = realFetch; });
 beforeEach(() => { discordCalls = []; sendResponse = { ok: true, status: 200 }; });
 
-// In-memory cardRequests stub exposing only what the DM route uses.
+// In-memory cardRequests stub. Validation delegates to the real (pure) lib functions — they are
+// unit-tested in lib/cardRequests.test.js, and duplicating them here would let the two drift.
 function fakeCardRequests(initial) {
   const list = initial.slice();
+  const real = require('../lib/cardRequests');
   return {
     _list: list,
     listRequests: () => list,
     getRequest: (id) => list.find(x => x.id === id) || null,
+    openCountFor: () => 0,
+    validateInput: real.validateInput,
+    validateAdminCreate: real.validateAdminCreate,
+    createRequest: (body, user, opts) => {
+      const r = {
+        id: `cr_${list.length + 1}`, status: 'new',
+        createdAt: '2026-07-15T00:00:00.000Z', updatedAt: '2026-07-15T00:00:00.000Z',
+        userId: String(user.id), displayName: user.displayName, avatar: user.avatar || null,
+        idea: body.idea, cardName: body.cardName || '', refLinks: body.refLinks || [],
+        rainbetUsername: body.rainbetUsername || '', adminNotes: '', assignee: null,
+        createdBy: (opts && opts.createdBy) || null,
+      };
+      list.unshift(r);
+      return r;
+    },
+    setDiscordMessage: (id, { messageId, channelId }) => {
+      const r = list.find(x => x.id === id);
+      if (!r) return null;
+      r.discordMessageId = messageId;
+      r.discordChannelId = channelId;
+      return r;
+    },
     recordDm: (id, entry) => {
       const r = list.find(x => x.id === id);
       if (!r) return null;
@@ -60,6 +84,18 @@ async function postDm(app, id, body) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    });
+    return { status: r.status, body: await r.json().catch(() => null) };
+  } finally {
+    server.close();
+  }
+}
+
+async function postJson(app, path, body) {
+  const server = await new Promise(resolve => { const s = app.listen(0, () => resolve(s)); });
+  try {
+    const r = await realFetch(`http://127.0.0.1:${server.address().port}${path}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     return { status: r.status, body: await r.json().catch(() => null) };
   } finally {
@@ -165,4 +201,27 @@ test('GET yields empty rainbet when a handle is unset', async () => {
   const app = appWith({ requests: [], getSettings: async () => ({ rainbetName: '' }) });
   const r = await getRequests(app);
   assert.strictEqual(r.body.assignees.every(a => a.rainbet === ''), true);
+});
+
+test('a public submit posts the doorbell embed and stores the message ids', async () => {
+  const app = appWith({ requests: [] });
+  const r = await postJson(app, '/api/card-requests', { idea: 'A card with my dog on it', cardName: 'Doge' });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.body.discord, 'posted');
+  const post = discordCalls.find(c => c.url.endsWith('/channels/999/messages'));
+  assert.ok(post, 'posted to the shop-requests channel');
+  assert.strictEqual(JSON.parse(post.opts.body).embeds[0].description, 'A card with my dog on it');
+  // The ids are what lets a later status change PATCH this same message.
+  const stored = app._cardRequests._list[0];
+  assert.strictEqual(stored.discordMessageId, 'm-1');
+  assert.strictEqual(stored.discordChannelId, '999');
+});
+
+test('a doorbell failure never fails the submit — the request is already saved', async () => {
+  sendResponse = { ok: false, status: 500 };
+  const app = appWith({ requests: [] });
+  const r = await postJson(app, '/api/card-requests', { idea: 'Discord is down' });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.body.discord, 'failed');
+  assert.strictEqual(app._cardRequests._list.length, 1, 'saved regardless');
 });
