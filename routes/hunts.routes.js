@@ -134,7 +134,7 @@ module.exports = function huntsRoutes(deps) {
   }
 
   router.post('/api/my-hunt/start', requireAuth, (req, res) => {
-    const { huntType = 'community', startingBalance, currency } = req.body;
+    const { huntType = 'community', startingBalance, currency, pullPreferredSlots } = req.body;
     if (huntType === 'vip' && !reqIsMod(req))
       return res.status(403).json({error:'Not authorised for VIP hunts'});
     if (currency !== undefined && !CURRENCIES.includes(currency))
@@ -155,7 +155,7 @@ module.exports = function huntsRoutes(deps) {
     hunts[req.user.id] = {
       user: req.user, huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null, tenantId: req.tenant.id,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant, bal), calls: [], invitedEditors: [], callLimit: huntType === 'solo' ? 0 : huntType === 'community' ? 20 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: currency || 'USD', publicCalls: false, publicCallsPin: null
+      huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant, bal), calls: [], invitedEditors: [], callLimit: huntType === 'solo' ? 0 : huntType === 'community' ? 20 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: currency || 'USD', publicCalls: false, publicCallsPin: null, pullPreferredSlots: pullPreferredSlots !== false
     };
     persistHunts();
     // Fire-and-forget: pick up the new hunt's creator without waiting a poll cycle.
