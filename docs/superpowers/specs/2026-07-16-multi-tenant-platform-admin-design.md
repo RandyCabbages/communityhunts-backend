@@ -72,8 +72,12 @@ Survivable *today* only because `POST /api/admin/mods` is `requirePlatformAdmin`
 which this project does — arms this.** Hence Phase 0 before everything.
 
 Two more, independent of the console work:
-- `GET /api/hunts/:userId/archived/:archivedAt` (`hunts.routes.js:57-62`): no auth, no
+- `GET /api/hunts/:userId/archived/:archivedAt` (`hunts.routes.js:57-62`): no
   `inTenant`, skips `publicHuntView` → leaks raw snapshot incl. `equity[].discordId`.
+  Fix = `inTenant` + `publicHuntView`. **Do NOT add `requireAuth`** — this route feeds
+  the public `WatchHunt` page (anonymous past-hunt viewing); the leak is the raw spread,
+  not the missing auth, and the sibling `GET /api/hunts/:userId` is deliberately
+  anonymous-viewable + stripped the same way.
 - `requireAdminOrKey` (`admin.routes.js:55-60`): `GOTIN_EXPORT_KEY` bypasses auth **and**
   tenant checks while trusting the client `X-Tenant-Slug` → any tenant's full export.
 
@@ -409,7 +413,7 @@ gated on `req.tenant.slug`, not a branch in a shared route.
 
 | Phase | What | Type | Gates next? |
 | --- | --- | --- | --- |
-| **0 — Security hotfixes** | re-gate `grandfather-full-extension`; fix archived-hunt read; kill `requireAdminOrKey`; tenant-scope `/api/known-users` | BE, no FE, no migration | **blocks Phase 3** |
+| **0 — Security hotfixes** | re-gate `grandfather-full-extension` → `requirePlatformAdmin` (thread the dep into `settings.routes`); fix archived-hunt read (`inTenant` + `publicHuntView`, NOT `requireAuth`); kill `requireAdminOrKey` (xlsx → `requireAuth,requireAdmin`); tenant-scope `/api/known-users` via `community_members` | BE, no FE, no migration | **blocks Phase 3** |
 | **1 — Split gates** | `requireTenantAdmin` in `lib/auth.js`; drop `reqIsMod` fold-in; re-gate the 6 settings routes to platform; tighten discord-config | BE (⚠ breaking for Bean's 5 seeded mods — notify) | blocks 3 |
 | **2 — Shop opens** | releases route anonymous; null-safe `Shop.js`; fix `PurchaseGate.js` | BE→FE, user-visible | independent |
 | **3 — Mods → community** | re-gate `/api/admin/mods` to `requireTenantAdmin` | BE | after 0+1 |
