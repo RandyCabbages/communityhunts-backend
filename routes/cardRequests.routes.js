@@ -13,6 +13,12 @@ const { ITEM_TIERS } = require('./cosmetics.routes'); // the item allowlist — 
 const MAX_OPEN_PER_USER = 2;
 const MAX_DM = 2000; // DM message cap — mirrors lib/cardRequests MAX_IDEA / MAX_NOTES
 
+// The two id-verification failures are deliberately worded apart: a 404 means the id is WRONG, a
+// transport failure means we DON'T KNOW. Same outcome (blocked, nothing written), but conflating
+// them in the copy sends the admin hunting a typo in a good id while Discord is simply down.
+const NO_SUCH_USER = 'No Discord user with that ID — double-check the id';
+const CANT_VERIFY = "Couldn't verify the Discord ID right now — Discord may be down. Try again in a moment.";
+
 // Discord-owner-id → label, for the embed's "Assigned to" field. Mirrors the admin panel.
 const ASSIGNEE_LABEL = Object.fromEntries(ASSIGNEES.map(a => [a.id, a.label]));
 
@@ -34,6 +40,7 @@ function buildRequestEmbed(r) {
   const fields = [
     { name: 'From', value: `${r.displayName} (${r.userId})`.slice(0, 1024), inline: false },
   ];
+  if (r.createdBy) fields.push({ name: 'Filed by', value: `${r.createdBy.name} (on their behalf)`.slice(0, 1024), inline: true });
   if (r.assignee) fields.push({ name: 'Assigned to', value: ASSIGNEE_LABEL[r.assignee] || r.assignee, inline: true });
   if (r.cardName) fields.push({ name: 'Card name', value: r.cardName.slice(0, 1024), inline: true });
   if (r.rainbetUsername) fields.push({ name: 'Rainbet', value: r.rainbetUsername.slice(0, 1024), inline: true });
@@ -49,9 +56,80 @@ function buildRequestEmbed(r) {
 }
 
 module.exports = function cardRequestsRoutes(deps) {
-  const { requireAuth, requirePlatformAdmin, cardRequests, getPlatformBotToken, getSettings, channelId } = deps;
+  const { requireAuth, requirePlatformAdmin, cardRequests, getPlatformBotToken, getSettings, channelId, getKnownUser, recordKnownUser } = deps;
   const router = express.Router();
   const ipHits = new Map(); // per-IP submit timestamps (same throttle pattern as /api/tickets)
+
+  // Post the request's embed to the shop-requests channel and store the message + channel ids, so a
+  // later status change can PATCH that same message. Best-effort by contract: the request is already
+  // saved, so a Discord failure is only logged. Shared by the public submit and the admin
+  // on-behalf create — the embed is the queue's tracking artifact, so BOTH must post it.
+  // Returns 'posted' | 'failed' | 'skipped'.
+  async function postDoorbell(r) {
+    const botToken = getPlatformBotToken();
+    if (!botToken || !channelId) return 'skipped';
+    try {
+      const resp = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ embeds: [buildRequestEmbed(r)] }),
+      });
+      if (!resp.ok) throw new Error(`Discord returned ${resp.status}`);
+      const msg = await resp.json().catch(() => null);
+      if (msg && msg.id) cardRequests.setDiscordMessage(r.id, { messageId: String(msg.id), channelId: String(channelId) });
+      console.log(`[cardreq] request ${r.id} posted to Discord`);
+      return 'posted';
+    } catch (e) {
+      console.error('[cardreq] Discord notify failed:', e.message);
+      return 'failed';
+    }
+  }
+
+  // Resolve the requester behind an admin on-behalf create. The id must be PROVEN to exist before
+  // anything is written: validateAdminCreate checks shape, not existence, so a typo'd snowflake
+  // would otherwise file silently against a real-looking record and surface only when the DM
+  // bounced or the card wouldn't equip — long after the context is gone. There is deliberately no
+  // placeholder path. Throws { code, message } for the route to turn into a status.
+  async function resolveRequester(userId) {
+    // A directory hit is proof on its own (they signed in with that id) — skip the Discord call.
+    try {
+      const known = getKnownUser ? await getKnownUser(userId) : null;
+      if (known && known.id) return known;
+    } catch (e) {
+      console.error('[cardreq] known_users lookup failed:', e.message);
+      // Fall through to Discord — a directory outage is not evidence the id is bad.
+    }
+
+    const botToken = getPlatformBotToken();
+    if (!botToken) throw { code: 503, message: CANT_VERIFY };
+
+    let resp;
+    try {
+      resp = await fetch(`https://discord.com/api/v10/users/${userId}`, { headers: { Authorization: `Bot ${botToken}` } });
+    } catch (e) {
+      console.error('[cardreq] Discord id lookup failed:', e.message);
+      throw { code: 503, message: CANT_VERIFY };
+    }
+    if (resp.status === 404) throw { code: 400, message: NO_SUCH_USER };
+    if (!resp.ok) {
+      console.error(`[cardreq] Discord id lookup → ${resp.status}`);
+      throw { code: 503, message: CANT_VERIFY };
+    }
+    const u = await resp.json().catch(() => null);
+    if (!u || !u.id) throw { code: 503, message: CANT_VERIFY };
+
+    const resolved = {
+      id: String(u.id),
+      displayName: u.global_name || u.username || `User ${userId}`,
+      username: u.username || null,
+      avatar: u.avatar ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png` : null,
+    };
+    // Backfill the directory so the admin picker finds them next time (best-effort).
+    if (recordKnownUser) {
+      try { recordKnownUser(resolved); } catch (e) { console.error('[cardreq] recordKnownUser failed:', e.message); }
+    }
+    return resolved;
+  }
 
   router.post('/api/card-requests', requireAuth, async (req, res) => {
     // Per-IP throttle: 5 submits per 10 minutes.
@@ -72,28 +150,34 @@ module.exports = function cardRequestsRoutes(deps) {
     const r = cardRequests.createRequest(req.body, req.user);
 
     // Best-effort Discord doorbell (announcements pattern: saved first, failure only logged).
-    // Token resolves per-request: tenant override, else the shared community bot.
-    const botToken = getPlatformBotToken();
-    let discord = 'skipped';
-    if (botToken && channelId) {
-      try {
-        const resp = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-          method: 'POST',
-          headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ embeds: [buildRequestEmbed(r)] }),
-        });
-        if (!resp.ok) throw new Error(`Discord returned ${resp.status}`);
-        // Store the message + channel ids so a later status change can PATCH this same message.
-        const msg = await resp.json().catch(() => null);
-        if (msg && msg.id) cardRequests.setDiscordMessage(r.id, { messageId: String(msg.id), channelId: String(channelId) });
-        discord = 'posted';
-        console.log(`[cardreq] request ${r.id} posted to Discord`);
-      } catch (e) {
-        discord = 'failed';
-        console.error('[cardreq] Discord notify failed:', e.message);
-      }
-    }
+    const discord = await postDoorbell(r);
     res.json({ ok: true, discord });
+  });
+
+  // Admin files a request on behalf of someone who asked over DM/Discord, so they never have to be
+  // told "go to the site". Produces the SAME record a public submit does — status 'new', same
+  // doorbell — plus createdBy provenance. No IP throttle and no open-request cap: both exist to stop
+  // strangers spamming the public form, and requirePlatformAdmin is the gate here.
+  router.post('/api/admin/card-requests', requireAuth, requirePlatformAdmin, async (req, res) => {
+    const err = cardRequests.validateAdminCreate(req.body);
+    if (err) return res.status(400).json({ error: err });
+
+    let requester;
+    try {
+      requester = await resolveRequester(String(req.body.userId));
+    } catch (e) {
+      if (e && e.code) return res.status(e.code).json({ error: e.message });
+      console.error('[cardreq] resolve error:', e && e.message);
+      return res.status(503).json({ error: CANT_VERIFY });
+    }
+
+    const createdBy = { id: String(req.user.id), name: req.user.displayName || req.user.username || 'admin' };
+    const r = cardRequests.createRequest(req.body, requester, { createdBy });
+    // Awaited (unlike the PUT's fire-after-respond) so the returned row carries the Discord message
+    // ids — setDiscordMessage mutates this same object — and the board's new tile is complete.
+    await postDoorbell(r);
+    console.log(`[cardreq] ${createdBy.name} filed ${r.id} on behalf of ${requester.id}`);
+    res.json(r);
   });
 
   router.get('/api/admin/card-requests', requireAuth, requirePlatformAdmin, async (req, res) => {

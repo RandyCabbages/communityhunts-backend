@@ -457,6 +457,10 @@ app.use(require('./routes/cardRequests.routes')({
   requireAuth, requirePlatformAdmin, cardRequests,
   getPlatformBotToken: tenants.getPlatformBotToken,
   getSettings: settings.getSettings,
+  // Prove a requester's Discord id before an admin on-behalf create writes anything; backfill the
+  // directory when the id was only known to Discord.
+  getKnownUser: settings.getKnownUser,
+  recordKnownUser,
   channelId: (process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || '').trim(),
 }));
 
