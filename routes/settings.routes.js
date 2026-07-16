@@ -9,6 +9,7 @@
 //   POST /api/admin/set-rainbet-name    → admin sets another user's rainbet name
 //   GET  /api/admin/users               → tenant-scoped user list
 //   GET  /api/admin/users/:userId       → one user's full profile
+//   DELETE /api/admin/users/:userId     → purge an unlinked (non-Discord) account
 //   POST /api/admin/set-user-field      → admin sets rainbetName/twitchName for someone
 //   POST /api/admin/set-preferred-slots → admin sets another user's preferred slots
 
@@ -16,10 +17,11 @@ const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
 const { isItemAccessible, ITEM_TIERS, MOD_ONLY_ITEMS } = require('./cosmetics.routes');
 const { userCanUse, fullExtensionFor } = require('../lib/features');
+const { isRealDiscordId } = require('../lib/userIds');
 
 module.exports = function settingsRoutes(deps) {
   const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore, refreshGuildRoles } = deps;
-  const { getSettings, saveSettings, resolveUserIdByName } = settings;
+  const { getSettings, saveSettings, deleteSettings, resolveUserIdByName } = settings;
   const { computeUserHuntStats } = require('../lib/userStats');
 
   // Raw hunts (with bonuses/equity) for a tenant — union of current + archived, deduped by
@@ -239,13 +241,20 @@ module.exports = function settingsRoutes(deps) {
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     try {
       const params = [];
-      let where = '';
+      const conds = [];
       if (q) {
         params.push(`%${q}%`);
-        where = `WHERE (LOWER(ku.display_name) LIKE $${params.length}
-                     OR LOWER(ku.username) LIKE $${params.length}
-                     OR ku.user_id LIKE $${params.length})`;
+        conds.push(`(LOWER(ku.display_name) LIKE $${params.length}
+                  OR LOWER(ku.username) LIKE $${params.length}
+                  OR ku.user_id LIKE $${params.length})`);
       }
+      // ?unlinked=1 — rows that are NOT a real Discord login (legacy `manual:<name>` rows).
+      // Deliberately opt-in: this list is the one place the junk SHOULD stay visible, because
+      // it's where an admin reviews and purges it.
+      if (String(req.query.unlinked || '') === '1') {
+        conds.push(`ku.user_id !~ '^[0-9]{17,20}$'`);
+      }
+      const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
       params.push(limit, offset);
       const sql = `
         SELECT ku.user_id, ku.display_name, ku.username, ku.avatar, ku.last_seen,
@@ -334,6 +343,42 @@ module.exports = function settingsRoutes(deps) {
     } catch (e) {
       console.error('[admin] user profile failed:', e.message);
       res.status(500).json({ error: 'Failed to load user' });
+    }
+  });
+
+  // DELETE /api/admin/users/:userId — purge an unlinked (non-Discord) account.
+  //
+  // These are synthetic `manual:<name>` rows minted by the name-only path of
+  // POST /api/admin/set-rainbet-name and then laundered into known_users by the startup backfill.
+  // They never attributed anything (getNameIndex skips them), so removing one cannot move any
+  // stat — it only clears the admin list and the equity autocomplete.
+  //
+  // SAFETY RAIL: a real Discord id is refused outright. There is no path from this route to
+  // deleting a real user's settings, even by typo'ing a URL. Do not "improve" this into a
+  // generic user-delete.
+  router.delete('/api/admin/users/:userId', requireAuth, requireAdmin, async (req, res) => {
+    const userId = String(req.params.userId || '');
+    if (isRealDiscordId(userId)) {
+      return res.status(400).json({ error: 'Only unlinked (non-Discord) accounts can be removed' });
+    }
+    try {
+      let knownUsers = 0;
+      if (pgPool) {
+        const r = await pgPool.query('DELETE FROM known_users WHERE user_id=$1', [userId]);
+        knownUsers = r.rowCount || 0;
+      }
+      const userSettingsDeleted = await deleteSettings(userId) ? 1 : 0;
+      // A miss means NEITHER row existed. The two tables fall out of sync by design: a fresh
+      // manual: row lives in user_settings with no known_users row (the backfill no longer
+      // copies it), and deleting that must still succeed.
+      if (!knownUsers && !userSettingsDeleted) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      console.log(`[admin] purged unlinked user ${userId} by ${req.user?.id}`);
+      res.json({ ok: true, deleted: { knownUsers, userSettings: userSettingsDeleted } });
+    } catch (e) {
+      console.error('[admin] user purge failed:', e.message);
+      res.status(500).json({ error: 'Failed to remove user' });
     }
   });
 
