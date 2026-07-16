@@ -340,11 +340,16 @@ Hunt-owner ids are already snowflakes, so this changes nothing today — it keep
 `npm start` does NOT load `.env`; `npm run dev` does (via `-r dotenv/config`). A local boot needs dummy Discord creds. Run from `communityhunts-backend/`:
 
 ```bash
-npm install
-PORT=3101 npm run dev
+PORT=3117 node -r dotenv/config server.js
 ```
 
-Expected: the log prints `[known_users] backfill queued N users` and `[known_users] Postgres table ready` with no error, then the server listens. Use port 3101 (a stale listener on the default is a known trap). Stop it with Ctrl-C.
+**Do NOT run `npm install` or `npm run dev` for this check.** `nodemon` is undeclared in `package.json` and is not installed, so `npm run dev` dies with "nodemon: not found"; `npm install` prunes undeclared dev deps and churns `package-lock.json` (already dirty). The command above is what the dev script does, minus the watcher.
+
+**Pick a fresh, unusual port.** 3101 had a stale listener and failed with `EADDRINUSE` — a known trap in this repo.
+
+Expected: the log ends with `✅ Server on port 3117` and no error. `[known_users] backfill queued N users` prints **only if `DATABASE_URL` is set**; a local tree usually has no DB, in which case the log opens with `[pg] No DATABASE_URL` and `backfillKnownUsers` returns early — the guard is then untested locally, and Task 6's restart check is what proves it. Stop with Ctrl-C.
+
+Before booting, confirm `.env` has no `GITHUB_PAT`: `lib/rainbetSlotSync.js` commits and pushes `rainbet_slots.json` upstream when that's set, and a local boot must not push to the repo.
 
 If there's no `DATABASE_URL`, `backfillKnownUsers` returns early (`if (!pgPool) return`) and the guard is untested locally — that's expected. Task 6's restart check on a real deploy is what proves this.
 
