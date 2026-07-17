@@ -137,6 +137,31 @@ module.exports = function adminRoutes(deps) {
     });
   });
 
+  // Cross-tenant community directory for the platform overseer grid (platform-admin only).
+  // Distinct from the PUBLIC GET /api/tenants (which carries no plan/counts): this exposes plan +
+  // member/active-hunt counts, so it must stay platform-gated. accent/plan are display data;
+  // avatar + enabledTools don't exist yet (later phases).
+  router.get('/api/admin/communities', requireAuth, requirePlatformAdmin, async (req, res) => {
+    const counts = {};
+    if (pgPool) {
+      try {
+        const r = await pgPool.query('SELECT tenant_id, COUNT(*)::int AS n FROM community_members GROUP BY tenant_id');
+        for (const row of r.rows) counts[row.tenant_id] = row.n;
+      } catch (e) { console.error('[admin] communities counts failed:', e.message); }
+    }
+    const list = tenants.getAllTenants()
+      .filter(t => t.isActive)
+      .map(t => ({
+        slug: t.slug,
+        displayName: t.displayName,
+        accent: (t.branding || {}).accent || null,
+        plan: t.plan,
+        memberCount: counts[t.id] || 0,
+        activeHunts: getAllHunts(t.id).filter(h => h.isLive && !h.archivedAt).length,
+      }));
+    res.json(list);
+  });
+
   // ── Platform-admin management ──────────────────────────────────────
   // List all platform admins with their source (owner | env | db) for the UI.
   router.get('/api/admin/platform-admins', requireAuth, requirePlatformAdmin, async (req, res) => {
