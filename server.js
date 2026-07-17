@@ -491,6 +491,7 @@ app.use(require('./routes/calls.routes')({
   hunts, io, persistHunts,
   requireAuth, canEditHunt, isEquityMember, reqIsAdmin,
   normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
+  auditLog,
 }));
 
 // Share-link routes (routes/share.routes.js): token mint + public resolve.

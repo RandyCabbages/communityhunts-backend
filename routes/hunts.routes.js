@@ -335,6 +335,8 @@ module.exports = function huntsRoutes(deps) {
     if (!hunt.invitedEditors.includes(id)) hunt.invitedEditors.push(id);
     persistHunts();
     io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
+    auditLog.recordFromReq(req, { category: 'admin', action: 'editor.invite', targetId: req.user.id,
+      summary: `${req.user.displayName || 'someone'} invited editor ${id} to their hunt` });
     res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
@@ -345,6 +347,8 @@ module.exports = function huntsRoutes(deps) {
     hunt.invitedEditors = (hunt.invitedEditors || []).filter(u => String(u).toLowerCase() !== target);
     persistHunts();
     io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
+    auditLog.recordFromReq(req, { category: 'admin', action: 'editor.remove', targetId: req.user.id,
+      summary: `${req.user.displayName || 'someone'} removed editor ${target} from their hunt` });
     res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
@@ -360,6 +364,8 @@ module.exports = function huntsRoutes(deps) {
     if (!hunt.invitedEditors.includes(id)) hunt.invitedEditors.push(id);
     persistHunts();
     io.to(`hunt:${userId}`).emit('hunt:reinvite', { huntUserId: userId });
+    auditLog.recordFromReq(req, { category: 'admin', action: 'editor.invite', targetId: userId,
+      summary: `${req.user.displayName || 'someone'} invited editor ${id} to ${userId}'s hunt` });
     res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
@@ -372,6 +378,8 @@ module.exports = function huntsRoutes(deps) {
     hunt.invitedEditors = (hunt.invitedEditors || []).filter(u => String(u).toLowerCase() !== target);
     persistHunts();
     io.to(`hunt:${userId}`).emit('hunt:reinvite', { huntUserId: userId });
+    auditLog.recordFromReq(req, { category: 'admin', action: 'editor.remove', targetId: userId,
+      summary: `${req.user.displayName || 'someone'} removed editor ${target} from ${userId}'s hunt` });
     res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
