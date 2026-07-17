@@ -2,9 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close four pre-commercial authorization/data-exposure holes so no tenant admin/mod can touch platform-global state and no archived-hunt snapshot leaks raw Discord IDs — before the two-level admin console (which arms the worst of them) is built.
+**Goal:** Close three pre-commercial authorization/data-exposure holes so no tenant admin/mod can touch platform-global state and no archived-hunt snapshot leaks raw Discord IDs — before the two-level admin console (which arms the worst of them) is built.
 
-**Architecture:** Four independent edits to existing thin DI routers (`settings.routes.js`, `hunts.routes.js`, `admin.routes.js`, `auth.routes.js`) plus one dep-injection line in `server.js`. No new files besides tests. No schema change, no data migration, no frontend change. Each fix is its own commit and its own reviewable task.
+**Architecture:** Three independent edits to existing thin DI routers (`settings.routes.js`, `hunts.routes.js`, `admin.routes.js`) plus one dep-injection line in `server.js`. No new files besides tests. No schema change, no data migration, no frontend change. Each fix is its own commit and its own reviewable task.
+
+> **Scope note (revised 2026-07-16):** The original Phase 0 had a fourth fix —
+> tenant-scoping `GET /api/known-users`. It was **moved to Phase 6 (membership
+> hardening)**. Reason: that endpoint feeds Bean's live equity-name autocomplete,
+> co-editor invite search, and edit-person modal (`HuntTracker.js:233` →
+> `EquityNameInput` / `InviteModal` / `EditPersonModal`). Scoping it to
+> `community_members` today shrinks Bean's pool to ~91 members and drops non-member
+> equity people / co-editors from autocomplete — a live-workflow regression NOW, for a
+> security benefit that only matters once tenant #2 exists. Phase 6's 3-source
+> membership (incl. hunt participants) makes the scoped pool complete, so the fix is
+> safe there, not here.
 
 **Tech Stack:** Node.js + Express (thin dependency-injected routers), `node:test` + `node:assert`, Postgres (`pg`), Railway deploy on push to `main`.
 
@@ -32,8 +43,6 @@
 | `routes/hunts.routes.test.js` | **new** — focused test | Fix 2 test |
 | `routes/admin.routes.js` | admin hunt/stats/export routes | Fix 3: delete `requireAdminOrKey`, gate xlsx on `requireAuth,requireAdmin` |
 | `routes/admin.routes.test.js` | **new** — focused test | Fix 3 test |
-| `routes/auth.routes.js` | auth + known-users + memberships | Fix 4: tenant-scope `/api/known-users` via `community_members` |
-| `routes/auth.routes.test.js` | **new** — focused test | Fix 4 test |
 
 Tasks are independent and may be implemented in any order, but the numbering reflects blast-radius priority (Task 1 is the company-ender).
 
@@ -381,115 +390,15 @@ git commit -m "fix: remove GOTIN_EXPORT_KEY auth+tenant bypass on got-in export"
 
 ---
 
-### Task 4: Tenant-scope `/api/known-users`
+### Task 4: Full-suite + boot verification
 
-**Why:** `GET /api/known-users` (`auth.routes.js:93-113`) returns the **500 most recent platform-wide** users to any logged-in user — every community's roster. It exists for equity-name autocomplete, which only needs the current tenant's members. Scope it by joining `community_members` on `req.tenant.id`.
-
-**Files:**
-- Modify: `routes/auth.routes.js:93-113` (the query)
-- Test: `routes/auth.routes.test.js` (create)
-
-**Interfaces:**
-- Consumes: `pgPool` and `req.tenant.id` (set globally by `resolveTenant`). No new deps — `memberships`/`pgPool` already in scope.
-- Produces: no new exports. Same response shape: `[{ id, displayName, avatar }]`.
-
-- [ ] **Step 1: Write the failing test**
-
-Create `routes/auth.routes.test.js`:
-
-```js
-// /api/known-users must scope to the current tenant's members. Assert the SQL joins
-// community_members and is parameterized by req.tenant.id.
-const { test } = require('node:test');
-const assert = require('node:assert');
-const express = require('express');
-const authRoutes = require('./auth.routes');
-
-function appWith({ tenantId, capture }) {
-  const app = express();
-  app.use((req, res, next) => { req.user = { id: 'caller' }; req.tenant = { id: tenantId }; next(); });
-  const pgPool = {
-    query: async (sql, params) => { capture.sql = sql; capture.params = params; return { rows: [{ id: '111', displayName: 'A', avatar: null }] }; },
-  };
-  app.use(authRoutes({
-    requireAuth: (req, res, next) => next(),
-    pgPool, memberships: { getUserCommunities: async () => [] },
-    tenants: { getTenantBySlug: () => null },
-    signToken: () => 't', passport: { authenticate: () => (req, res, next) => next() },
-    FRONTEND_URL: '', settings: {}, subscriptions: {}, featureGrants: { getGrantsForUser: () => [] },
-    reqIsAdmin: () => false, reqIsVipHost: () => false, reqIsMod: () => false,
-    isPlatformAdmin: () => false, refreshGuildRoles: async () => null, guildFlags: () => ({}),
-  }));
-  return app;
-}
-
-async function get(app, pathname) {
-  const server = await new Promise(r => { const s = app.listen(0, () => r(s)); });
-  try {
-    const r = await fetch(`http://127.0.0.1:${server.address().port}${pathname}`);
-    return { status: r.status, body: await r.json().catch(() => null) };
-  } finally {
-    await new Promise(res => server.close(res));
-  }
-}
-
-test('known-users query is tenant-scoped', async () => {
-  const capture = {};
-  const res = await get(appWith({ tenantId: 'trashguy', capture }), '/api/known-users');
-  assert.strictEqual(res.status, 200);
-  assert.match(capture.sql, /community_members/i);
-  assert.deepStrictEqual(capture.params, ['trashguy']);
-});
-```
-
-> **Note on stub breadth:** `authRoutes(deps)` destructures many deps but registers routes at construction; only `requireAuth`, `pgPool`, and `req.tenant` are exercised by this one route. If the factory references a dep not stubbed above **at construction time** (not inside a handler), add a no-op stub for it — do not change the production destructure to accommodate the test.
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `node --test routes/auth.routes.test.js`
-Expected: FAIL — the current query selects from `known_users` with no `community_members` join and passes no params, so `capture.sql` won't match `/community_members/i` and `capture.params` is `undefined`.
-
-- [ ] **Step 3: Tenant-scope the query**
-
-Replace the `pgPool.query(...)` call inside `routes/auth.routes.js:101-107` so it joins `community_members` and filters by tenant:
-
-```js
-      const r = await pgPool.query(
-        `SELECT ku.user_id AS id, ku.display_name AS "displayName", ku.avatar
-         FROM known_users ku
-         JOIN community_members cm ON cm.user_id = ku.user_id
-         WHERE cm.tenant_id = $1 AND ku.user_id ~ '^[0-9]{17,20}$'
-         ORDER BY ku.last_seen DESC
-         LIMIT 500`,
-        [req.tenant?.id || 'bean']
-      );
-```
-
-Update the comment above the query (`auth.routes.js:96-100`) to note it is now tenant-scoped (members of `req.tenant`), keeping the synthetic-`manual:`-row filter rationale.
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `node --test routes/auth.routes.test.js`
-Expected: PASS (1 test).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add routes/auth.routes.js routes/auth.routes.test.js
-git commit -m "fix: tenant-scope /api/known-users to current community members"
-```
-
----
-
-### Task 5: Full-suite + boot verification
-
-**Why:** Confirm the four fixes didn't break existing suites and the server still boots (no build step means boot is the compile check).
+**Why:** Confirm the three fixes didn't break existing suites and the server still boots (no build step means boot is the compile check).
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Run the four new suites together**
+- [ ] **Step 1: Run the three new suites together**
 
-Run: `node --test routes/settings.routes.test.js routes/hunts.routes.test.js routes/admin.routes.test.js routes/auth.routes.test.js`
+Run: `node --test routes/settings.routes.test.js routes/hunts.routes.test.js routes/admin.routes.test.js`
 Expected: all pass.
 
 - [ ] **Step 2: Run the existing route + lib suites that touch changed areas**
@@ -507,21 +416,21 @@ Expected: startup logs, no throw, `[pg]` line. Confirm it reached "listening"/pr
 - [ ] **Step 4: Confirm the branch diff is exactly the intended files**
 
 Run: `git diff --stat main`
-Expected: only `routes/settings.routes.js`, `routes/hunts.routes.js`, `routes/admin.routes.js`, `routes/auth.routes.js`, `server.js`, and the four new `*.routes.test.js` files (plus this plan/spec if committed on the same branch). No `package-lock.json`, no `hunts_archive.json`.
+Expected: only `routes/settings.routes.js`, `routes/hunts.routes.js`, `routes/admin.routes.js`, `server.js`, and the three new `*.routes.test.js` files (`settings`, `hunts`, `admin`) (plus this plan/spec if committed on the same branch). No `routes/auth.routes.js`, no `package-lock.json`, no `hunts_archive.json`.
 
 ---
 
 ## Self-Review
 
-**Spec coverage (§10 Phase 0 row):**
+**Spec coverage (§10 Phase 0 row, revised):**
 - re-gate `grandfather-full-extension` → Task 1 ✅
 - fix archived-hunt read (`inTenant` + `publicHuntView`, not `requireAuth`) → Task 2 ✅ (matches corrected spec §2.3)
 - kill `requireAdminOrKey` → Task 3 ✅
-- tenant-scope `/api/known-users` → Task 4 ✅
-- "no FE, no migration" → honored; all four are backend-only, no schema change ✅
+- tenant-scope `/api/known-users` → **moved to Phase 6** (see Scope note at top); not in this plan ✅
+- "no FE, no migration" → honored; all three are backend-only, no schema change ✅
 
 **Placeholder scan:** none — every step has concrete code/commands and expected output.
 
-**Type/name consistency:** `requirePlatformAdmin` (dep name matches `server.js` construction + `cosmetics.routes` usage); `inTenant(hunt, tenantId)` matches `lib/hunts-core` export; `publicHuntView(hunt, callerId)` matches existing line-107 usage; response shape `[{id,displayName,avatar}]` preserved in Task 4; test helper `get`/`req` + `appWith` mirror `adminTickets.routes.test.js`.
+**Type/name consistency:** `requirePlatformAdmin` (dep name matches `server.js` construction + `cosmetics.routes` usage); `inTenant(hunt, tenantId)` matches `lib/hunts-core` export; `publicHuntView(hunt, callerId)` matches existing line-107 usage; test helper `get`/`req` + `appWith` mirror `adminTickets.routes.test.js`.
 
 **Deviation from source spec (recorded):** Task 2 deliberately omits `requireAuth` — the spec was corrected in the same session (§2.3) after confirming `WatchHunt.js:29` is a public consumer. This is intentional, not a gap.

@@ -413,13 +413,13 @@ gated on `req.tenant.slug`, not a branch in a shared route.
 
 | Phase | What | Type | Gates next? |
 | --- | --- | --- | --- |
-| **0 — Security hotfixes** | re-gate `grandfather-full-extension` → `requirePlatformAdmin` (thread the dep into `settings.routes`); fix archived-hunt read (`inTenant` + `publicHuntView`, NOT `requireAuth`); kill `requireAdminOrKey` (xlsx → `requireAuth,requireAdmin`); tenant-scope `/api/known-users` via `community_members` | BE, no FE, no migration | **blocks Phase 3** |
+| **0 — Security hotfixes** | re-gate `grandfather-full-extension` → `requirePlatformAdmin` (thread the dep into `settings.routes`); fix archived-hunt read (`inTenant` + `publicHuntView`, NOT `requireAuth`); kill `requireAdminOrKey` (xlsx → `requireAuth,requireAdmin`) | BE, no FE, no migration | **blocks Phase 3** |
 | **1 — Split gates** | `requireTenantAdmin` in `lib/auth.js`; drop `reqIsMod` fold-in; re-gate the 6 settings routes to platform; tighten discord-config | BE (⚠ breaking for Bean's 5 seeded mods — notify) | blocks 3 |
 | **2 — Shop opens** | releases route anonymous; null-safe `Shop.js`; fix `PurchaseGate.js` | BE→FE, user-visible | independent |
 | **3 — Mods → community** | re-gate `/api/admin/mods` to `requireTenantAdmin` | BE | after 0+1 |
 | **4 — Console refactor** | registry → ToolGate → neutral theme → banner → one `TenantSwitcher`; `isPlatformAdmin` in `roles.js` | FE, mostly refactor | touches App.js |
 | **5 — `/admin` = grid** | `PlatformOverview` (stats + community cards); new `GET /api/platform/communities`; re-scope Overview/Users/Hunts to community | BE→FE, the payoff; kills §2.2 | touches App.js |
-| **6 — Membership hardening** | 3-source population incl. hunt-activity; community Users tab | BE→FE | — |
+| **6 — Membership hardening** | 3-source population incl. hunt-activity; community Users tab; **tenant-scope `/api/known-users`** (moved from Phase 0 — safe only once membership incl. hunt participants is complete, else it shrinks Bean's live equity/invite autocomplete) | BE→FE | — |
 | **7 — Card-request attribution** | selector + `tenantSlug` + embed/tile/group | FE→BE | after 2 |
 | **8 — `tenant_features`** | table + `tenantCanUse` + fail-closed flip + FE mirror; `normalizePlan` fallback fix | BE→FE, no backfill | enables 9 |
 | **9 — Slot Lists ownership** | `ownerScope`/`ownerId`; platform + community | BE→FE | — |
