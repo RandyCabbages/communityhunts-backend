@@ -1,15 +1,15 @@
 // Tenant-mod management: per-community Mod role, DB-backed via tenant_roles (role='community_mod').
-// Assigned ONLY by platform Owners (never tenant admins, never self-service). Mirrors the
-// platform-admins pattern in routes/admin.routes.js, but scoped to req.tenant instead of global.
+// Assigned by the community's own admin (tenant_roles role='admin') OR a platform owner — a mod
+// cannot assign mods (requireTenantAdmin excludes mods). Seat caps by plan are enforced on add.
 //
 //   GET    /api/admin/mods       — list current tenant's mods (admin OR mod — requireAdmin covers both)
-//   POST   /api/admin/mods       — add a mod to req.tenant (platform admin only)
-//   DELETE /api/admin/mods/:id   — remove a mod from req.tenant (platform admin only)
+//   POST   /api/admin/mods       — add a mod to req.tenant (tenant admin or platform owner)
+//   DELETE /api/admin/mods/:id   — remove a mod from req.tenant (tenant admin or platform owner)
 
 const express = require('express');
 
 module.exports = function modsRoutes(deps) {
-  const { requireAuth, requireAdmin, requirePlatformAdmin, tenants, pgPool } = deps;
+  const { requireAuth, requireAdmin, requirePlatformAdmin, requireTenantAdmin, tenants, pgPool } = deps;
   const router = express.Router();
 
   // List the current tenant's mods. Viewable by tenant admins AND mods (requireAdmin covers both
@@ -39,8 +39,8 @@ module.exports = function modsRoutes(deps) {
     }
   });
 
-  // Add a mod to the current tenant. Owner-only.
-  router.post('/api/admin/mods', requireAuth, requirePlatformAdmin, async (req, res) => {
+  // Add a mod to the current tenant. Tenant admin (or platform owner) — not a mod.
+  router.post('/api/admin/mods', requireAuth, requireTenantAdmin, async (req, res) => {
     const discordId = String(req.body?.discordId || '').trim();
     if (!/^\d{5,}$/.test(discordId)) return res.status(400).json({ error: 'Valid Discord ID required' });
     if (tenants.isPlatformOwnerId(discordId)) return res.status(400).json({ error: 'Owner is already admin everywhere' });
@@ -62,8 +62,8 @@ module.exports = function modsRoutes(deps) {
     }
   });
 
-  // Remove a mod from the current tenant. Owner-only.
-  router.delete('/api/admin/mods/:id', requireAuth, requirePlatformAdmin, async (req, res) => {
+  // Remove a mod from the current tenant. Tenant admin (or platform owner) — not a mod.
+  router.delete('/api/admin/mods/:id', requireAuth, requireTenantAdmin, async (req, res) => {
     const id = String(req.params.id || '').trim();
     try {
       await tenants.removeTenantMod(req.tenant.id, id);
