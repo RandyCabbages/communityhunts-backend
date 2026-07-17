@@ -601,6 +601,9 @@ app.use(require('./routes/admin.routes')({
   subscriptions,
 }));
 
+// Audit-log read endpoint (routes/audit.routes.js). Owner-only, spans ALL tenants.
+app.use(require('./routes/audit.routes')({ requireAuth, requirePlatformAdmin, auditLog }));
+
 // ── User Settings + known-users + admin user management ────────────
 // Helpers + tables live in lib/settings.js; routes in routes/settings.routes.js
 // (mounted below near the slots router). recordKnownUser/getSettings/saveSettings
