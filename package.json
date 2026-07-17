@@ -4,7 +4,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon -r dotenv/config server.js",
+    "dev": "node --watch -r dotenv/config server.js",
     "postinstall": "patchright install --with-deps chromium || true"
   },
   "dependencies": {
