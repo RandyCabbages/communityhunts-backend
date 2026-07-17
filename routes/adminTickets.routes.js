@@ -37,7 +37,7 @@ function buildTicketEmbed(t) {
 }
 
 module.exports = function adminTicketsRoutes(deps) {
-  const { requireAuth, requirePlatformAdmin, tickets, getPlatformBotToken } = deps;
+  const { requireAuth, requirePlatformAdmin, tickets, getPlatformBotToken, auditLog } = deps;
   const router = express.Router();
 
   router.get('/api/admin/tickets', requireAuth, requirePlatformAdmin, (req, res) => {
@@ -49,6 +49,8 @@ module.exports = function adminTicketsRoutes(deps) {
     if (err) return res.status(400).json({ error: err });
     const t = tickets.updateTicket(String(req.params.id), req.body);
     if (!t) return res.status(404).json({ error: 'Ticket not found' });
+    auditLog.recordFromReq(req, { category: 'admin', action: 'ticket.triage', targetId: String(req.params.id),
+      summary: `${req.user.displayName || 'admin'} set ticket ${req.params.id} → ${t.status}` });
     res.json(t);
 
     // Best-effort: reflect the new phase (emoji + color) on the ticket's Discord message.

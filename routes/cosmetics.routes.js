@@ -98,7 +98,7 @@ async function isPurchaseEligible(u, subscriptions, isAdmin) {
 const NOT_ELIGIBLE_MSG = 'Join a community or get an individual plan to purchase.';
 
 module.exports = function cosmeticsRoutes(deps) {
-  const { requireAuth, requirePlatformAdmin, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension, cardReleases } = deps;
+  const { requireAuth, requirePlatformAdmin, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension, cardReleases, auditLog } = deps;
   const { getSettings, saveSettings } = settings;
   const router = express.Router();
 
@@ -123,6 +123,8 @@ module.exports = function cosmeticsRoutes(deps) {
     if (typeof (req.body && req.body.released) !== 'boolean') return res.status(400).json({ error: 'released must be a boolean' });
     const list = cardReleases.setReleased(itemId, req.body.released);
     console.log(`[releases] ${req.user.id} set ${itemId} released=${req.body.released}`);
+    auditLog.recordFromReq(req, { category: 'admin', action: 'card.release', targetId: null,
+      summary: `${req.user.displayName || 'admin'} ${req.body.released ? 'released' : 'un-released'} card ${itemId}` });
     res.json({ released: list });
   });
 

@@ -18,6 +18,7 @@ module.exports = function authRoutes(deps) {
     passport, FRONTEND_URL, requireAuth,
     reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken, guildFlags,
     recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles, featureGrants,
+    auditLog,
   } = deps;
   const router = express.Router();
 
@@ -49,6 +50,10 @@ module.exports = function authRoutes(deps) {
     (req, res) => {
       // Record this user as known so they show up in equity-name autocomplete for others
       recordKnownUser(req.user);
+      if (req.user) auditLog.record({ category: 'auth', action: 'auth.login',
+        actorId: req.user.id, actorName: req.user.displayName,
+        tenantId: req.tenant && req.tenant.id, ip: req.ip,
+        summary: `${req.user.displayName || req.user.id} logged in` });
       // Sync membership to their role for the community they signed in through (Bean today; the
       // slug they arrived via later). Guild flags are already on req.user from the passport strategy.
       reconcileMembership(req);
@@ -66,7 +71,14 @@ module.exports = function authRoutes(deps) {
       res.redirect(`${FRONTEND_URL}/?auth=${encodeURIComponent(userData)}&t=${encodeURIComponent(token)}${returnParam}`);
     }
   );
-  router.get('/auth/logout', (req, res) => req.logout(() => res.redirect(FRONTEND_URL)));
+  // Capture the actor BEFORE req.logout clears the session.
+  router.get('/auth/logout', (req, res) => {
+    const u = req.user;
+    if (u) auditLog.record({ category: 'auth', action: 'auth.logout',
+      actorId: u.id, actorName: u.displayName, tenantId: req.tenant && req.tenant.id, ip: req.ip,
+      summary: `${u.displayName || u.id} logged out` });
+    req.logout(() => res.redirect(FRONTEND_URL));
+  });
   router.get('/auth/me', async (req, res) => {
     if (!req.user) return res.json({ user: null });
     recordKnownUser(req.user);

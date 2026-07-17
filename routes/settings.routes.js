@@ -20,7 +20,7 @@ const { userCanUse, fullExtensionFor } = require('../lib/features');
 const { isRealDiscordId } = require('../lib/userIds');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, requirePlatformAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore, refreshGuildRoles } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, requirePlatformAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore, refreshGuildRoles, auditLog } = deps;
   const { getSettings, saveSettings, deleteSettings, resolveUserIdByName } = settings;
   const { computeUserHuntStats } = require('../lib/userStats');
 
@@ -447,6 +447,10 @@ module.exports = function settingsRoutes(deps) {
       s.cosmeticsOwned = owned;
       s.cosmetics = active;
       await saveSettings(userId, s);
+      if (action === 'grant' || action === 'revoke') {
+        auditLog.recordFromReq(req, { category: 'admin', action: `cosmetic.${action}`, targetId: userId,
+          summary: `${req.user.displayName || 'admin'} ${action === 'grant' ? 'granted' : 'revoked'} ${itemId} for ${userId}` });
+      }
       res.json({ ok: true, cosmetics: active, cosmeticsOwned: owned });
     } catch (e) {
       console.error('[admin] cosmetics update failed:', e.message);

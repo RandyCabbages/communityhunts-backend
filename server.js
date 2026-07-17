@@ -264,6 +264,11 @@ persistence.initPersistence({ pgPool, normalizeSlot, statsStore })
   .then(() => settings.loadAnonymousUsers())   // hydrate the anonymous-user set for name redaction
   .catch(e => console.error('[persist] init error:', e.message));
 
+// Audit log (Postgres audit_log table; in-memory ring when there's no pgPool). Owns its own
+// table + retention sweep; every write is fire-and-forget so auditing can never break a request.
+const auditLog = require('./lib/auditLog');
+auditLog.initAuditLog({ pgPool });
+
 // Multi-tenancy config (tenants + roles). Gated by MULTI_TENANT; defaults to Bean.
 const tenants = require('./lib/tenants');
 const MULTI_TENANT = process.env.MULTI_TENANT === 'true';
@@ -344,6 +349,7 @@ app.use(require('./routes/auth.routes')({
   passport, FRONTEND_URL, requireAuth,
   reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken, guildFlags,
   recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles, featureGrants,
+  auditLog,
 }));
 
 
@@ -382,6 +388,7 @@ app.use(require('./routes/hunts.routes')({
   resolveUserIdByName: settings.resolveUserIdByName,
   getCreatorLive: integrations.getCreatorLive,
   refreshCreatorsLive: () => integrations.checkCreatorsLive(io, creatorPollDeps),
+  auditLog,
 }));
 
 // Mod hunt + Affiliate hunt — two fixed-key shared hunts (routes/mod-hunt.routes.js).
@@ -472,6 +479,7 @@ tickets.initTickets({ pgPool }).catch(e => console.error('[tickets] init error:'
 app.use(require('./routes/adminTickets.routes')({
   requireAuth, requirePlatformAdmin, tickets,
   getPlatformBotToken: tenants.getPlatformBotToken,
+  auditLog,
 }));
 
 // OverDrop — mod-controlled stream overlay (routes/overdrop.routes.js). State + socket
@@ -485,6 +493,7 @@ app.use(require('./routes/calls.routes')({
   hunts, io, persistHunts,
   requireAuth, canEditHunt, isEquityMember, reqIsAdmin,
   normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
+  auditLog,
 }));
 
 // Share-link routes (routes/share.routes.js): token mint + public resolve.
@@ -582,6 +591,9 @@ function cleanupStaleHunts() {
 setTimeout(cleanupStaleHunts, 30 * 1000);
 setInterval(cleanupStaleHunts, 10 * 60 * 1000);
 
+// Audit-log retention sweep (age + row-cap). Same background-timer pattern as the janitor above.
+setInterval(() => auditLog.prune(), 60 * 60 * 1000);
+
 // Admin routes (routes/admin.routes.js). The janitor above stays here (composition-root
 // background task); the manual /api/admin/hunts/cleanup trigger calls the injected cleanupStaleHunts.
 app.use(require('./routes/admin.routes')({
@@ -590,8 +602,11 @@ app.use(require('./routes/admin.routes')({
   pgPool, admins, tenants, ADMIN_IDS, statsStore,
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
   emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
-  subscriptions,
+  subscriptions, auditLog,
 }));
+
+// Audit-log read endpoint (routes/audit.routes.js). Owner-only, spans ALL tenants.
+app.use(require('./routes/audit.routes')({ requireAuth, requirePlatformAdmin, auditLog }));
 
 // ── User Settings + known-users + admin user management ────────────
 // Helpers + tables live in lib/settings.js; routes in routes/settings.routes.js
@@ -633,7 +648,7 @@ app.use(require('./routes/misc.routes')({ hunts, archive, tickets, getPlatformBo
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
   settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, requirePlatformAdmin, io, subscriptions, featureGrants,
-  hunts, archive, statsStore, refreshGuildRoles,
+  hunts, archive, statsStore, refreshGuildRoles, auditLog,
 }));
 
 // Stripe checkout, portal, and webhook routes (routes/stripe.routes.js).
@@ -641,7 +656,7 @@ app.use(require('./routes/stripe.routes')({ requireAuth, stripeLib, FRONTEND_URL
 
 // Cosmetics purchase + inventory routes (routes/cosmetics.routes.js).
 const cosmeticsRouter = require('./routes/cosmetics.routes')({
-  requireAuth, requirePlatformAdmin, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension, cardReleases,
+  requireAuth, requirePlatformAdmin, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension, cardReleases, auditLog,
 });
 app.use(cosmeticsRouter);
 stripeLib.setCosmeticGrantFn(cosmeticsRouter._grantItem);

@@ -21,7 +21,7 @@ module.exports = function huntsRoutes(deps) {
     hunts, archive, getPublicHunts, getArchivedHunts,
     emitHubUpdate, emitHuntUpdate, publicHuntView, uid, touch,
     persistHunts, archiveHunt, unarchiveHunt, io, rejectBadHuntInput,
-    resolveUserIdByName, getCreatorLive, refreshCreatorsLive,
+    resolveUserIdByName, getCreatorLive, refreshCreatorsLive, auditLog,
   } = deps;
   const router = express.Router();
 
@@ -255,6 +255,11 @@ module.exports = function huntsRoutes(deps) {
     persistHunts();
     emitHubUpdate(req.tenant.id);
     emitHuntUpdate(req.user.id);
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'hunt.reset', targetId: req.user.id,
+      summary: `${req.user.displayName || 'someone'} reset their hunt`,
+      detail: prev ? { before: { bonuses: prev.bonuses || [], equity: prev.equity || [], calls: prev.calls || [] } } : null,
+    });
     res.json({ ok: true, hunt: hunts[req.user.id] });
   });
 
@@ -262,7 +267,14 @@ module.exports = function huntsRoutes(deps) {
   // blanks it but leaves an empty hunt still showing in the hub) and /end (which archives + keeps it
   // as history). To keep results, the client calls /end first (archives a copy), then this.
   router.delete('/api/my-hunt', requireAuth, (req, res) => {
-    if (hunts[req.user.id]) {
+    const h = hunts[req.user.id];
+    if (h) {
+      // Snapshot before the delete — this is the row an owner restores from.
+      auditLog.recordFromReq(req, {
+        category: 'hunt', action: 'hunt.delete', targetId: req.user.id,
+        summary: `${req.user.displayName || 'someone'} deleted their hunt`,
+        detail: { before: { bonuses: h.bonuses || [], equity: h.equity || [], calls: h.calls || [] } },
+      });
       delete hunts[req.user.id];
       emitHubUpdate(req.tenant.id); // drops it from the hub list; also persists
     }
@@ -271,6 +283,12 @@ module.exports = function huntsRoutes(deps) {
 
   router.put('/api/my-hunt', requireAuth, (req, res) => {
     if (rejectBadHuntInput(req, res)) return;
+    // Snapshot BEFORE any mutation — the client replaces whole arrays, so a bonus deletion is
+    // only visible as a diff (see lib/auditLog.recordHuntChange).
+    const _h = hunts[req.user.id];
+    const _before = _h
+      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
+      : { bonuses: [], equity: [], calls: [] };
     if (!hunts[req.user.id]) hunts[req.user.id] = {
       user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -298,6 +316,10 @@ module.exports = function huntsRoutes(deps) {
     persistHunts();
     emitHuntUpdate(req.user.id);
     emitHubUpdate(req.tenant.id);
+    auditLog.recordHuntChange(req,
+      _before,
+      { bonuses: hunts[req.user.id].bonuses, equity: hunts[req.user.id].equity, calls: hunts[req.user.id].calls },
+      { targetId: req.user.id, targetName: req.user.displayName });
     res.json({ok:true});
   });
 
@@ -313,6 +335,8 @@ module.exports = function huntsRoutes(deps) {
     if (!hunt.invitedEditors.includes(id)) hunt.invitedEditors.push(id);
     persistHunts();
     io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
+    auditLog.recordFromReq(req, { category: 'admin', action: 'editor.invite', targetId: req.user.id,
+      summary: `${req.user.displayName || 'someone'} invited editor ${id} to their hunt` });
     res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
@@ -323,6 +347,8 @@ module.exports = function huntsRoutes(deps) {
     hunt.invitedEditors = (hunt.invitedEditors || []).filter(u => String(u).toLowerCase() !== target);
     persistHunts();
     io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
+    auditLog.recordFromReq(req, { category: 'admin', action: 'editor.remove', targetId: req.user.id,
+      summary: `${req.user.displayName || 'someone'} removed editor ${target} from their hunt` });
     res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
@@ -338,6 +364,8 @@ module.exports = function huntsRoutes(deps) {
     if (!hunt.invitedEditors.includes(id)) hunt.invitedEditors.push(id);
     persistHunts();
     io.to(`hunt:${userId}`).emit('hunt:reinvite', { huntUserId: userId });
+    auditLog.recordFromReq(req, { category: 'admin', action: 'editor.invite', targetId: userId,
+      summary: `${req.user.displayName || 'someone'} invited editor ${id} to ${userId}'s hunt` });
     res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
@@ -350,6 +378,8 @@ module.exports = function huntsRoutes(deps) {
     hunt.invitedEditors = (hunt.invitedEditors || []).filter(u => String(u).toLowerCase() !== target);
     persistHunts();
     io.to(`hunt:${userId}`).emit('hunt:reinvite', { huntUserId: userId });
+    auditLog.recordFromReq(req, { category: 'admin', action: 'editor.remove', targetId: userId,
+      summary: `${req.user.displayName || 'someone'} removed editor ${target} from ${userId}'s hunt` });
     res.json({ok:true, invitedEditors: hunt.invitedEditors});
   });
 
