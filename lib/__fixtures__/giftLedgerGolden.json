@@ -1,0 +1,80 @@
+{
+  "cases": [
+    {
+      "name": "the-17k-incident",
+      "input": {
+        "equity": [
+          { "id": "jeter", "name": "Jeter", "amount": 2000 },
+          { "id": "bean",  "name": "Bean",  "amount": 5000 },
+          { "id": "cara",  "name": "Cara",  "amount": 3000 },
+          { "id": "dan",   "name": "Dan",   "amount": 2000 }
+        ],
+        "gifts": [
+          { "id": "g1", "type": "equity", "amount": 10000, "funderId": "jeter", "fromStake": false, "split": "proportional", "excludeIds": ["bean"], "createdAt": 1 },
+          { "id": "g2", "type": "payout", "amount": 2000,  "funderId": "bean",  "fromStake": true,  "split": "proportional", "excludeIds": ["jeter"], "createdAt": 2 }
+        ],
+        "totalWon": 26400
+      },
+      "expect": {
+        "pot": 22000,
+        "finalPayout": { "jeter": 2400, "bean": 4000, "cara": 12000, "dan": 8000 },
+        "plNet":       { "jeter": -9600, "bean": -1000, "cara": 9000, "dan": 6000 }
+      }
+    },
+    {
+      "name": "empty-ledger-classic-split",
+      "input": {
+        "equity": [
+          { "id": "a", "name": "A", "amount": 100 },
+          { "id": "b", "name": "B", "amount": 300 }
+        ],
+        "gifts": [],
+        "totalWon": 800
+      },
+      "expect": {
+        "pot": 400,
+        "finalPayout": { "a": 200, "b": 600 },
+        "plNet": { "a": 100, "b": 300 }
+      }
+    },
+    {
+      "name": "drift-basepayout-three-way",
+      "input": {
+        "equity": [
+          { "id": "a", "name": "A", "amount": 1 },
+          { "id": "b", "name": "B", "amount": 1 },
+          { "id": "c", "name": "C", "amount": 1 }
+        ],
+        "gifts": [],
+        "totalWon": 100
+      },
+      "expect": {
+        "pot": 3,
+        "totalEquity": { "a": 1, "b": 1, "c": 1 },
+        "finalPayout": { "a": 33.34, "b": 33.33, "c": 33.33 },
+        "plNet": { "a": 32.34, "b": 32.33, "c": 32.33 }
+      }
+    },
+    {
+      "name": "drift-equal-equity-gift",
+      "input": {
+        "equity": [
+          { "id": "a", "name": "A", "amount": 10 },
+          { "id": "b", "name": "B", "amount": 1 },
+          { "id": "c", "name": "C", "amount": 1 },
+          { "id": "d", "name": "D", "amount": 1 }
+        ],
+        "gifts": [
+          { "id": "g", "type": "equity", "amount": 10, "funderId": "a", "fromStake": true, "split": "equal", "excludeIds": [], "createdAt": 1 }
+        ],
+        "totalWon": 0
+      },
+      "expect": {
+        "pot": 13,
+        "totalEquity": { "a": 0, "b": 4.34, "c": 4.33, "d": 4.33 },
+        "finalPayout": { "a": 0, "b": 0, "c": 0, "d": 0 },
+        "plNet": { "a": -10, "b": -1, "c": -1, "d": -1 }
+      }
+    }
+  ]
+}
