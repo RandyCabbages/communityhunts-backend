@@ -264,6 +264,11 @@ persistence.initPersistence({ pgPool, normalizeSlot, statsStore })
   .then(() => settings.loadAnonymousUsers())   // hydrate the anonymous-user set for name redaction
   .catch(e => console.error('[persist] init error:', e.message));
 
+// Audit log (Postgres audit_log table; in-memory ring when there's no pgPool). Owns its own
+// table + retention sweep; every write is fire-and-forget so auditing can never break a request.
+const auditLog = require('./lib/auditLog');
+auditLog.initAuditLog({ pgPool });
+
 // Multi-tenancy config (tenants + roles). Gated by MULTI_TENANT; defaults to Bean.
 const tenants = require('./lib/tenants');
 const MULTI_TENANT = process.env.MULTI_TENANT === 'true';
@@ -581,6 +586,9 @@ function cleanupStaleHunts() {
 // Run once after persistence settles, then hourly.
 setTimeout(cleanupStaleHunts, 30 * 1000);
 setInterval(cleanupStaleHunts, 10 * 60 * 1000);
+
+// Audit-log retention sweep (age + row-cap). Same background-timer pattern as the janitor above.
+setInterval(() => auditLog.prune(), 60 * 60 * 1000);
 
 // Admin routes (routes/admin.routes.js). The janitor above stays here (composition-root
 // background task); the manual /api/admin/hunts/cleanup trigger calls the injected cleanupStaleHunts.
