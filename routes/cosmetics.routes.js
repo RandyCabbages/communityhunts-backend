@@ -107,10 +107,12 @@ module.exports = function cosmeticsRoutes(deps) {
     res.json({ owned: s.cosmeticsOwned || [] });
   });
 
-  // Which `hidden` catalog cards are live in the Shop. requireAuth (not public) because the
-  // Shop hard-returns null for a logged-out visitor — there is no anonymous consumer. Returns
-  // the whole list: the Shop needs all of it on mount, in one call.
-  router.get('/api/cosmetics/releases', requireAuth, (req, res) => {
+  // Which `hidden` catalog cards are live in the Shop. PUBLIC: the Shop renders for logged-out
+  // visitors (they browse cosmetics and sign in only to buy), so an auth gate here would hide
+  // every released card from them. Safe to expose — the payload is a list of card ids that are,
+  // by definition, publicly live. The WRITE path below stays platform-admin only.
+  // Returns the whole list: the Shop needs all of it on mount, in one call.
+  router.get('/api/cosmetics/releases', (req, res) => {
     res.json({ released: cardReleases.listReleased() });
   });
 
