@@ -92,9 +92,10 @@ module.exports = function callsRoutes(deps) {
     const hunt = hunts[req.params.userId];
     if (!hunt) return res.status(404).json({error:'Hunt not found'});
     if (rejectBadHuntInput(req, res)) return;
-    const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
+    const { bonuses, equity, gifts, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
     if (bonuses     !== undefined) hunt.bonuses     = sanitizeBonusReplayUrls(bonuses);
     if (equity      !== undefined) hunt.equity      = equity;
+    if (gifts       !== undefined) hunt.gifts       = gifts;
     if (calls       !== undefined) hunt.calls       = calls;
     if (huntType    !== undefined) hunt.huntType    = huntType;
     if (callLimit   !== undefined) hunt.callLimit   = callLimit;
