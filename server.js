@@ -391,10 +391,10 @@ app.use(require('./routes/mod-hunt.routes')({
   uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput,
 }));
 
-// Tenant-mod management (routes/mods.routes.js). Owner-only add/remove; view is requireAdmin
-// (covers tenant admins + mods, post reqIsAdmin fold-in).
+// Tenant-mod management (routes/mods.routes.js). Add/remove by the tenant's own admin (or a
+// platform owner) via requireTenantAdmin; view is requireAdmin (covers tenant admins + mods).
 app.use(require('./routes/mods.routes')({
-  requireAuth, requireAdmin, requirePlatformAdmin, tenants, pgPool,
+  requireAuth, requireAdmin, requirePlatformAdmin, requireTenantAdmin, tenants, pgPool,
 }));
 
 // Platform-wide announcements ("patch notes") — public read, owner-only publish.
