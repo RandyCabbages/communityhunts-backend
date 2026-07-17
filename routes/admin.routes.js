@@ -27,12 +27,12 @@ const { CURRENCIES, inTenant } = require('../lib/hunts-core');
 
 module.exports = function adminRoutes(deps) {
   const {
-    requireAuth, requireAdmin, requirePlatformAdmin,
+    requireAuth, requireAdmin, requirePlatformAdmin, requireTenantAdmin,
     getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats,
     pgPool, admins, tenants, ADMIN_IDS, statsStore,
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
-    subscriptions,
+    subscriptions, auditLog,
   } = deps;
   const router = express.Router();
 
@@ -50,12 +50,18 @@ module.exports = function adminRoutes(deps) {
     res.json({ rows: getGotInLog(req.tenant?.id || 'bean'), generatedAt: Date.now() });
   });
 
-  // Allow either an admin session (in-app button) OR a matching GOTIN_EXPORT_KEY (headless daily
-  // script — no Discord login). The key path stays read-only and is only wired to the export below.
+  // Allow either an admin session (in-app button, scoped to the caller's own tenant) OR a matching
+  // GOTIN_EXPORT_KEY (headless daily script — no Discord login). The key is a shared secret with no
+  // tenant identity, so it MUST be tenant-blind: pin req.tenant to the platform tenant (Bean) and
+  // IGNORE the client-supplied X-Tenant-Slug/_tenant. Otherwise a leaked key + a spoofed slug would
+  // export any tenant's got-in log. The daily script asks for bean, so it is unaffected.
   function requireAdminOrKey(req, res, next) {
     const KEY = process.env.GOTIN_EXPORT_KEY;
     const provided = req.headers['x-export-key'] || req.query.key;
-    if (KEY && provided && provided === KEY) return next();
+    if (KEY && provided && provided === KEY) {
+      req.tenant = tenants.getTenantBySlug('bean') || tenants.BEAN_TENANT || req.tenant;
+      return next();
+    }
     return requireAuth(req, res, () => requireAdmin(req, res, next));
   }
 
@@ -129,6 +135,31 @@ module.exports = function adminRoutes(deps) {
       userCount, activeHuntCount, archivedHuntCount,
       recentLogins,
     });
+  });
+
+  // Cross-tenant community directory for the platform overseer grid (platform-admin only).
+  // Distinct from the PUBLIC GET /api/tenants (which carries no plan/counts): this exposes plan +
+  // member/active-hunt counts, so it must stay platform-gated. accent/plan are display data;
+  // avatar + enabledTools don't exist yet (later phases).
+  router.get('/api/admin/communities', requireAuth, requirePlatformAdmin, async (req, res) => {
+    const counts = {};
+    if (pgPool) {
+      try {
+        const r = await pgPool.query('SELECT tenant_id, COUNT(*)::int AS n FROM community_members GROUP BY tenant_id');
+        for (const row of r.rows) counts[row.tenant_id] = row.n;
+      } catch (e) { console.error('[admin] communities counts failed:', e.message); }
+    }
+    const list = tenants.getAllTenants()
+      .filter(t => t.isActive)
+      .map(t => ({
+        slug: t.slug,
+        displayName: t.displayName,
+        accent: (t.branding || {}).accent || null,
+        plan: t.plan,
+        memberCount: counts[t.id] || 0,
+        activeHunts: getAllHunts(t.id).filter(h => h.isLive && !h.archivedAt).length,
+      }));
+    res.json(list);
   });
 
   // ── Platform-admin management ──────────────────────────────────────
@@ -222,11 +253,11 @@ module.exports = function adminRoutes(deps) {
   // ── Tenant Discord config ──────────────────────────────────────────
   // Read/write the tenant's Discord integration settings (bot token, guild ID, role IDs,
   // channel IDs). Admin-only — secrets are never exposed to non-admins or public endpoints.
-  router.get('/api/admin/discord-config', requireAuth, requireAdmin, (req, res) => {
+  router.get('/api/admin/discord-config', requireAuth, requireTenantAdmin, (req, res) => {
     res.json(tenants.getTenantDiscordConfig(req.tenant));
   });
 
-  router.put('/api/admin/discord-config', requireAuth, requireAdmin, async (req, res) => {
+  router.put('/api/admin/discord-config', requireAuth, requireTenantAdmin, async (req, res) => {
     try {
       await tenants.updateTenantDiscordConfig(req.tenant.id, req.body || {});
       res.json({ ok: true });
@@ -286,6 +317,8 @@ module.exports = function adminRoutes(deps) {
     if (!h.archivedAt) h.archivedAt = new Date().toISOString();
     archiveHunt(h);
     emitHubUpdate(req.tenant.id); emitHuntUpdate(req.params.userId);
+    auditLog.recordFromReq(req, { category: 'admin', action: 'admin.force_end', targetId: req.params.userId,
+      summary: `${req.user.displayName || 'admin'} force-ended ${req.params.userId}'s hunt` });
     res.json({ok:true});
   });
 
@@ -302,6 +335,10 @@ module.exports = function adminRoutes(deps) {
   router.delete('/api/admin/hunts/:userId', requireAdmin, (req, res) => {
     const h = hunts[req.params.userId];
     if (!h || !inTenant(h, req.tenant.id)) return res.status(404).json({error:'Not found'});
+    // Snapshot before the delete — this is the row an owner restores someone's hunt from.
+    auditLog.recordFromReq(req, { category: 'admin', action: 'admin.delete_hunt', targetId: req.params.userId,
+      summary: `${req.user.displayName || 'admin'} deleted ${req.params.userId}'s hunt`,
+      detail: { before: { bonuses: h.bonuses || [], equity: h.equity || [], calls: h.calls || [] } } });
     delete hunts[req.params.userId]; emitHubUpdate(req.tenant.id);
     res.json({ok:true});
   });

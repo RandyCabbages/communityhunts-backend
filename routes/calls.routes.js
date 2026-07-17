@@ -17,6 +17,7 @@ module.exports = function callsRoutes(deps) {
     hunts, io, persistHunts,
     requireAuth, canEditHunt, isEquityMember, reqIsAdmin,
     normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
+    auditLog,
   } = deps;
   const router = express.Router();
 
@@ -92,6 +93,9 @@ module.exports = function callsRoutes(deps) {
     const hunt = hunts[req.params.userId];
     if (!hunt) return res.status(404).json({error:'Hunt not found'});
     if (rejectBadHuntInput(req, res)) return;
+    // Snapshot BEFORE any mutation — an editor deleting someone else's bonus is only visible
+    // as a diff (the client replaces whole arrays). See lib/auditLog.recordHuntChange.
+    const _before = { bonuses: [...(hunt.bonuses || [])], equity: [...(hunt.equity || [])], calls: [...(hunt.calls || [])] };
     const { bonuses, equity, gifts, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
     if (bonuses     !== undefined) hunt.bonuses     = sanitizeBonusReplayUrls(bonuses);
     if (equity      !== undefined) hunt.equity      = equity;
@@ -110,6 +114,9 @@ module.exports = function callsRoutes(deps) {
     hunt.updatedAt = new Date().toISOString();
     emitHuntUpdate(req.params.userId); // per-socket (persists + redacts anonymous names)
     emitHubUpdate(req.tenant.id);
+    auditLog.recordHuntChange(req, _before,
+      { bonuses: hunt.bonuses, equity: hunt.equity, calls: hunt.calls },
+      { targetId: req.params.userId, targetName: hunt.user && hunt.user.displayName });
     res.json({ok:true});
   });
 
