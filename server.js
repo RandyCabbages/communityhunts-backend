@@ -387,6 +387,7 @@ app.use(require('./routes/hunts.routes')({
   resolveUserIdByName: settings.resolveUserIdByName,
   getCreatorLive: integrations.getCreatorLive,
   refreshCreatorsLive: () => integrations.checkCreatorsLive(io, creatorPollDeps),
+  auditLog,
 }));
 
 // Mod hunt + Affiliate hunt — two fixed-key shared hunts (routes/mod-hunt.routes.js).
