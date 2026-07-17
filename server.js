@@ -144,7 +144,7 @@ const {
   signToken, verifyToken, guildFlags,
   canEditHunt, isEquityMember,
   requireAuth, reqIsAdmin, reqIsVipHost, requireAdmin, requirePlatformAdmin,
-  reqIsMod, requireMod,
+  reqIsMod, requireMod, reqIsTenantAdmin, requireTenantAdmin,
   resolveTenant,
 } = auth;
 
@@ -585,7 +585,7 @@ setInterval(cleanupStaleHunts, 10 * 60 * 1000);
 // Admin routes (routes/admin.routes.js). The janitor above stays here (composition-root
 // background task); the manual /api/admin/hunts/cleanup trigger calls the injected cleanupStaleHunts.
 app.use(require('./routes/admin.routes')({
-  requireAuth, requireAdmin, requirePlatformAdmin,
+  requireAuth, requireAdmin, requirePlatformAdmin, requireTenantAdmin,
   getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats: huntsCore.getHuntStats,
   pgPool, admins, tenants, ADMIN_IDS, statsStore,
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,

@@ -20,8 +20,9 @@ function appWith({ session, clientTenant, capture }) {
   const requireAuth = (req, res, next) => req.user ? next() : res.status(401).json({ error: 'auth' });
   const requireAdmin = (req, res, next) => req.user ? next() : res.status(403).json({ error: 'admin' });
   const requirePlatformAdmin = (req, res, next) => res.status(403).json({ error: 'platform' });
+  const requireTenantAdmin = (req, res, next) => next();
   app.use(adminRoutes({
-    requireAuth, requireAdmin, requirePlatformAdmin,
+    requireAuth, requireAdmin, requirePlatformAdmin, requireTenantAdmin,
     getAllHunts: () => [], getArchivedHunts: () => [], getHuntsFullExport: () => [], getHuntStats: () => ({}),
     getGotInLog: (tid) => { if (capture) capture.tenantId = tid; return []; },
     pgPool: null, admins: {}, ADMIN_IDS: [], statsStore: {},
@@ -53,4 +54,27 @@ test('key auth ignores a spoofed client slug and pins the export to bean', async
 test('no key and no session is rejected (401)', async () => {
   const status = await get(appWith({ session: false, clientTenant: BEAN }), '/api/admin/gotin-log.xlsx');
   assert.strictEqual(status, 401);
+});
+
+test('discord-config is gated on requireTenantAdmin, not requireAdmin (mods rejected)', async () => {
+  const app = express();
+  app.use((req, res, next) => { req.user = { id: 'mod1' }; req.tenant = { id: 'bean', displayName: 'Bean' }; next(); });
+  const pass = (req, res, next) => next();
+  const denyTenantAdmin = (req, res, next) => res.status(403).json({ error: 'tenant admin only' });
+  app.use(adminRoutes({
+    requireAuth: pass, requireAdmin: pass, requirePlatformAdmin: pass, requireTenantAdmin: denyTenantAdmin,
+    getAllHunts: () => [], getArchivedHunts: () => [], getGotInLog: () => [], getHuntsFullExport: () => [], getHuntStats: () => ({}),
+    pgPool: null, admins: {}, ADMIN_IDS: [], statsStore: {},
+    tenants: { getTenantDiscordConfig: () => ({ botToken: 'SECRET' }), BEAN_TENANT: { id: 'bean' } },
+    hunts: {}, archive: [], archiveHunt() {}, unarchiveHunt() {}, persistArchive() {},
+    emitHubUpdate() {}, publicHuntView: h => h, emitHuntUpdate() {}, io: { emit() {} }, uid: () => 'x', cleanupStaleHunts() {},
+    subscriptions: {},
+  }));
+  const server = await new Promise(r => { const s = app.listen(0, () => r(s)); });
+  try {
+    const r = await fetch(`http://127.0.0.1:${server.address().port}/api/admin/discord-config`);
+    assert.strictEqual(r.status, 403); // requireTenantAdmin denies; requireAdmin (pass) would have 200'd
+  } finally {
+    await new Promise(res => server.close(res));
+  }
 });
