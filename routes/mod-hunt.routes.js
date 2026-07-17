@@ -64,9 +64,10 @@ module.exports = function modHuntRoutes(deps) {
       ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
       : { bonuses: [], equity: [], calls: [] };
     if (!hunts[key]) hunts[key] = emptyModHunt(req.tenant.id);
-    const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
+    const { bonuses, equity, gifts, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[key].bonuses    = sanitizeBonusReplayUrls(bonuses);
     if (equity     !== undefined) hunts[key].equity     = equity;
+    if (gifts      !== undefined) hunts[key].gifts      = gifts;
     if (calls      !== undefined) hunts[key].calls      = calls;
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
     if (huntMode   !== undefined) hunts[key].huntMode   = huntMode;
@@ -201,9 +202,10 @@ module.exports = function modHuntRoutes(deps) {
       ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
       : { bonuses: [], equity: [], calls: [] };
     if (!hunts[key]) hunts[key] = emptyAffiliateHunt(req.tenant.id);
-    const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
+    const { bonuses, equity, gifts, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[key].bonuses    = sanitizeBonusReplayUrls(bonuses);
     if (equity     !== undefined) hunts[key].equity     = equity;
+    if (gifts      !== undefined) hunts[key].gifts      = gifts;
     if (calls      !== undefined) hunts[key].calls      = calls;
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
     if (huntMode   !== undefined) hunts[key].huntMode   = huntMode;

@@ -294,9 +294,10 @@ module.exports = function huntsRoutes(deps) {
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 20, currency: 'USD', publicCalls: false, publicCallsPin: null
     };
-    const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
+    const { bonuses, equity, gifts, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[req.user.id].bonuses    = sanitizeBonusReplayUrls(bonuses);
     if (equity     !== undefined) hunts[req.user.id].equity     = equity;
+    if (gifts      !== undefined) hunts[req.user.id].gifts      = gifts;
     if (calls      !== undefined) hunts[req.user.id].calls      = calls;
     if (huntType   !== undefined) {
       if (huntType === 'vip' && !reqIsMod(req))
