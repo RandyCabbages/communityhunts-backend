@@ -478,6 +478,7 @@ tickets.initTickets({ pgPool }).catch(e => console.error('[tickets] init error:'
 app.use(require('./routes/adminTickets.routes')({
   requireAuth, requirePlatformAdmin, tickets,
   getPlatformBotToken: tenants.getPlatformBotToken,
+  auditLog,
 }));
 
 // OverDrop — mod-controlled stream overlay (routes/overdrop.routes.js). State + socket
@@ -600,7 +601,7 @@ app.use(require('./routes/admin.routes')({
   pgPool, admins, tenants, ADMIN_IDS, statsStore,
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
   emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
-  subscriptions,
+  subscriptions, auditLog,
 }));
 
 // Audit-log read endpoint (routes/audit.routes.js). Owner-only, spans ALL tenants.
@@ -646,7 +647,7 @@ app.use(require('./routes/misc.routes')({ hunts, archive, tickets, getPlatformBo
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
   settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, requirePlatformAdmin, io, subscriptions, featureGrants,
-  hunts, archive, statsStore, refreshGuildRoles,
+  hunts, archive, statsStore, refreshGuildRoles, auditLog,
 }));
 
 // Stripe checkout, portal, and webhook routes (routes/stripe.routes.js).
@@ -654,7 +655,7 @@ app.use(require('./routes/stripe.routes')({ requireAuth, stripeLib, FRONTEND_URL
 
 // Cosmetics purchase + inventory routes (routes/cosmetics.routes.js).
 const cosmeticsRouter = require('./routes/cosmetics.routes')({
-  requireAuth, requirePlatformAdmin, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension, cardReleases,
+  requireAuth, requirePlatformAdmin, settings, stripeLib, subscriptions, FRONTEND_URL, isAdmin, reqHasFullExtension, cardReleases, auditLog,
 });
 app.use(cosmeticsRouter);
 stripeLib.setCosmeticGrantFn(cosmeticsRouter._grantItem);

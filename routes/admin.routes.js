@@ -32,7 +32,7 @@ module.exports = function adminRoutes(deps) {
     pgPool, admins, tenants, ADMIN_IDS, statsStore,
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
-    subscriptions,
+    subscriptions, auditLog,
   } = deps;
   const router = express.Router();
 
@@ -317,6 +317,8 @@ module.exports = function adminRoutes(deps) {
     if (!h.archivedAt) h.archivedAt = new Date().toISOString();
     archiveHunt(h);
     emitHubUpdate(req.tenant.id); emitHuntUpdate(req.params.userId);
+    auditLog.recordFromReq(req, { category: 'admin', action: 'admin.force_end', targetId: req.params.userId,
+      summary: `${req.user.displayName || 'admin'} force-ended ${req.params.userId}'s hunt` });
     res.json({ok:true});
   });
 
@@ -333,6 +335,10 @@ module.exports = function adminRoutes(deps) {
   router.delete('/api/admin/hunts/:userId', requireAdmin, (req, res) => {
     const h = hunts[req.params.userId];
     if (!h || !inTenant(h, req.tenant.id)) return res.status(404).json({error:'Not found'});
+    // Snapshot before the delete — this is the row an owner restores someone's hunt from.
+    auditLog.recordFromReq(req, { category: 'admin', action: 'admin.delete_hunt', targetId: req.params.userId,
+      summary: `${req.user.displayName || 'admin'} deleted ${req.params.userId}'s hunt`,
+      detail: { before: { bonuses: h.bonuses || [], equity: h.equity || [], calls: h.calls || [] } } });
     delete hunts[req.params.userId]; emitHubUpdate(req.tenant.id);
     res.json({ok:true});
   });
