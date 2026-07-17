@@ -395,7 +395,7 @@ app.use(require('./routes/hunts.routes')({
 app.use(require('./routes/mod-hunt.routes')({
   hunts, archive, io, persistHunts, archiveHunt,
   requireMod, modHuntKey, affiliateHuntKey, tenants,
-  uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput,
+  uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput, auditLog,
 }));
 
 // Tenant-mod management (routes/mods.routes.js). Add/remove by the tenant's own admin (or a

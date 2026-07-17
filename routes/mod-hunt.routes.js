@@ -11,11 +11,17 @@
 const express = require('express');
 const { sanitizeBonusReplayUrls } = require('../lib/hunts-core');
 
+// Audit summaries name the hunt, not its key: these are SHARED hunts, so `targetId` is the fixed
+// key (`__mod_hunt__:<tenant>`) rather than a user id, and a raw key reads as gibberish in the log.
+const MOD_HUNT_LABEL = "the Mod Hunt";
+const AFFILIATE_HUNT_LABEL = "the Affiliate Hunt";
+
 module.exports = function modHuntRoutes(deps) {
   const {
     hunts, archive, io, persistHunts, archiveHunt,
     requireMod, modHuntKey, affiliateHuntKey, tenants,
     uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput,
+    auditLog,
   } = deps;
   const router = express.Router();
 
@@ -51,6 +57,12 @@ module.exports = function modHuntRoutes(deps) {
   router.put('/api/mod-hunt', requireMod, (req, res) => {
     if (rejectBadHuntInput(req, res)) return;
     const key = modHuntKey(req.tenant.id);
+    // Snapshot BEFORE any mutation. This is a SHARED hunt (any mod can edit), so "who removed
+    // this?" has no obvious owner to ask — attribution matters more here than on a personal hunt.
+    const _h = hunts[key];
+    const _before = _h
+      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
+      : { bonuses: [], equity: [], calls: [] };
     if (!hunts[key]) hunts[key] = emptyModHunt(req.tenant.id);
     const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[key].bonuses    = sanitizeBonusReplayUrls(bonuses);
@@ -67,6 +79,9 @@ module.exports = function modHuntRoutes(deps) {
     touch(key);
     persistHunts();
     emitHuntUpdate(key);
+    auditLog.recordHuntChange(req, _before,
+      { bonuses: hunts[key].bonuses, equity: hunts[key].equity, calls: hunts[key].calls },
+      { targetId: key, huntLabel: MOD_HUNT_LABEL });
     res.json({ ok: true });
   });
 
@@ -128,6 +143,11 @@ module.exports = function modHuntRoutes(deps) {
       if (!old.archivedAt) old.archivedAt = new Date().toISOString();
       archiveHunt(old);
     }
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'hunt.reset', targetId: key,
+      summary: `${(req.user && req.user.displayName) || 'a mod'} reset ${MOD_HUNT_LABEL}`,
+      detail: old ? { before: { bonuses: old.bonuses || [], equity: old.equity || [], calls: old.calls || [] } } : null,
+    });
     hunts[key] = emptyModHunt(req.tenant.id);
     persistHunts();
     emitHuntUpdate(key);
@@ -175,6 +195,11 @@ module.exports = function modHuntRoutes(deps) {
   router.put('/api/affiliate-hunt', requireMod, (req, res) => {
     if (rejectBadHuntInput(req, res)) return;
     const key = affiliateHuntKey(req.tenant.id);
+    // Snapshot BEFORE any mutation — shared hunt, many mod editors (see the mod-hunt PUT above).
+    const _h = hunts[key];
+    const _before = _h
+      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
+      : { bonuses: [], equity: [], calls: [] };
     if (!hunts[key]) hunts[key] = emptyAffiliateHunt(req.tenant.id);
     const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[key].bonuses    = sanitizeBonusReplayUrls(bonuses);
@@ -191,6 +216,9 @@ module.exports = function modHuntRoutes(deps) {
     touch(key);
     persistHunts();
     emitHuntUpdate(key);
+    auditLog.recordHuntChange(req, _before,
+      { bonuses: hunts[key].bonuses, equity: hunts[key].equity, calls: hunts[key].calls },
+      { targetId: key, huntLabel: AFFILIATE_HUNT_LABEL });
     res.json({ ok: true });
   });
 
@@ -252,6 +280,11 @@ module.exports = function modHuntRoutes(deps) {
       if (!old.archivedAt) old.archivedAt = new Date().toISOString();
       archiveHunt(old);
     }
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'hunt.reset', targetId: key,
+      summary: `${(req.user && req.user.displayName) || 'a mod'} reset ${AFFILIATE_HUNT_LABEL}`,
+      detail: old ? { before: { bonuses: old.bonuses || [], equity: old.equity || [], calls: old.calls || [] } } : null,
+    });
     hunts[key] = emptyAffiliateHunt(req.tenant.id);
     persistHunts();
     emitHuntUpdate(key);
