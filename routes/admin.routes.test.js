@@ -78,3 +78,35 @@ test('discord-config is gated on requireTenantAdmin, not requireAdmin (mods reje
     await new Promise(res => server.close(res));
   }
 });
+
+test('GET /api/admin/communities returns cross-tenant list with plan + counts (platform-gated)', async () => {
+  const app = express();
+  app.use((req, res, next) => { req.user = { id: 'owner' }; req.tenant = { id: 'bean' }; next(); });
+  const pass = (req, res, next) => next();
+  app.use(adminRoutes({
+    requireAuth: pass, requireAdmin: pass, requirePlatformAdmin: pass, requireTenantAdmin: pass,
+    getAllHunts: (tid) => tid === 'bean' ? [{ isLive: true }, { isLive: true, archivedAt: 1 }, { isLive: false }] : [],
+    getArchivedHunts: () => [], getGotInLog: () => [], getHuntsFullExport: () => [], getHuntStats: () => ({}),
+    pgPool: { query: async () => ({ rows: [{ tenant_id: 'bean', n: 91 }] }) },
+    admins: {}, ADMIN_IDS: [], statsStore: {},
+    tenants: {
+      getAllTenants: () => [
+        { id: 'bean', slug: 'bean', displayName: 'Bean', branding: { accent: '#abc' }, plan: 'pro', isActive: true },
+        { id: 'gone', slug: 'gone', displayName: 'Gone', branding: {}, plan: 'free', isActive: false },
+      ],
+    },
+    hunts: {}, archive: [], archiveHunt() {}, unarchiveHunt() {}, persistArchive() {},
+    emitHubUpdate() {}, publicHuntView: h => h, emitHuntUpdate() {}, io: { emit() {} }, uid: () => 'x', cleanupStaleHunts() {},
+    subscriptions: {},
+  }));
+  const server = await new Promise(r => { const s = app.listen(0, () => r(s)); });
+  try {
+    const r = await fetch(`http://127.0.0.1:${server.address().port}/api/admin/communities`);
+    const body = await r.json();
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(body.length, 1); // inactive tenant excluded
+    assert.deepStrictEqual(body[0], { slug: 'bean', displayName: 'Bean', accent: '#abc', plan: 'pro', memberCount: 91, activeHunts: 1 });
+  } finally {
+    await new Promise(res => server.close(res));
+  }
+});
