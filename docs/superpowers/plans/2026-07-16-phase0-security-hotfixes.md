@@ -41,7 +41,7 @@
 | `routes/settings.routes.test.js` | **new** — focused gate test | Fix 1 test |
 | `routes/hunts.routes.js` | public + my-hunt routes | Fix 2: `inTenant` + `publicHuntView` on archived-snapshot route |
 | `routes/hunts.routes.test.js` | **new** — focused test | Fix 2 test |
-| `routes/admin.routes.js` | admin hunt/stats/export routes | Fix 3: delete `requireAdminOrKey`, gate xlsx on `requireAuth,requireAdmin` |
+| `routes/admin.routes.js` | admin hunt/stats/export routes | Fix 3 (3b): pin `requireAdminOrKey` key branch to Bean, ignore client slug |
 | `routes/admin.routes.test.js` | **new** — focused test | Fix 3 test |
 
 Tasks are independent and may be implemented in any order, but the numbering reflects blast-radius priority (Task 1 is the company-ender).
@@ -285,25 +285,27 @@ git commit -m "fix: tenant-scope and strip archived-hunt snapshot (no raw discor
 
 ---
 
-### Task 3: Remove the `GOTIN_EXPORT_KEY` auth+tenant bypass
+### Task 3 (3b): Pin the `GOTIN_EXPORT_KEY` export to Bean, ignore the client slug
 
-**Why:** `requireAdminOrKey` (`admin.routes.js:55-60`) lets a static `GOTIN_EXPORT_KEY` (accepted from a header **or `?key=` query string**) skip auth **and** tenant checks, while the handler reads the client-supplied `X-Tenant-Slug` — so one env value plus a spoofed slug exports any tenant's full got-in log. Delete the bypass; gate the xlsx export like every other admin export (`requireAuth, requireAdmin`). Tradeoff (accepted per spec §2.3): the headless daily-export script loses its keyless path; a scoped replacement is out of Phase 0 scope.
+**Why:** `requireAdminOrKey` (`admin.routes.js:55-60`) lets a static `GOTIN_EXPORT_KEY` (from a header **or `?key=`**) skip auth, and the handler reads the client-supplied `X-Tenant-Slug`/`_tenant` — so one env value plus a spoofed slug exports **any** tenant's full got-in log. **Revised from the original "remove entirely":** the daily headless export (`scripts/daily-gotin-export.js`) is **live** (`GOTIN_EXPORT_KEY` is set on Railway), so removing the key path would break it. Instead, make the key path **tenant-blind** — pin `req.tenant` to the platform tenant (Bean) and ignore the client slug. This closes the cross-tenant escalation (the part that matters for selling hubs) while the daily script (which asks for `bean`) keeps working. The in-app admin button (session path) is unchanged and still exports the caller's own tenant.
 
 **Files:**
-- Modify: `routes/admin.routes.js:53-60` (delete function) and `:65` (change gate)
+- Modify: `routes/admin.routes.js:53-60` (pin key path to Bean; keep the session fallback)
 - Test: `routes/admin.routes.test.js` (create)
 
 **Interfaces:**
-- Consumes: existing `requireAuth`, `requireAdmin` from deps.
-- Produces: no new exports. Removes the local `requireAdminOrKey`.
+- Consumes: `requireAuth`, `requireAdmin`, and `tenants` (`getTenantBySlug`, `BEAN_TENANT`) from deps.
+- Produces: no new exports. `requireAdminOrKey` stays, now tenant-blind on the key branch.
 
 - [ ] **Step 1: Write the failing test**
 
 Create `routes/admin.routes.test.js`:
 
 ```js
-// The got-in xlsx export must NOT be reachable via GOTIN_EXPORT_KEY. With no admin session,
-// even a correct ?key= must be rejected by requireAuth — the key path is gone.
+// GOTIN export key (3b): the key path must be tenant-BLIND — it pins to the platform tenant
+// (Bean) and ignores the client-supplied slug, so a leaked key can't export another tenant's
+// data. Without key AND without an admin session, the export is rejected. The daily headless
+// script (which asks for bean) keeps working.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const express = require('express');
@@ -312,16 +314,22 @@ const adminRoutes = require('./admin.routes');
 before(() => { process.env.GOTIN_EXPORT_KEY = 'topsecret'; });
 after(() => { delete process.env.GOTIN_EXPORT_KEY; });
 
-function appNoAuth() {
+const BEAN = { id: 'bean', displayName: 'Bean' };
+const TRASH = { id: 'trashguy', displayName: 'TrashGuy' };
+
+function appWith({ session, clientTenant, capture }) {
   const app = express();
-  app.use((req, res, next) => { req.user = null; req.tenant = { id: 'bean' }; next(); });
+  // Simulate resolveTenant honoring the client slug (this is the spoofable input).
+  app.use((req, res, next) => { req.user = session ? { id: 'admin1' } : null; req.tenant = clientTenant; next(); });
   const requireAuth = (req, res, next) => req.user ? next() : res.status(401).json({ error: 'auth' });
-  const requireAdmin = (req, res, next) => res.status(403).json({ error: 'admin' });
+  const requireAdmin = (req, res, next) => req.user ? next() : res.status(403).json({ error: 'admin' });
   const requirePlatformAdmin = (req, res, next) => res.status(403).json({ error: 'platform' });
   app.use(adminRoutes({
     requireAuth, requireAdmin, requirePlatformAdmin,
-    getAllHunts: () => [], getArchivedHunts: () => [], getGotInLog: () => [], getHuntsFullExport: () => [], getHuntStats: () => ({}),
-    pgPool: null, admins: {}, tenants: {}, ADMIN_IDS: [], statsStore: {},
+    getAllHunts: () => [], getArchivedHunts: () => [], getHuntsFullExport: () => [], getHuntStats: () => ({}),
+    getGotInLog: (tid) => { if (capture) capture.tenantId = tid; return []; },
+    pgPool: null, admins: {}, ADMIN_IDS: [], statsStore: {},
+    tenants: { getTenantBySlug: (s) => (s === 'bean' ? BEAN : null), BEAN_TENANT: BEAN },
     hunts: {}, archive: [], archiveHunt() {}, unarchiveHunt() {}, persistArchive() {},
     emitHubUpdate() {}, publicHuntView: h => h, emitHuntUpdate() {}, io: { emit() {} }, uid: () => 'x', cleanupStaleHunts() {},
     subscriptions: {},
@@ -339,8 +347,14 @@ async function get(app, pathname) {
   }
 }
 
-test('xlsx export with valid key but no session is rejected (401)', async () => {
-  const status = await get(appNoAuth(), '/api/admin/gotin-log.xlsx?key=topsecret');
+test('key auth ignores a spoofed client slug and pins the export to bean', async () => {
+  const capture = {};
+  await get(appWith({ session: false, clientTenant: TRASH, capture }), '/api/admin/gotin-log.xlsx?key=topsecret&_tenant=trashguy');
+  assert.strictEqual(capture.tenantId, 'bean');
+});
+
+test('no key and no session is rejected (401)', async () => {
+  const status = await get(appWith({ session: false, clientTenant: BEAN }), '/api/admin/gotin-log.xlsx');
   assert.strictEqual(status, 401);
 });
 ```
@@ -348,44 +362,39 @@ test('xlsx export with valid key but no session is rejected (401)', async () => 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `node --test routes/admin.routes.test.js`
-Expected: FAIL — `requireAdminOrKey` accepts `?key=topsecret` and calls `next()`, so the request reaches the handler (status ≠ 401; likely 200 or 500 from the workbook builder).
+Expected: the pin test FAILS — the key path calls `next()` without overriding `req.tenant`, so `getGotInLog` receives `'trashguy'` (the spoofed slug), not `'bean'`. The 401 test already passes (the no-key branch already falls through to `requireAuth`).
 
-- [ ] **Step 3: Delete the bypass and re-gate**
+- [ ] **Step 3: Make the key branch tenant-blind**
 
-Delete `routes/admin.routes.js:53-60` entirely (the comment block + the `requireAdminOrKey` function):
+Replace the `requireAdminOrKey` function at `routes/admin.routes.js:53-60`:
 
 ```js
-  // Allow either an admin session (in-app button) OR a matching GOTIN_EXPORT_KEY (headless daily
-  // script — no Discord login). The key path stays read-only and is only wired to the export below.
+  // Allow either an admin session (in-app button, scoped to the caller's own tenant) OR a matching
+  // GOTIN_EXPORT_KEY (headless daily script — no Discord login). The key is a shared secret with no
+  // tenant identity, so it MUST be tenant-blind: pin req.tenant to the platform tenant (Bean) and
+  // IGNORE the client-supplied X-Tenant-Slug/_tenant. Otherwise a leaked key + a spoofed slug would
+  // export any tenant's got-in log. The daily script asks for bean, so it is unaffected.
   function requireAdminOrKey(req, res, next) {
     const KEY = process.env.GOTIN_EXPORT_KEY;
     const provided = req.headers['x-export-key'] || req.query.key;
-    if (KEY && provided && provided === KEY) return next();
+    if (KEY && provided && provided === KEY) {
+      req.tenant = tenants.getTenantBySlug('bean') || tenants.BEAN_TENANT || req.tenant;
+      return next();
+    }
     return requireAuth(req, res, () => requireAdmin(req, res, next));
   }
-```
-
-At `routes/admin.routes.js:65`, change the gate from `requireAdminOrKey` to the standard pair:
-
-```js
-  router.get('/api/admin/gotin-log.xlsx', requireAuth, requireAdmin, async (req, res) => {
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `node --test routes/admin.routes.test.js`
-Expected: PASS (1 test).
+Expected: PASS (2 tests).
 
-- [ ] **Step 5: Confirm no other reference to the removed function**
-
-Run: `grep -rn "requireAdminOrKey\|GOTIN_EXPORT_KEY\|x-export-key" routes/ server.js`
-Expected: no matches (the function, the env read, and the header are all gone).
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add routes/admin.routes.js routes/admin.routes.test.js
-git commit -m "fix: remove GOTIN_EXPORT_KEY auth+tenant bypass on got-in export"
+git commit -m "fix: pin GOTIN key export to Bean tenant, ignore client slug (close cross-tenant leak)"
 ```
 
 ---
