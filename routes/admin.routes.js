@@ -50,12 +50,18 @@ module.exports = function adminRoutes(deps) {
     res.json({ rows: getGotInLog(req.tenant?.id || 'bean'), generatedAt: Date.now() });
   });
 
-  // Allow either an admin session (in-app button) OR a matching GOTIN_EXPORT_KEY (headless daily
-  // script — no Discord login). The key path stays read-only and is only wired to the export below.
+  // Allow either an admin session (in-app button, scoped to the caller's own tenant) OR a matching
+  // GOTIN_EXPORT_KEY (headless daily script — no Discord login). The key is a shared secret with no
+  // tenant identity, so it MUST be tenant-blind: pin req.tenant to the platform tenant (Bean) and
+  // IGNORE the client-supplied X-Tenant-Slug/_tenant. Otherwise a leaked key + a spoofed slug would
+  // export any tenant's got-in log. The daily script asks for bean, so it is unaffected.
   function requireAdminOrKey(req, res, next) {
     const KEY = process.env.GOTIN_EXPORT_KEY;
     const provided = req.headers['x-export-key'] || req.query.key;
-    if (KEY && provided && provided === KEY) return next();
+    if (KEY && provided && provided === KEY) {
+      req.tenant = tenants.getTenantBySlug('bean') || tenants.BEAN_TENANT || req.tenant;
+      return next();
+    }
     return requireAuth(req, res, () => requireAdmin(req, res, next));
   }
 
