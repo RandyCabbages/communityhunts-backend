@@ -20,7 +20,7 @@ const { userCanUse, fullExtensionFor } = require('../lib/features');
 const { isRealDiscordId } = require('../lib/userIds');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore, refreshGuildRoles } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, requirePlatformAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore, refreshGuildRoles } = deps;
   const { getSettings, saveSettings, deleteSettings, resolveUserIdByName } = settings;
   const { computeUserHuntStats } = require('../lib/userStats');
 
@@ -146,7 +146,7 @@ module.exports = function settingsRoutes(deps) {
   // POST /api/admin/grandfather-full-extension — one-time backfill granting Full-extension
   // access to all existing users (run once at Sub-project B launch so updates don't cut
   // anyone off). Idempotent.
-  router.post('/api/admin/grandfather-full-extension', requireAuth, requireAdmin, async (req, res) => {
+  router.post('/api/admin/grandfather-full-extension', requireAuth, requirePlatformAdmin, async (req, res) => {
     if (!featureGrants?.grandfatherGrant) return res.status(503).json({ error: 'grants unavailable' });
     try {
       const granted = await featureGrants.grandfatherGrant('full_extension', `grandfather-by-${req.user.id}`);
