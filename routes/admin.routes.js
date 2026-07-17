@@ -27,7 +27,7 @@ const { CURRENCIES, inTenant } = require('../lib/hunts-core');
 
 module.exports = function adminRoutes(deps) {
   const {
-    requireAuth, requireAdmin, requirePlatformAdmin,
+    requireAuth, requireAdmin, requirePlatformAdmin, requireTenantAdmin,
     getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats,
     pgPool, admins, tenants, ADMIN_IDS, statsStore,
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
@@ -228,11 +228,11 @@ module.exports = function adminRoutes(deps) {
   // ── Tenant Discord config ──────────────────────────────────────────
   // Read/write the tenant's Discord integration settings (bot token, guild ID, role IDs,
   // channel IDs). Admin-only — secrets are never exposed to non-admins or public endpoints.
-  router.get('/api/admin/discord-config', requireAuth, requireAdmin, (req, res) => {
+  router.get('/api/admin/discord-config', requireAuth, requireTenantAdmin, (req, res) => {
     res.json(tenants.getTenantDiscordConfig(req.tenant));
   });
 
-  router.put('/api/admin/discord-config', requireAuth, requireAdmin, async (req, res) => {
+  router.put('/api/admin/discord-config', requireAuth, requireTenantAdmin, async (req, res) => {
     try {
       await tenants.updateTenantDiscordConfig(req.tenant.id, req.body || {});
       res.json({ ok: true });

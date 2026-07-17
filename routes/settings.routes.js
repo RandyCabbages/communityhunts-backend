@@ -207,7 +207,7 @@ module.exports = function settingsRoutes(deps) {
   // Accepts either { userId, rainbetName } (Discord ID known) or { name, rainbetName } (only name known).
   // When only a name is supplied, a synthetic settings row is keyed by `manual:<lowercased-name>` so the
   // existing by-name lookup matches via discordDisplayName.
-  router.post('/api/admin/set-rainbet-name', requireAdmin, async (req, res) => {
+  router.post('/api/admin/set-rainbet-name', requirePlatformAdmin, async (req, res) => {
     const rainbetName = String(req.body?.rainbetName || '').trim().slice(0, 64);
     if (!rainbetName) return res.status(400).json({ error: 'rainbetName required' });
     const userId = (req.body?.userId || '').toString().trim();
@@ -385,7 +385,7 @@ module.exports = function settingsRoutes(deps) {
   // POST /api/admin/users/:userId/grants — toggle a feature grant for a user.
   // 'full_extension' is the only grant left: the 'shop' grant died when browsing opened to
   // everyone (2026-07-09 shop umbrella) — buying is gated by isPurchaseEligible, not a grant.
-  router.post('/api/admin/users/:userId/grants', requireAuth, requireAdmin, async (req, res) => {
+  router.post('/api/admin/users/:userId/grants', requireAuth, requirePlatformAdmin, async (req, res) => {
     const userId = String(req.params.userId);
     const feature = String(req.body?.feature || '').trim();
     const on = !!req.body?.on;
@@ -410,7 +410,7 @@ module.exports = function settingsRoutes(deps) {
   //     grant when the target's subscription tier doesn't already cover the item — otherwise
   //     the user's own next PUT /api/settings would strip the equip as inaccessible.
   const COSMETIC_CATEGORIES = ['card', 'theme', 'sound', 'effect', 'background'];
-  router.post('/api/admin/users/:userId/cosmetics', requireAuth, requireAdmin, async (req, res) => {
+  router.post('/api/admin/users/:userId/cosmetics', requireAuth, requirePlatformAdmin, async (req, res) => {
     const userId = String(req.params.userId);
     const action = String(req.body?.action || '');
     const rawItem = req.body?.itemId;
@@ -458,7 +458,7 @@ module.exports = function settingsRoutes(deps) {
   // (rainbetName or twitchName) for someone else. Accepts either { userId, field, value } or
   // { name, field, value }. Name-only path first tries to resolve to an existing settings row
   // so writes hit the same record reads find; falls back to a synthetic manual: id when missing.
-  router.post('/api/admin/set-user-field', requireAdmin, async (req, res) => {
+  router.post('/api/admin/set-user-field', requirePlatformAdmin, async (req, res) => {
     const field = String(req.body?.field || '').trim();
     if (!['rainbetName', 'twitchName'].includes(field))
       return res.status(400).json({ error: "field must be 'rainbetName' or 'twitchName'" });
@@ -497,7 +497,7 @@ module.exports = function settingsRoutes(deps) {
   // POST /api/admin/set-preferred-slots — admin sets another user's preferred-slots list.
   // Body: { userId?, name?, slots: [{name, thumb, slug, provider}, ...] }
   // When only `name` is provided, uses synthetic `manual:<lowercased>` id so by-name lookup works.
-  router.post('/api/admin/set-preferred-slots', requireAdmin, async (req, res) => {
+  router.post('/api/admin/set-preferred-slots', requirePlatformAdmin, async (req, res) => {
     const slots = Array.isArray(req.body?.slots) ? req.body.slots : null;
     if (!slots) return res.status(400).json({ error: 'slots array required' });
     // Sanitize: keep up to 50 slots, normalize fields, drop empties.
