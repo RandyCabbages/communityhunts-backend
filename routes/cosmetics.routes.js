@@ -12,6 +12,7 @@ const ITEM_TIERS = {
   card_walker:'free', card_goofer:'free', card_thisisfine:'free', card_cabbage:'free', card_upgrade:'free', card_mod:'free',
   card_shooter:'free', card_bam:'free', card_cat:'free', card_rasseewz:'free', card_sverrir:'free', card_birdvision:'free', card_tylerrr:'free',
   card_flockleader:'free', card_orange:'free', card_cook:'free', card_beezle:'free', card_handpickedbytim:'free',
+  card_ashbringer:'free', card_god:'free',
   card_emerald:'basic', card_copper:'basic', card_ocean:'basic',
   card_neon:'pro', card_arctic:'pro', card_toxic:'pro',
   card_holo:'ultimate', card_obsidian:'ultimate', card_celestial:'ultimate',
