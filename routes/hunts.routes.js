@@ -13,7 +13,7 @@
 // hunts/archive are persistence-owned singletons (by reference). hunt:update via publicHuntView.
 
 const express = require('express');
-const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent } = require('../lib/hunts-core');
+const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant } = require('../lib/hunts-core');
 
 module.exports = function huntsRoutes(deps) {
   const {
@@ -57,8 +57,11 @@ module.exports = function huntsRoutes(deps) {
   router.get('/api/hunts/:userId/archived/:archivedAt', (req, res) => {
     const { userId, archivedAt } = req.params;
     const found = archive.find(h => h.user?.id === userId && h.archivedAt === archivedAt);
-    if (!found) return res.status(404).json({error:'Archived hunt not found'});
-    res.json({ ...found, canEdit: false, canAddCalls: false });
+    // Tenant-scoped + stripped: this is a PUBLIC route (WatchHunt), so serve the same
+    // publicHuntView the live sibling does — never the raw snapshot (equity discordIds,
+    // editor list). inTenant keeps one tenant's archive from being read via another's slug.
+    if (!found || !inTenant(found, req.tenant?.id)) return res.status(404).json({error:'Archived hunt not found'});
+    res.json({ ...publicHuntView(found, req.user?.id), canEdit: false, canAddCalls: false });
   });
 
   router.get('/api/hunts/:userId', (req, res) => {
