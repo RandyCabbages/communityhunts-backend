@@ -174,12 +174,14 @@ module.exports = function cosmeticsRoutes(deps) {
       // Already entitled (VIP/mod/guild-VIP/plan/grant) → never create a paid sub for it.
       if (await reqHasFullExtension(req)) return res.json({ alreadyEntitled: true });
       if (!(await isPurchaseEligible(req.user, subscriptions, isAdmin))) return res.status(403).json({ error: NOT_ELIGIBLE_MSG });
+      const { interval } = req.body || {};
       const { url } = await stripeLib.createExtensionSubscriptionSession(
         req.user.id,
         `${FRONTEND_URL}/shop/extension?subscribed=1`,
         `${FRONTEND_URL}/shop/extension`,
         req.user.email || null,
-        req.user.displayName || req.user.username
+        req.user.displayName || req.user.username,
+        interval === 'year' ? 'year' : 'month',
       );
       res.json({ url });
     } catch (e) {
