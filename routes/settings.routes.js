@@ -15,7 +15,7 @@
 
 const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
-const { isItemAccessible, ITEM_TIERS, MOD_ONLY_ITEMS } = require('./cosmetics.routes');
+const { isItemAccessible, ITEM_TIERS, MOD_ONLY_ITEMS, EXCLUSIVE_ITEMS } = require('./cosmetics.routes');
 const { userCanUse, fullExtensionFor } = require('../lib/features');
 const { isRealDiscordId } = require('../lib/userIds');
 
@@ -104,6 +104,13 @@ module.exports = function settingsRoutes(deps) {
         const itemId = c[k] ? String(c[k]).slice(0, 64) : null;
         // Mod-only items (e.g. card_mod): only community mods or platform admins may equip.
         if (itemId && MOD_ONLY_ITEMS && MOD_ONLY_ITEMS.has(itemId) && !priv) continue;
+        // Owner-exclusive / commissioned cards: only the exact Discord ID they were made for may
+        // equip, unless it was admin-granted (in owned) or the caller is priv (mod/admin). Mirrors
+        // the frontend catalog's exclusiveUserId gate — enforced here because ITEM_TIERS marks these
+        // 'free', so the tier gate below would otherwise let anyone wear a paid commission.
+        if (itemId && EXCLUSIVE_ITEMS && EXCLUSIVE_ITEMS[itemId]
+            && EXCLUSIVE_ITEMS[itemId] !== String(req.user.id)
+            && !owned.includes(itemId) && !priv) continue;
         // priv → allow any known item; non-priv → normal accessibility gate (unchanged behaviour).
         if (itemId && (priv ? !(itemId in ITEM_TIERS) : !isItemAccessible(itemId, userTier, owned))) continue;
         safe[k] = itemId;
@@ -265,12 +272,18 @@ module.exports = function settingsRoutes(deps) {
         ORDER BY ku.last_seen DESC NULLS LAST
         LIMIT $${params.length - 1} OFFSET $${params.length}`;
       const r = await pgPool.query(sql, params);
+      // Anonymous users' rainbet/twitch handles are redacted from this list unless the caller is a
+      // platform admin or the user themselves (security audit 2026-07-18 #3): community mods pass
+      // requireAdmin but must not harvest handles of users who marked themselves anonymous.
+      const callerIsPlatformAdmin = isPlatformAdmin(req.user);
       const users = r.rows.map(row => {
         const s = row.settings || {};
+        const seeIdentity = !s.anonymous || callerIsPlatformAdmin || String(row.user_id) === String(req.user.id);
         return {
           id: row.user_id, displayName: row.display_name, username: row.username,
           avatar: row.avatar, lastSeen: row.last_seen,
-          rainbetName: s.rainbetName || null, twitchName: s.twitchName || null,
+          rainbetName: seeIdentity ? (s.rainbetName || null) : null,
+          twitchName:  seeIdentity ? (s.twitchName  || null) : null,
           slotPickCount: Array.isArray(s.preferredSlots) ? s.preferredSlots.length : 0,
         };
       });
@@ -327,10 +340,17 @@ module.exports = function settingsRoutes(deps) {
         isDiscordVip:   !!guildRoles?.isDiscordVip,
       });
 
+      // Redact an anonymous user's rainbet/twitch handles unless the caller is a platform admin or
+      // the user themselves (security audit 2026-07-18 #3). requireAdmin folds in community mods, who
+      // must not read handles of users who marked themselves anonymous. Stricter than canSeeIdentity
+      // (which exempts mods, correct for the public hunt-lookup routes but not this harvest surface).
+      const seeIdentity = !userSettings.anonymous
+        || isPlatformAdmin(req.user)
+        || String(req.user.id) === userId;
       res.json({
         ...identity,
-        rainbetName: userSettings.rainbetName || null,
-        twitchName: userSettings.twitchName || null,
+        rainbetName: seeIdentity ? (userSettings.rainbetName || null) : null,
+        twitchName:  seeIdentity ? (userSettings.twitchName  || null) : null,
         preferredSlots: Array.isArray(userSettings.preferredSlots) ? userSettings.preferredSlots : [],
         communities,
         featureGrants: featureGrants ? featureGrants.getGrantsForUser(userId) : [],

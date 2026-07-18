@@ -79,7 +79,8 @@ module.exports = function integrationsRoutes(deps) {
       const type = req.query.type === 'affiliate' ? 'affiliate' : 'vip';
       const t = req.tenant;
       const ch = type === 'affiliate' ? t?.discordAffiliateWinnersChannelId : t?.discordVipWinnersChannelId;
-      console.log(`[parse-winners] tenant=${t?.id} type=${type} channel=${ch} tokenStart=${(t?.discordBotToken||'').slice(0,20)} tokenLen=${(t?.discordBotToken||'').length}`);
+      // Never log any slice of the bot token (CWE-532, security audit 2026-07-18 #5) — boolean only.
+      console.log(`[parse-winners] tenant=${t?.id} type=${type} channel=${ch} hasToken=${!!t?.discordBotToken}`);
       res.json(await integrations.parseWinners(req.tenant, type));
     } catch(e) {
       res.status(500).json({ error: e.message });

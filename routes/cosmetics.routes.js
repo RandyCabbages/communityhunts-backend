@@ -44,6 +44,42 @@ const ITEM_TIERS = {
 // (settings.routes.js PUT /api/settings cosmetics save loop) where `req` (and thus reqIsMod) exists.
 const MOD_ONLY_ITEMS = new Set(['card_mod']);
 
+// Owner-exclusive / commissioned cards — equippable ONLY by the specific Discord ID they were made
+// for. Tier above is 'free' (so grant/purchase validation passes and the Shop can showcase them to
+// everyone), so the tier gate alone lets anyone equip them; the real exclusivity gate is enforced on
+// the equip path (settings.routes.js PUT /api/settings cosmetics loop) where req.user.id is available.
+// Security audit 2026-07-18, frontend #1: without this, a signed-in non-owner could PUT an exclusive
+// card and wear a paid commission for free.
+//
+// MUST stay in sync with the frontend catalog's `exclusiveUserId` entries
+// (communityhunts-frontend/src/cosmetics/catalog.js) — same ITEM_TIERS↔catalog rule, backend-first.
+const EXCLUSIVE_ITEMS = {
+  card_bean:          '110983319176384512', // Bean
+  card_jeter:         '461011508713750540', // Jeter
+  card_backnine:      '337112142551711744', // Rolltau
+  card_walker:        '176048961222606849', // Walker
+  card_flockleader:   '176048961222606849', // Walker
+  card_orange:        '228402749119791105', // RhymesWith0range
+  card_goofer:        '168055630916091904', // Goofer
+  card_thisisfine:    '168055630916091904', // Goofer
+  card_upgrade:       '1313880286139781264', // Bleak15
+  card_cabbage:       '135203806676779008', // Cabbage
+  card_shooter:       '672623254778675220', // Shooter
+  card_bam:           '876630275742916609', // Bam
+  card_cat:           '164490479243624448', // Morrigen
+  card_rasseewz:      '505808787278397441', // rasseewz
+  card_sverrir:       '223111104245661696', // Sverrir
+  card_birdvision:    '291669141629304832', // birdvision
+  card_tylerrr:       '1461157539759526121', // Tylerrr645
+  card_cook:          '416504832296484864', // Cook
+  card_beezle:        '219161022039195649', // Beezle
+  card_handpickedbytim: '394667154232049664', // Handpickedbytim
+  card_ashbringer:    '217783126724837386', // Ashbringer
+  card_russaldo:      '320368276532363264', // Russaldo
+  card_folo:          '554738839428792321', // Folo
+  card_god:           '505808787278397441', // rasseewz (2nd exclusive)
+};
+
 const TIER_RANK = { free: 0, basic: 1, pro: 2, ultimate: 3, admin: 99 };
 
 function isItemAccessible(itemId, userTier, ownedIds) {
@@ -212,3 +248,4 @@ module.exports = function cosmeticsRoutes(deps) {
 module.exports.isItemAccessible = isItemAccessible;
 module.exports.ITEM_TIERS = ITEM_TIERS;
 module.exports.MOD_ONLY_ITEMS = MOD_ONLY_ITEMS;
+module.exports.EXCLUSIVE_ITEMS = EXCLUSIVE_ITEMS;

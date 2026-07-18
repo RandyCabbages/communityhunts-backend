@@ -69,36 +69,10 @@ module.exports = function huntsRoutes(deps) {
     if (!hunt) return res.status(404).json({error:'Hunt not found'});
     const canEdit  = req.user ? canEditHunt(req, req.params.userId) : false;
 
-    // Auto-link: when a logged-in viewer visits, match their Discord name to an equity entry and store their Discord ID
-    // This makes subsequent isEquityMember checks use the reliable ID-based path
-    if (req.user?.id && hunt.equity) {
-      const displayName = (req.user.displayName || '').toLowerCase().trim();
-      const username    = (req.user.username    || '').toLowerCase().trim();
-      const candidates  = new Set([
-        displayName, username,
-        displayName.replace(/\s+/g,''), username.replace(/\s+/g,''),
-        displayName.replace(/[\d_\-\.]+$/,'').trim(),
-        username.replace(/[\d_\-\.]+$/,'').trim(),
-      ].filter(Boolean));
-      let linked = false;
-      hunt.equity = hunt.equity.map(e => {
-        if (e.discordId) return e; // already linked
-        const en = (e.name||'').toLowerCase().trim();
-        const enNoSp = en.replace(/\s+/g,'');
-        let matches = false;
-        for (const c of candidates) {
-          if (!c) continue;
-          if (c === en || c === enNoSp) { matches = true; break; }
-        }
-        if (matches) {
-          linked = true;
-          return { ...e, discordId: req.user.id, name: req.user.displayName || e.name };
-        }
-        return e;
-      });
-      if (linked) { persistHunts(); emitHuntUpdate(req.params.userId); }
-    }
-
+    // NOTE: a display-name → discordId auto-link write used to live here. Removed in the
+    // 2026-07-18 security audit (#2): a side-effecting GET let any logged-in user claim an
+    // equity row by renaming to its name. Equity rows now get an ID only via the
+    // owner-approved request-calls flow (see routes/calls.routes.js).
     const canCalls = req.user ? (canEdit || isEquityMember(req.user, req.params.userId)) : false;
     if (canEdit) {
       res.json({ ...hunt, canEdit, canAddCalls: canCalls });
