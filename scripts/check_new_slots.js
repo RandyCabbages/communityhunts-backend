@@ -19,6 +19,20 @@ const SLOTS_URL = 'https://rainbet.com/casino/slots';
 const SLOTS_FILE = path.join(process.cwd(), 'rainbet_slots.json');
 const MAX_RETRIES = 3;
 
+// Cloudflare's Managed Challenge on rainbet.com no longer clears for headless
+// Chromium (even patched via patchright) — it hangs on "Checking your browser…"
+// → "Just a moment…" forever. A HEADED browser clears it in ~5s. Default stays
+// headless (preserves the in-process Railway sync, which runs without a display);
+// set SCRAPE_HEADLESS=false + run under a virtual display (xvfb-run) to actually
+// get past Cloudflare — that's what the GitHub Actions backup workflow does.
+const HEADLESS = process.env.SCRAPE_HEADLESS !== 'false';
+
+// Titles Cloudflare shows while a challenge is in-flight. "checking your browser"
+// was missing before, so the old heuristic thought the challenge had already
+// cleared and bailed straight into the (doomed) card wait.
+const CF_TITLE_MARKERS = ['just a moment', 'attention required', 'cloudflare', 'checking your browser'];
+const isCfTitle = t => { const s = (t || '').toLowerCase(); return CF_TITLE_MARKERS.some(m => s.includes(m)); };
+
 // slot.report provider_slug → Rainbet URL prefix
 const SLOT_REPORT_TO_RAINBET = {
   'playngo':'play-n-go','hacksaw-gaming':'hacksaw','nolimit-city':'nolimit',
@@ -164,23 +178,23 @@ async function scrapeNewReleases() {
     console.log(`[new-releases] attempt ${attempt}/2`);
     let browser;
     try {
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: HEADLESS });
       const ctx = await browser.newContext({
         viewport: { width: 1280, height: 900 }, locale: 'en-US', timezoneId: 'America/Chicago',
       });
       const page = await ctx.newPage();
 
-      console.log('[new-releases] navigating to https://rainbet.com/new-releases');
+      console.log(`[new-releases] navigating to https://rainbet.com/new-releases (headless=${HEADLESS})`);
       await page.goto('https://rainbet.com/new-releases', { waitUntil: 'domcontentloaded', timeout: 60_000 });
 
       // Cloudflare challenge
       const title = await page.title();
-      if (title.toLowerCase().includes('just a moment') || title.toLowerCase().includes('cloudflare')) {
-        console.log('[new-releases] Cloudflare challenge — waiting…');
+      if (isCfTitle(title)) {
+        console.log(`[new-releases] Cloudflare challenge ("${title}") — waiting…`);
         try {
           await page.waitForFunction(
-            () => !document.title.toLowerCase().includes('just a moment') && !document.title.toLowerCase().includes('cloudflare'),
-            { timeout: 30_000 }
+            markers => !markers.some(m => document.title.toLowerCase().includes(m)),
+            CF_TITLE_MARKERS, { timeout: 30_000 }
           );
         } catch {
           console.log('[new-releases] challenge did NOT clear');
@@ -258,7 +272,7 @@ async function scrapeBrowser() {
     console.log(`[scrape] attempt ${attempt}/${MAX_RETRIES}`);
     let browser;
     try {
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: HEADLESS });
 
       const ctx = await browser.newContext({
         viewport: { width: 1280, height: 900 },
@@ -286,19 +300,15 @@ async function scrapeBrowser() {
       const title = await page.title();
       console.log(`[scrape] page title: "${title}"`);
 
-      const isCfChallenge = title.toLowerCase().includes('just a moment')
-        || title.toLowerCase().includes('attention required')
-        || title.toLowerCase().includes('cloudflare');
+      const isCfChallenge = isCfTitle(title);
 
       if (isCfChallenge) {
         console.log('[scrape] Cloudflare challenge detected — waiting for it to clear…');
         // Wait for the page title to change (CF redirects after challenge solves)
         try {
           await page.waitForFunction(
-            () => !document.title.toLowerCase().includes('just a moment')
-               && !document.title.toLowerCase().includes('attention')
-               && !document.title.toLowerCase().includes('cloudflare'),
-            { timeout: 30_000 }
+            markers => !markers.some(m => document.title.toLowerCase().includes(m)),
+            CF_TITLE_MARKERS, { timeout: 30_000 }
           );
           console.log('[scrape] challenge cleared');
         } catch {

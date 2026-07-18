@@ -30,9 +30,17 @@ jobs:
       - name: Install Chromium for Playwright
         run: npx playwright install --with-deps chromium
 
+      - name: Install xvfb (headed browser needs a virtual display)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      # Cloudflare's Managed Challenge on rainbet.com no longer clears for headless
+      # Chromium — only a HEADED browser gets through (verified 2026-07-18). Run under
+      # a virtual framebuffer so patchright can launch headed on the CI runner.
       - name: Run scrape + diff
         id: scrape
-        run: node scripts/check_new_slots.js
+        env:
+          SCRAPE_HEADLESS: 'false'
+        run: xvfb-run -a node scripts/check_new_slots.js
 
       - name: Commit & push if rainbet_slots.json changed
         run: |
