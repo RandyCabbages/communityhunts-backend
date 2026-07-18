@@ -39135,11 +39135,6 @@
     "thumb": "https://slot.report/images/slots/blood-and-shadow-thumb.webp"
   },
   {
-    "rainbetSlug": "hacksaw-phoenix-duel-reels",
-    "name": "Phoenix Duel Reels",
-    "thumb": "https://slot.report/images/slots/phoenix-duel-reels-thumb.webp"
-  },
-  {
     "rainbetSlug": "hacksaw-drop-em",
     "name": "Drop Em",
     "thumb": "https://slot.report/images/slots/drop-em-thumb.webp"
@@ -45778,5 +45773,10 @@
     "rainbetSlug": "netent-spice",
     "name": "Spice",
     "thumb": "https://cdn.softswiss.net/i/s4/netent/Spice.webp"
+  },
+  {
+    "rainbetSlug": "hacksaw-phoenix-duel-reels",
+    "name": "Phoenix Duel Reels",
+    "thumb": "https://slot.report/images/slots/phoenix-duel-reels-thumb.webp"
   }
 ]
