@@ -67,6 +67,10 @@ module.exports = function huntsRoutes(deps) {
   router.get('/api/hunts/:userId', (req, res) => {
     const hunt = hunts[req.params.userId];
     if (!hunt) return res.status(404).json({error:'Hunt not found'});
+    // Tenant guard (security audit 2026-07-18 #4): the archived sibling above already enforces
+    // inTenant; this live route did not, leaking non-anonymous equity names, bonuses, calls and
+    // the existence of in-setup/offline hunts across tenants to anyone who knows a Discord id.
+    if (!inTenant(hunt, req.tenant?.id)) return res.status(404).json({error:'Hunt not found'});
     const canEdit  = req.user ? canEditHunt(req, req.params.userId) : false;
 
     // NOTE: a display-name → discordId auto-link write used to live here. Removed in the

@@ -14,6 +14,31 @@ module.exports = function integrationsRoutes(deps) {
   const { integrations, tenants, memberships, hunts, normalizeSlot, requireAuth } = deps;
   const router = express.Router();
 
+  // Lightweight per-caller throttle for the upstream-proxy endpoints (security audit 2026-07-18 #7):
+  // /leaderboard, /discord/import-calls and /discord/parse-winners each fan out to Discord/beantwitch.
+  // They're auth-gated (except leaderboard) and cached, so this only clips a hot loop — the window is
+  // deliberately generous. In-memory fixed window, single instance, resets on deploy. Keyed by user id
+  // when authenticated, else tenant slug + ip so one caller can't drive repeated upstream fetches.
+  const _hits = new Map(); // key -> { start, count }
+  let _lastSweep = 0;
+  function throttle(max, windowMs) {
+    return (req, res, next) => {
+      const now = Date.now();
+      if (now - _lastSweep > windowMs) { // evict expired windows so the map can't grow unbounded
+        _lastSweep = now;
+        for (const [k, b] of _hits) if (now - b.start >= windowMs) _hits.delete(k);
+      }
+      const key = `${req.path}:${req.user?.id || `${req.tenant?.slug || '-'}:${req.ip || ''}`}`;
+      let b = _hits.get(key);
+      if (!b || now - b.start >= windowMs) { b = { start: now, count: 0 }; _hits.set(key, b); }
+      if (++b.count > max) {
+        res.set('Retry-After', String(Math.max(1, Math.ceil((b.start + windowMs - now) / 1000))));
+        return res.status(429).json({ error: 'Too many requests, slow down' });
+      }
+      next();
+    };
+  }
+
   router.get('/api/bean-live', (req, res) => res.json(integrations.getLiveStatus(req.tenant.slug)));
 
   // Active tenant's public branding — NO secrets (bot tokens, channel ids excluded).
@@ -50,7 +75,7 @@ module.exports = function integrationsRoutes(deps) {
     })));
   });
 
-  router.get('/api/leaderboard', async (req, res) => {
+  router.get('/api/leaderboard', throttle(30, 60_000), async (req, res) => {
     try {
       res.json(await integrations.getLeaderboard(req.tenant));
     } catch (e) {
@@ -63,7 +88,7 @@ module.exports = function integrationsRoutes(deps) {
   });
 
   // Import slot calls from last 20 mins — only from equity members of the user's hunt.
-  router.get('/api/discord/import-calls', requireAuth, async (req, res) => {
+  router.get('/api/discord/import-calls', requireAuth, throttle(20, 60_000), async (req, res) => {
     try {
       const hunt = hunts[req.user.id];
       if (!hunt) return res.status(404).json({ error: 'No active hunt' });
@@ -74,7 +99,7 @@ module.exports = function integrationsRoutes(deps) {
   });
 
   // Parse winners from Discord — ?type=affiliate uses the affiliate channel; default is VIP.
-  router.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
+  router.get('/api/discord/parse-winners', requireAuth, throttle(20, 60_000), async (req, res) => {
     try {
       const type = req.query.type === 'affiliate' ? 'affiliate' : 'vip';
       const t = req.tenant;

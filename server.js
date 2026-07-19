@@ -142,7 +142,7 @@ const auth = require('./lib/auth');
 const {
   nameOf, isAdmin, isPlatformAdmin, isVipHost,
   signToken, verifyToken, guildFlags,
-  canEditHunt, isEquityMember,
+  canEditHunt, reqCanAdminHunt, isEquityMember,
   requireAuth, reqIsAdmin, reqIsVipHost, requireAdmin, requirePlatformAdmin,
   reqIsMod, requireMod, reqIsTenantAdmin, requireTenantAdmin,
   resolveTenant,
@@ -164,7 +164,16 @@ app.use(helmet({
 // no credentials — Bearer-key auth, not cookies). This credentialed, origin-allowlisted CORS
 // would otherwise 500 on any non-allowlisted browser origin before the public router ever runs,
 // blocking third-party browser consumers of the public API — so it's skipped for those paths.
-const globalCors = cors({ origin: corsOrigin, credentials: true });
+// Per-request CORS delegate: allowlisted site origins get credentialed CORS (cookie sessions);
+// browser-extension origins are reflected but WITHOUT credentials (security audit 2026-07-18 #6).
+// The extension authenticates by HMAC Bearer token, never cookies, so dropping Allow-Credentials
+// for chrome-/moz-extension:// origins stops a *malicious* extension from riding a user's session
+// cookie via the reflection, while the CommunityHunts extension keeps working (Bearer, no cookie).
+const globalCors = cors((req, callback) => {
+  const origin = req.headers.origin || '';
+  const isExtension = /^chrome-extension:\/\//.test(origin) || /^moz-extension:\/\//.test(origin);
+  callback(null, { origin: corsOrigin, credentials: !isExtension });
+});
 app.use((req, res, next) => req.path.startsWith('/api/public/') ? next() : globalCors(req, res, next));
 // Stripe webhook needs the raw body for signature verification — mount
 // before the global JSON parser so it gets the unparsed Buffer.
@@ -495,7 +504,7 @@ app.use(require('./routes/overdrop.routes')({ requireMod, overdrop }));
 // Slot-call + call-permission routes (routes/calls.routes.js). Owns huntCallRequests state.
 app.use(require('./routes/calls.routes')({
   hunts, io, persistHunts,
-  requireAuth, canEditHunt, isEquityMember, reqIsAdmin,
+  requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt,
   normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
   auditLog,
 }));

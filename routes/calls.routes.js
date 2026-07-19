@@ -15,7 +15,7 @@ const { sanitizeBonusReplayUrls, bindEquityIdentityByName } = require('../lib/hu
 module.exports = function callsRoutes(deps) {
   const {
     hunts, io, persistHunts,
-    requireAuth, canEditHunt, isEquityMember, reqIsAdmin,
+    requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt,
     normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
     auditLog,
   } = deps;
@@ -151,7 +151,7 @@ module.exports = function callsRoutes(deps) {
 
   // Get pending requests (hunt owner only)
   router.get('/api/hunts/:userId/call-requests', requireAuth, (req, res) => {
-    if (req.user.id !== req.params.userId && !reqIsAdmin(req)) return res.status(403).json({ error: 'Forbidden' });
+    if (req.user.id !== req.params.userId && !reqCanAdminHunt(req, req.params.userId)) return res.status(403).json({ error: 'Forbidden' });
     res.json(huntCallRequests[req.params.userId] || []);
   });
 
@@ -159,7 +159,7 @@ module.exports = function callsRoutes(deps) {
   router.post('/api/hunts/:userId/call-requests/:requestId', requireAuth, (req, res) => {
     const { userId, requestId } = req.params;
     const { action } = req.body; // 'grant' or 'deny'
-    if (req.user.id !== userId && !reqIsAdmin(req)) return res.status(403).json({ error: 'Forbidden' });
+    if (req.user.id !== userId && !reqCanAdminHunt(req, userId)) return res.status(403).json({ error: 'Forbidden' });
 
     const requests = huntCallRequests[userId] || [];
     const reqItem = requests.find(r => r.id === requestId);
