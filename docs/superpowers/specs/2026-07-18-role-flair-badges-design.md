@@ -10,14 +10,34 @@ Show a small, role/status-driven **flair badge** next to a user's name wherever 
 This is distinct from the existing **cosmetic card flair** (`FlairName`, purchased skins) — these
 badges are *assigned by status*, not bought. Four badge types:
 
-| Badge | Who | Source of truth | Scope |
-|---|---|---|---|
-| 👑 **Owner** | Kyle + Goofer | `PLATFORM_OWNER_IDS` / `isPlatformOwnerId()` in `lib/tenants.js` (Kyle `135203806676779008`, Goofer `168055630916091904`) | Global |
-| **The King** | The streamer of a community | tenant `hostDiscordId` | Per-tenant (Bean is King only in `/bean`) |
-| **Staff** | Community mods | `tenant_roles` role=`community_mod` (exposed as `tenant.modIds`) | Per-tenant |
-| ❤ **Supporter** | Donors, marked manually | **new** `supporters` table | Global |
+| Badge | Label · icon | Who | Source of truth | Scope |
+|---|---|---|---|---|
+| **Owner** | `◆ Owner` (gold) | Kyle + Goofer | `PLATFORM_OWNER_IDS` / `isPlatformOwnerId()` in `lib/tenants.js` (Kyle `135203806676779008`, Goofer `168055630916091904`) | Global |
+| **The King** | `★ The King` (gold) | The **actual streamer** of a community | tenant `hostDiscordId` | Per-tenant (Bean is King only in `/bean`) |
+| **Staff** | `⚡ Staff` (violet) | Community mods | `tenant_roles` role=`community_mod` (exposed as `tenant.modIds`) | Per-tenant |
+| **Supporter** | `♥ Supporter` (pink) | Donors, marked manually | **new** `supporters` table | Global |
 
 **Precedence — a user gets exactly ONE badge (highest wins):** Owner → The King → Staff → Supporter.
+
+**Icons are placeholders and easily swapped — NO crown on any badge** (👑 stays Bean's personal
+streamer icon; the King badge uses `★`, not a crown). One hue per badge: gold (Owner + King),
+violet (Staff), pink (Supporter). Owner and King share gold, distinguished by icon + label.
+
+**Visual treatment — "Bold solid pill" (chosen).** Each badge is a filled, saturated pill: solid
+badge-colour background, label in a dark same-family text colour, ~9.5px mono uppercase, `2.5px 8px`
+padding, `6px` radius — noticeably louder than the current faint `HOST` tag (which was rejected as
+too subtle). Sits inline next to the name, where the `HOST` tag renders today.
+
+### "The King" replaces the `HOST` tag — streamer only
+Today `EquityRow.js` shows a `HOST` pill for `e.id === 'creator_auto'`. New rule:
+- The King (`★ The King`, gold solid pill) shows **only for the tenant's real streamer** — i.e. a row
+  whose Discord ID equals the tenant `hostDiscordId`. In Bean's own hunt that's Bean.
+- A **non-streamer** running a VIP/affiliate hunt (a hunt owner whose Discord ID ≠ `hostDiscordId`)
+  keeps the existing neutral `HOST` label — they are the hunt host, not the King.
+- Implementation note: `creator_auto` / `bean_auto` are synthetic IDs that won't match `hostDiscordId`
+  directly. Resolve King on those rows by comparing the **hunt owner's real Discord ID** to
+  `hostDiscordId`; if equal, the `creator_auto`/streamer row renders The King, else it stays `HOST`.
+  Real-ID render sites (hub, dropdown) resolve King straight from the roster's `king` field.
 
 ### Out of scope / explicit non-goals
 - No payment automation. Supporters are set by hand in an admin UI after a donation.
@@ -99,12 +119,18 @@ Pure module → unit tested per repo rule (pure logic gets a `.test.js`; compone
 ### 3. `UserBadge.js` — presentational pill
 - Props `{ userId, slug }`. Renders nothing when `badgeFor` returns `null` (covers `creator_auto`,
   `bean_auto`, anonymous rows — no real Discord ID → no badge).
-- Styled like the existing `HOST` tag (mono, ~8px, uppercase, tinted bg), tokens via `useTheme()`.
-- Visuals: 👑 **Owner** gold · **The King** gold/crown · **Staff** violet (accent) · ❤ **Supporter** pink-red.
+- **Bold solid pill** treatment: solid badge-colour bg, dark same-family text, ~9.5px mono uppercase,
+  `2.5px 8px` / `6px` radius. Tokens via `useTheme()` (gold = `G.gold`, violet = accent, pink = new
+  token). Louder than the `HOST` tag it sits beside.
+- Labels/icons: `◆ Owner` · `★ The King` · `⚡ Staff` · `♥ Supporter` (no crown; icons swappable).
+- The King path also handles the `creator_auto`/streamer row relabel (see backend section) — pass the
+  hunt owner's real Discord ID so `UserBadge` can compare it to the tenant `king`.
 
 ### 4. Render-site integration
 Drop `<UserBadge userId={id} slug={slug} />` beside `FlairName`:
-- **Equity rows** — `src/hunt/columns/EquityRow.js` / `EquityCard.js`, next to the existing `HOST` pill.
+- **Equity rows** — `src/hunt/columns/EquityRow.js` / `EquityCard.js`. The King **replaces** the
+  `HOST` pill for the streamer row (per the King-scope rule above); other members get their badge
+  inline next to `FlairName`.
 - **Hub** name sites — `src/pages/Hub.js` + `src/pages/hub/*`.
 - **Account dropdown** — `src/pages/home/UserDropdown.js` (the user's own badge).
 
