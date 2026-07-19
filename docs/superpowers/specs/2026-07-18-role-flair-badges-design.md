@@ -28,16 +28,17 @@ badge-colour background, label in a dark same-family text colour, ~9.5px mono up
 padding, `6px` radius — noticeably louder than the current faint `HOST` tag (which was rejected as
 too subtle). Sits inline next to the name, where the `HOST` tag renders today.
 
-### "The King" replaces the `HOST` tag — streamer only
-Today `EquityRow.js` shows a `HOST` pill for `e.id === 'creator_auto'`. New rule:
-- The King (`★ The King`, gold solid pill) shows **only for the tenant's real streamer** — i.e. a row
-  whose Discord ID equals the tenant `hostDiscordId`. In Bean's own hunt that's Bean.
-- A **non-streamer** running a VIP/affiliate hunt (a hunt owner whose Discord ID ≠ `hostDiscordId`)
-  keeps the existing neutral `HOST` label — they are the hunt host, not the King.
-- Implementation note: `creator_auto` / `bean_auto` are synthetic IDs that won't match `hostDiscordId`
-  directly. Resolve King on those rows by comparing the **hunt owner's real Discord ID** to
-  `hostDiscordId`; if equal, the `creator_auto`/streamer row renders The King, else it stays `HOST`.
-  Real-ID render sites (hub, dropdown) resolve King straight from the roster's `king` field.
+### Badges replace the `HOST` tag — role always wins
+Today `EquityRow.js` shows a `HOST` pill for `e.id === 'creator_auto'`. New rule — **the host row runs
+the full badge precedence and shows the resulting badge instead of HOST; it only falls back to the
+neutral `HOST` label when the host has no badge:**
+- `creator_auto` / `bean_auto` are synthetic IDs, so resolve the host row's badge from the **hunt
+  owner's real Discord ID** through `pickBadge(...)` (Owner → King → Staff → Supporter).
+- So an **owner** who is hosting shows `◆ Owner` (not HOST) — role outranks host. The **actual
+  streamer** (owner's Discord ID = tenant `hostDiscordId`, and not a higher tier) shows `★ The King`.
+  A plain **non-streamer host** with no badge keeps the neutral `HOST` label.
+- Real-ID render sites (hub, dropdown) resolve badges straight from the roster + tenant `king`; no
+  synthetic-ID mapping needed there.
 
 ### Out of scope / explicit non-goals
 - No payment automation. Supporters are set by hand in an admin UI after a donation.
