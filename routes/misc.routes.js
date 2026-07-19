@@ -1,7 +1,8 @@
 // Misc leaf routes that don't belong to a larger concern:
 //   GET  /api/bangers       → top recent big-multiplier wins (reads hunts + archive, read-only)
 //   GET  /api/hall-of-fame      → all-time top replay-backed wins, top FAME_CAP (shape frozen: bare array)
-//   GET  /api/hall-of-fame/all  → the same, paginated: ?limit=&offset= → { items, total, offset, limit }
+//   GET  /api/hall-of-fame/all  → the same, paginated: ?limit=&offset=&currency=&sort=latest
+//                                 → { items, total, offset, limit, currencies }
 //   POST /api/tickets   → persist an inquiry/suggestion (lib/tickets) + best-effort Discord doorbell (per-IP rate limited)
 //   GET  /api/health    → health check
 // Thin router, mounted from the server.js composition root.
@@ -50,10 +51,15 @@ module.exports = function miscRoutes(deps) {
 
   // Paginated back catalogue for the /:slug/hall-of-fame page — the whole archive, not
   // just the hub's top 12. Envelope (not a bare array) because the client needs `total`
-  // to render "N more" and to know when to stop. Params are clamped in pageHallOfFame.
+  // to render "N more" and to know when to stop, and `currencies` to render the tab bar.
+  // `currency` filters the board; `sort=latest` feeds the Latest Hits carousel. All four
+  // params are clamped/validated in pageHallOfFame — junk falls back, it never 400s.
   router.get('/api/hall-of-fame/all', (req, res) => {
     const all = collectHallOfFame(hunts, archive, req.tenant?.id || 'bean', { isAnon: shouldMaskIdentity });
-    res.json(pageHallOfFame(all, { limit: req.query.limit, offset: req.query.offset }));
+    res.json(pageHallOfFame(all, {
+      limit: req.query.limit, offset: req.query.offset,
+      currency: req.query.currency, sort: req.query.sort,
+    }));
   });
 
   router.post('/api/tickets', async (req, res) => {
