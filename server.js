@@ -355,12 +355,14 @@ app.use(require('./routes/auth.routes')({
 
 
 // Reject malformed / oversized hunt payloads (memory + DoS protection).
-const MAX_BONUSES = 1000, MAX_EQUITY = 300, MAX_CALLS = 1000;
+const MAX_BONUSES = 1000, MAX_EQUITY = 300, MAX_CALLS = 1000, MAX_VAULT = 500;
 function rejectBadHuntInput(req, res) {
   const { bonuses, equity, calls } = req.body || {};
   if (bonuses !== undefined && (!Array.isArray(bonuses) || bonuses.length > MAX_BONUSES)) { res.status(400).json({error:'Invalid bonuses payload'}); return true; }
   if (equity  !== undefined && (!Array.isArray(equity)  || equity.length  > MAX_EQUITY))  { res.status(400).json({error:'Invalid equity payload'});  return true; }
   if (calls   !== undefined && (!Array.isArray(calls)   || calls.length   > MAX_CALLS))   { res.status(400).json({error:'Invalid calls payload'});   return true; }
+  const { vault } = req.body || {};
+  if (vault !== undefined && (!Array.isArray(vault) || vault.length > MAX_VAULT)) { res.status(400).json({error:'Invalid vault payload'}); return true; }
   const { currency } = req.body || {};
   if (currency !== undefined && !huntsCore.CURRENCIES.includes(currency)) { res.status(400).json({error:'Invalid currency'}); return true; }
   const { publicCalls, publicCallsPin } = req.body || {};
