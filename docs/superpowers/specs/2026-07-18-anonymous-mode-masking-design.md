@@ -52,11 +52,29 @@ shows their real name to the public, everywhere.
 4. Do not reintroduce the name-based **privilege/attribution** vuln the security audit
    closed. Name matching is used for **display redaction only** — never to grant
    permissions or attribute payouts.
+5. **Attach a durable Discord ID to equity rows** wherever an authenticated,
+   owner-authorized path already knows it — the identity foundation that makes
+   anonymous rename-proof AND unblocks the payout ledger and per-profile hunt history
+   (see [[payout-tracking]] Phase 2). Same key, three features.
+
+## Why this also carries member identity
+
+Equity rows today have no durable identity: the member `id` is a per-hunt random
+`uid()` (unique within one hunt, meaningless across hunts), display names change/collide,
+and `rainbetName` is optional + user-editable. Only the **Discord ID** is durable,
+unique, and unspoofable. Anonymous needs it to survive a name change; the payout Phase 2
+ledger needs it to join a member across archived hunts (its spec currently joins by
+`member id / rainbetName` — the fragile key); profile history needs it to attribute
+stats to a person. This design attaches that ID once, through the flows that already
+verify it, so all three build on one key.
 
 ## Non-goals
 
-- Reworking the hunt data model to be ID-first. Attribution stays name-string based;
-  we add an authoritative ID link as an opt-in overlay, not a rewrite.
+- Reworking the hunt data model to be ID-first. Names stay the primary attribution; we
+  overlay a durable Discord ID (auto-bound where an authorized flow knows it, else
+  manually linked), not a rewrite.
+- Building the payout ledger or profile-history views themselves. This design only lays
+  the identity key they will read; those remain their own projects.
 - Masking privileged/admin-only surfaces. The admin xlsx got-in export keeps real
   names (it is a privileged surface).
 
@@ -117,24 +135,44 @@ while the public room gets `Anonymous`; the fully-masked fallback on error stays
 **Got-in export vs public log:** the admin xlsx export is privileged → real names. Only
 non-privileged consumers of `getGotInLog` are masked.
 
-### 3. Authoritative ID link (rename-proof half)
+### 3. Durable member identity — auto-bind the Discord ID (rename-proof foundation)
 
-Name-match covers the common case immediately but breaks if a user changes their Discord
-display name after being added under the old one. So add an **owner/admin action to bind
-a Discord user to an equity row**, writing `discordId` to that row.
+Name-match (§1) covers the common case immediately but breaks if a user changes their
+Discord display name after being added under the old one — and it never gives us a
+durable key for the payout ledger or profile history. So we **attach the verified Discord
+ID onto the equity row** wherever an authenticated, owner-authorized flow already knows
+it. Crucially we **never** stamp by bare name-match (that is exactly the audit vuln);
+every bind below is either owner-authorized or self-authenticated.
 
-- This is the **only** safe auto-stamp path. We do **not** stamp `discordId` by
-  name-match (that is exactly the audit vuln). Stamping happens only via this explicit,
-  owner-authorized action.
-- Once linked, the row masks by ID regardless of later name changes, and payout
-  attribution is rename-proof.
-- **Warning badge** on unlinked equity rows (runner/admin view only): signals the row is
-  not ID-bound and relies on name-match, so a name change could de-anonymize it.
+**A. Auto-bind at the owner-approved call grant (primary path).**
+When the owner grants a request-calls request (`routes/calls.routes.js` grant handler),
+`reqItem.userId` is the requester's **verified** Discord ID and the owner has explicitly
+approved *this* person. At that moment, if exactly one **unlinked** equity row's name
+matches the requester's display name, bind the ID to that row. This is owner-mediated and
+disambiguated (single match), so it is safe where silent name-claiming was not. Ambiguous
+(2+ name matches) or no-match cases do nothing automatically and fall to path C.
 
-Endpoint shape (illustrative): `POST /api/hunts/:userId/equity/:memberId/link`
-`{ discordId }`, guarded by `canEditHunt` (owner/editor/admin). Resolves the target via
-`known_users` (no fabricated identities). Writes `discordId` onto the matching equity row
-and audit-logs the change.
+**B. Self-authenticated attribution on add-call.**
+When an ID-bound member adds a call, stamp their verified `req.user.id` onto the
+`calls[]` / `bonuses[].caller` entry (a new optional `callerId` field) so calls and the
+caller column carry a durable identity too — feeding masking, attribution, and history
+without relying on the name string. The visible `user`/`caller` name string is unchanged;
+`callerId` is additive and stripped from public views alongside `discordId`.
+
+**C. Manual owner/admin link (authoritative fallback).**
+For hand-added rows that never came through a grant, an explicit action binds a Discord
+user to an equity row. Endpoint (illustrative):
+`POST /api/hunts/:userId/equity/:memberId/link` `{ discordId }`, guarded by `canEditHunt`
+(owner/editor/admin), resolved via `known_users` (no fabricated identities), audit-logged.
+
+Once a row is ID-bound (any path), it masks by ID regardless of later name changes, and it
+is the join key for the payout ledger + profile history. A **warning badge** on unlinked
+equity rows (runner/admin view only) signals the row relies on name-match and could
+de-anonymize on a name change — with a one-click link to resolve it.
+
+**Public safety:** `publicHuntView` already strips `discordId`; it also strips the new
+`callerId` from `calls[]` / `bonuses[]` so identity linkage never reaches non-privileged
+clients.
 
 ### 4. Admin / privileged indicator
 
@@ -172,7 +210,12 @@ Backend unit tests (`node --test lib/*.test.js`):
   caller-only anonymous hunt.
 - `getGotInLog`, Hall of Fame, `publicSerializers`: public output masked, privileged
   output real.
-- Regression: an anonymous name string cannot be used to gain call/edit permission
+- **Auto-bind (§3A):** grant with exactly one unlinked name match binds the ID; grant with
+  2+ matches or zero matches binds nothing; grant never overwrites an already-linked row.
+- **callerId (§3B):** `publicHuntView` strips `callerId` from `calls[]` and `bonuses[]`;
+  it never reaches a non-privileged client.
+- Regression: an anonymous (or any) bare name string cannot be used to gain call/edit
+  permission or to auto-bind an ID without owner authorization
   (extend `securityAuditP0.routes.test.js` coverage).
 
 Frontend: pure-logic checks where they exist; the badge/banner are visual (verified in
@@ -180,14 +223,30 @@ preview).
 
 ## Rollout
 
-1. Backend: predicate + `anonymousNames` set + serializer masking + link endpoint +
-   tests. Deploy first (masking is server-authoritative — the frontend cannot leak what
-   it never receives).
-2. Frontend: 🔒 badge on all surfaces, self-badge, hunt banner, link UI + warning badge
-   on unlinked rows.
+1. Backend: predicate + `anonymousNames` set + serializer masking + auto-bind at grant
+   (§3A) + `callerId` on add-call and its stripping in `publicHuntView` (§3B) + manual
+   link endpoint (§3C) + tests. Deploy first (masking is server-authoritative — the
+   frontend cannot leak what it never receives).
+2. Frontend: 🔒 badge on all surfaces, self-badge, hunt banner, manual link UI + warning
+   badge on unlinked rows.
 
 Both are additive; no data migration. Existing hunts gain masking immediately via
-name-match on deploy of step 1.
+name-match on deploy of step 1; rows become ID-bound organically as members are granted
+calls, or on demand via the manual link.
+
+## Feeds other features (why the identity work lives here)
+
+The Discord ID attached in §3 is the shared join key for:
+
+- **This feature** — rename-proof masking that survives a display-name change.
+- **Payout ledger** ([[payout-tracking]] Phase 2) — replaces its fragile
+  `member id / rainbetName` join with the durable ID when aggregating a member's
+  paid/owed totals across archived hunts.
+- **Profile hunt history** — per-person "was in these hunts, stats from each", which is
+  only reliable once equity rows carry a stable identity.
+
+Building the identity attach here (rather than a separate later project) means these two
+inherit it for free instead of each re-solving the same gap.
 
 ## Open considerations
 
