@@ -69,7 +69,7 @@ module.exports = function trackerRoutes(deps) {
     const hunt = hunts[key];
     if (!hunt) return res.status(404).json({ error: 'No active hunt' });
 
-    const allowed = ['bonuses', 'equity', 'gifts', 'calls', 'callLimit', 'huntMode', 'lockTop4',
+    const allowed = ['bonuses', 'equity', 'gifts', 'vault', 'calls', 'callLimit', 'huntMode', 'lockTop4',
       'roundRobin', 'currentSlot', 'manualOrder', 'huntType', 'currency'];
     for (const f of allowed) {
       if (req.body[f] !== undefined) hunt[f] = f === 'bonuses' ? sanitizeBonusReplayUrls(req.body[f]) : req.body[f];
