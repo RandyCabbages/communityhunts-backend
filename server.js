@@ -314,6 +314,7 @@ function isPrivilegedViewer(viewerId, hunt) {
 huntsCore.initHuntsCore({
   hunts, archive, viewers, io, persistHunts,
   isAnonymousUser: settings.isAnonymousUser, isPrivilegedViewer,
+  shouldMaskIdentity: settings.shouldMaskIdentity,
 });
 const {
   MOD_HUNT_ID, AFFILIATE_HUNT_ID, modHuntKey, affiliateHuntKey,
