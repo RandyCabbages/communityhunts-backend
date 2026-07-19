@@ -3,6 +3,7 @@
 //   GET  /api/hall-of-fame      → all-time top replay-backed wins, top FAME_CAP (shape frozen: bare array)
 //   GET  /api/hall-of-fame/all  → the same, paginated: ?limit=&offset=&currency=&sort=latest
 //                                 → { items, total, offset, limit, currencies }
+//   GET  /api/community-stats  → tenant-wide proof numbers for the homepage band (FX-normalized USD)
 //   POST /api/tickets   → persist an inquiry/suggestion (lib/tickets) + best-effort Discord doorbell (per-IP rate limited)
 //   GET  /api/health    → health check
 // Thin router, mounted from the server.js composition root.
@@ -26,7 +27,7 @@ const SUGGESTION_TYPES = new Set(['Feature Request']);
 const ticketHits = new Map(); // per-IP ticket timestamps for rate limiting
 
 module.exports = function miscRoutes(deps) {
-  const { hunts, archive, tickets, getPlatformBotToken } = deps;
+  const { hunts, archive, tickets, getPlatformBotToken, statsStore } = deps;
   const router = express.Router();
 
   // Selection (300x floor, dedupe, recency sort, 2-per-user cap, 24-window) lives in
@@ -35,6 +36,21 @@ module.exports = function miscRoutes(deps) {
   // community's banger rail showed Bean's wins. Now live with MULTI_TENANT on.
   router.get('/api/bangers', (req, res) => {
     res.json(collectBangers(hunts, archive, req.tenant?.id || 'bean', { isAnon: shouldMaskIdentity }));
+  });
+
+  // Homepage proof band ("Real numbers from real hunts"). Public + tenant-scoped, same guard
+  // as /api/bangers. FX-NORMALIZED — see lib/communityStats.js for why a raw sum of totalWon
+  // across currencies is wrong. Degrades to zeros (no DB, no rows, or a query error) and the
+  // frontend hides the band entirely when `hunts` is 0, so a failure is invisible, not broken.
+  router.get('/api/community-stats', async (req, res) => {
+    const empty = { hunts: 0, bonuses: 0, usdWon: 0, approx: 0 };
+    if (!statsStore) return res.json(empty);
+    try {
+      res.json(await statsStore.getCommunityStats(req.tenant?.id || 'bean'));
+    } catch (e) {
+      console.error('[community-stats]', e.message);
+      res.json(empty);
+    }
   });
 
   // Hall of Fame: all-time top-multiplier hits that carry a replay link.
