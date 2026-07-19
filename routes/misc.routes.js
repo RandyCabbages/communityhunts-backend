@@ -11,6 +11,7 @@ const express = require('express');
 
 const { collectHallOfFame, pageHallOfFame, FAME_CAP } = require('../lib/hallOfFame');
 const { collectBangers } = require('../lib/bangers');
+const { shouldMaskIdentity } = require('../lib/settings'); // anon host masking for the public rails
 
 // Ticket config is env-derived (config, not shared state) — read here so the router is self-sufficient.
 // Tickets are PLATFORM-level: they post to communityhunts.gg's OWN channels, so the bot token is
@@ -32,7 +33,7 @@ module.exports = function miscRoutes(deps) {
   // THIS tenant's hunts (tenantOf defaults an untagged hunt to 'bean'). Without it every
   // community's banger rail showed Bean's wins. Now live with MULTI_TENANT on.
   router.get('/api/bangers', (req, res) => {
-    res.json(collectBangers(hunts, archive, req.tenant?.id || 'bean'));
+    res.json(collectBangers(hunts, archive, req.tenant?.id || 'bean', { isAnon: shouldMaskIdentity }));
   });
 
   // Hall of Fame: all-time top-multiplier hits that carry a replay link.
@@ -43,7 +44,7 @@ module.exports = function miscRoutes(deps) {
   // response directly, so returning an envelope here would throw in an older deployed
   // frontend during the backend-first deploy gap. Page via /api/hall-of-fame/all instead.
   router.get('/api/hall-of-fame', (req, res) => {
-    const all = collectHallOfFame(hunts, archive, req.tenant?.id || 'bean');
+    const all = collectHallOfFame(hunts, archive, req.tenant?.id || 'bean', { isAnon: shouldMaskIdentity });
     res.json(all.slice(0, FAME_CAP));
   });
 
@@ -51,7 +52,7 @@ module.exports = function miscRoutes(deps) {
   // just the hub's top 12. Envelope (not a bare array) because the client needs `total`
   // to render "N more" and to know when to stop. Params are clamped in pageHallOfFame.
   router.get('/api/hall-of-fame/all', (req, res) => {
-    const all = collectHallOfFame(hunts, archive, req.tenant?.id || 'bean');
+    const all = collectHallOfFame(hunts, archive, req.tenant?.id || 'bean', { isAnon: shouldMaskIdentity });
     res.json(pageHallOfFame(all, { limit: req.query.limit, offset: req.query.offset }));
   });
 

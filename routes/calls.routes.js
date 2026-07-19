@@ -10,7 +10,7 @@
 // huntCallRequests is process-local pending-request state, owned here.
 
 const express = require('express');
-const { sanitizeBonusReplayUrls } = require('../lib/hunts-core');
+const { sanitizeBonusReplayUrls, bindEquityIdentityByName } = require('../lib/hunts-core');
 
 module.exports = function callsRoutes(deps) {
   const {
@@ -45,7 +45,9 @@ module.exports = function callsRoutes(deps) {
         return { error: `You've reached the limit of ${hunt.callLimit} calls`, status: 400 };
     }
 
-    const newCall = { id: Math.random().toString(36).slice(2,8), slot: slot.trim(), user: user.displayName||user.username, status: 'pending', ...(source ? { source } : {}) };
+    const newCall = { id: Math.random().toString(36).slice(2,8), slot: slot.trim(),
+      user: user.displayName||user.username, callerId: user.id ? String(user.id) : undefined,
+      status: 'pending', ...(source ? { source } : {}) };
     // New calls go to the END of the pending queue. The old "insert after first 3"
     // splice predates round-robin + the top-4 lock: it shoved every incoming call up
     // top — even INTO the locked top 4, pushing locked calls down. Queue order is the
@@ -170,6 +172,9 @@ module.exports = function callsRoutes(deps) {
       if (!hunts[userId].callsPermissions.includes(reqItem.userId)) {
         hunts[userId].callsPermissions.push(reqItem.userId);
       }
+      // Attach the verified, owner-approved identity to the member's equity row if unambiguous.
+      // Display name for matching comes from the pending request (reqItem.displayName).
+      bindEquityIdentityByName(hunts[userId], { userId: reqItem.userId, name: reqItem.displayName });
       persistHunts();
       // Notify the requester
       io.to(`hunt:${userId}`).emit('calls:granted', { userId: reqItem.userId });
