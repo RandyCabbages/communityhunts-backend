@@ -11,7 +11,7 @@
 const express = require('express');
 
 module.exports = function integrationsRoutes(deps) {
-  const { integrations, tenants, memberships, hunts, normalizeSlot, requireAuth } = deps;
+  const { integrations, tenants, memberships, hunts, normalizeSlot, requireAuth, supporters } = deps;
   const router = express.Router();
 
   // Lightweight per-caller throttle for the upstream-proxy endpoints (security audit 2026-07-18 #7):
@@ -61,6 +61,19 @@ module.exports = function integrationsRoutes(deps) {
       // Stripe id, which ranks as 0 (free). A tenant with no plan set resolves to 'pro'
       // (normalizePlan fallback), matching the TenantLayout default. Field name is contract.
       plan: tenants.normalizePlan(b.plan),
+    });
+  });
+
+  // Public badge roster for the ACTIVE tenant. owners+supporters are global; king+mods are this
+  // tenant's. Powers the frontend flair badges. No secrets — these badges are shown publicly.
+  // Served from in-memory caches; no per-request DB hit.
+  router.get('/api/badges', (req, res) => {
+    const t = req.tenant || {};
+    res.json({
+      owners: (tenants.PLATFORM_OWNER_IDS || []).map(String),
+      king: t.hostDiscordId ? String(t.hostDiscordId) : null,
+      mods: (t.modIds || []).map(String),
+      supporters: supporters.getSupporterIds(),
     });
   });
 
