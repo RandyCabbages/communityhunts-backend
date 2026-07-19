@@ -13,7 +13,7 @@
 // hunts/archive are persistence-owned singletons (by reference). hunt:update via publicHuntView.
 
 const express = require('express');
-const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant } = require('../lib/hunts-core');
+const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquityMember } = require('../lib/hunts-core');
 
 module.exports = function huntsRoutes(deps) {
   const {
@@ -21,7 +21,7 @@ module.exports = function huntsRoutes(deps) {
     hunts, archive, getPublicHunts, getArchivedHunts,
     emitHubUpdate, emitHuntUpdate, publicHuntView, uid, touch,
     persistHunts, archiveHunt, unarchiveHunt, io, rejectBadHuntInput,
-    resolveUserIdByName, getCreatorLive, refreshCreatorsLive, auditLog,
+    resolveUserIdByName, getCreatorLive, refreshCreatorsLive, getKnownUser, auditLog,
   } = deps;
   const router = express.Router();
 
@@ -356,6 +356,25 @@ module.exports = function huntsRoutes(deps) {
     auditLog.recordFromReq(req, { category: 'admin', action: 'editor.remove', targetId: userId,
       summary: `${req.user.displayName || 'someone'} removed editor ${target} from ${userId}'s hunt` });
     res.json({ok:true, invitedEditors: hunt.invitedEditors});
+  });
+
+  // Admin/owner: bind a Discord user to an equity row (rename-proof identity for masking + payouts).
+  router.post('/api/hunts/:userId/equity/:memberId/link', requireAuth, async (req, res) => {
+    if (!canEditHunt(req, req.params.userId)) return res.status(403).json({ error: 'Not authorised' });
+    const hunt = hunts[req.params.userId];
+    if (!hunt) return res.status(404).json({ error: 'Hunt not found' });
+    const discordId = String(req.body?.discordId || '').trim();
+    if (!/^\d{5,}$/.test(discordId)) return res.status(400).json({ error: 'Valid discordId required' });
+    const known = getKnownUser ? await getKnownUser(discordId) : null;
+    if (!known) return res.status(404).json({ error: 'No known user for that Discord ID' });
+    const _before = { equity: [...(hunt.equity || [])] };
+    if (!linkEquityMember(hunt, req.params.memberId, discordId))
+      return res.status(404).json({ error: 'Equity member not found' });
+    hunt.updatedAt = new Date().toISOString();
+    emitHuntUpdate(req.params.userId);
+    auditLog.recordHuntChange(req, _before, { equity: hunt.equity },
+      { targetId: req.params.userId, targetName: hunt.user && hunt.user.displayName });
+    res.json({ ok: true, linked: { memberId: req.params.memberId, discordId, displayName: known.displayName } });
   });
 
   return router;

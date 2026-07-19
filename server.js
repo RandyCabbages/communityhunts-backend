@@ -389,6 +389,7 @@ app.use(require('./routes/hunts.routes')({
   resolveUserIdByName: settings.resolveUserIdByName,
   getCreatorLive: integrations.getCreatorLive,
   refreshCreatorsLive: () => integrations.checkCreatorsLive(io, creatorPollDeps),
+  getKnownUser: settings.getKnownUser,
   auditLog,
 }));
 
