@@ -283,7 +283,6 @@ Font: Chakra Petch
 
 ## Pending
 
-- [ ] Held base-games vault feature (frontend pending)
 - [ ] Community Hunt punt calculator at bottom of equity section
 - [ ] Placeholder text in slot + caller name inputs
 - [ ] Verify Share button captures full equity section (html2canvas + `data-equity-section`)
