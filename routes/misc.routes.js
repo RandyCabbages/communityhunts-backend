@@ -14,6 +14,7 @@ const express = require('express');
 const { collectHallOfFame, pageHallOfFame, FAME_CAP } = require('../lib/hallOfFame');
 const { collectBangers } = require('../lib/bangers');
 const { shouldMaskIdentity } = require('../lib/settings'); // anon host masking for the public rails
+const { sanitizeContext } = require('../lib/ticketContext'); // untrusted page-context blob on tickets
 
 // Ticket config is env-derived (config, not shared state) — read here so the router is self-sufficient.
 // Tickets are PLATFORM-level: they post to communityhunts.gg's OWN channels, so the bot token is
@@ -79,7 +80,7 @@ module.exports = function miscRoutes(deps) {
   });
 
   router.post('/api/tickets', async (req, res) => {
-    const { username, issue, type } = req.body;
+    const { username, issue, type, context } = req.body;
 
     // Length caps + per-IP throttle to prevent channel spam.
     if (String(issue||'').length > 5000 || String(username||'').length > 120 || String(type||'').length > 40)
@@ -90,6 +91,9 @@ module.exports = function miscRoutes(deps) {
     if (recentTickets.length >= 5) return res.status(429).json({error:'Too many tickets — please try again in a few minutes'});
     recentTickets.push(tnow); ticketHits.set(tip, recentTickets);
 
+    // Page context from the support launcher. Untrusted client input — whitelist + cap it.
+    const safeContext = sanitizeContext(context);
+
     // Route by type: feature suggestions go to their own channel, everything else to the inquiries channel.
     const kind = (type || 'General').trim();
     const isSuggestion = SUGGESTION_TYPES.has(kind);
@@ -98,7 +102,7 @@ module.exports = function miscRoutes(deps) {
 
     // Persist FIRST — the store is the source of truth for the admin queue. Identity is
     // snapshotted when the submitter is signed in; anonymous submits keep userId null.
-    const t = tickets.createTicket({ type: kind, issue, username, discordChannel: dest }, req.user || null);
+    const t = tickets.createTicket({ type: kind, issue, username, discordChannel: dest, context: safeContext }, req.user || null);
 
     // Best-effort Discord doorbell — a failure NEVER fails the submit (the ticket is already saved).
     // Token is the PLATFORM bot; channels are the global ticket/suggestion env ids.
@@ -113,7 +117,19 @@ module.exports = function miscRoutes(deps) {
         title: `${isSuggestion ? '💡' : '🎫'} ${kind}`.slice(0, 256),
         description: desc,
         color,
-        fields: [{ name: 'From', value: from, inline: false }],
+        fields: [
+          { name: 'From', value: from, inline: false },
+          // Page context (route + viewport) when the launcher supplied it. Under Discord's
+          // 1024-char field cap by construction — route is capped at 300 by the sanitizer.
+          // userAgent deliberately stays OUT of the embed (noise); it lives on the stored ticket.
+          ...(safeContext && safeContext.route
+            ? [{
+                name: 'Page',
+                value: `${safeContext.route}${safeContext.viewport ? ` · ${safeContext.viewport.w}×${safeContext.viewport.h}` : ''}`.slice(0, 1024),
+                inline: false,
+              }]
+            : []),
+        ],
         timestamp: new Date().toISOString(),
         footer: { text: 'CommunityHunts' },
       };

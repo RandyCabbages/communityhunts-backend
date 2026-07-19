@@ -133,3 +133,42 @@ test('a logged-out submit persists with a null userId', async () => {
   await postTicket(app, { username: 'Anonymous', issue: 'anon', type: 'Other' });
   assert.strictEqual(app._tickets.created[0].t.userId, null);
 });
+
+// --- Page context from the support launcher (lib/ticketContext.js) ---
+
+test('POST /api/tickets sanitizes context and passes it to createTicket', async () => {
+  const app = appWith({ tenant: null });
+  const r = await postTicket(app, {
+    username: 'Goofer', type: 'Bug', issue: 'bubble overlaps footer',
+    context: { route: '/bean/hunt', viewport: { w: 390, h: 844 }, evil: 'drop me' },
+  });
+  assert.strictEqual(r.status, 200);
+  assert.deepStrictEqual(app._tickets.created[0].fields.context, {
+    route: '/bean/hunt', viewport: { w: 390, h: 844 },
+  });
+});
+
+test('POST /api/tickets without context stores null', async () => {
+  const app = appWith({ tenant: null });
+  await postTicket(app, { username: 'Goofer', type: 'Bug', issue: 'no ctx' });
+  assert.strictEqual(app._tickets.created[0].fields.context, null);
+});
+
+test('Discord embed carries a Page field when context has a route', async () => {
+  const app = appWith({ tenant: null });
+  await postTicket(app, {
+    username: 'Goofer', type: 'Bug', issue: 'x',
+    context: { route: '/bean/hunt', viewport: { w: 1440, h: 900 } },
+  });
+  const body = JSON.parse(discordCalls[0].opts.body);
+  const page = body.embeds[0].fields.find(f => f.name === 'Page');
+  assert.ok(page, 'expected a Page field on the embed');
+  assert.strictEqual(page.value, '/bean/hunt · 1440×900');
+});
+
+test('Discord embed has no Page field when no context was sent', async () => {
+  const app = appWith({ tenant: null });
+  await postTicket(app, { username: 'Goofer', type: 'Bug', issue: 'x' });
+  const body = JSON.parse(discordCalls[0].opts.body);
+  assert.strictEqual(body.embeds[0].fields.find(f => f.name === 'Page'), undefined);
+});
