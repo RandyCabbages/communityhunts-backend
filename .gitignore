@@ -35,3 +35,6 @@ react-start-err.log
 # local-only handoff/context docs (intentionally not committed)
 CLAUDE.local.md
 PROJECT_STATE.md
+
+# Security audit docs — kept local/untracked on purpose (public repo; describe findings). Do not publish.
+docs/SECURITY_AUDIT_*
