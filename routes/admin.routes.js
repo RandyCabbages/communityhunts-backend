@@ -29,7 +29,7 @@ module.exports = function adminRoutes(deps) {
   const {
     requireAuth, requireAdmin, requirePlatformAdmin, requireTenantAdmin,
     getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats,
-    pgPool, admins, tenants, ADMIN_IDS, statsStore,
+    pgPool, admins, supporters, tenants, ADMIN_IDS, statsStore,
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
     subscriptions, auditLog,
@@ -223,6 +223,56 @@ module.exports = function adminRoutes(deps) {
     } catch (e) {
       console.error('[admin] platform-admins remove failed:', e.message);
       res.status(500).json({ error: 'Failed to remove admin' });
+    }
+  });
+
+  // ── Supporter management ───────────────────────────────────────────
+  // Supporters are donors marked by hand. Global (all tenants). Platform-admin only.
+  router.get('/api/admin/supporters', requireAuth, requirePlatformAdmin, async (req, res) => {
+    try {
+      const rows = await supporters.listSupporters(); // [{ discordId, addedBy, addedAt }]
+      let enriched = rows;
+      if (pgPool && rows.length) {
+        try {
+          const ids = rows.map(r => r.discordId);
+          const r = await pgPool.query(
+            `SELECT user_id, display_name, avatar FROM known_users WHERE user_id = ANY($1)`, [ids]);
+          const byId = {};
+          for (const u of r.rows) byId[u.user_id] = u;
+          enriched = rows.map(row => ({
+            ...row,
+            displayName: byId[row.discordId]?.display_name || null,
+            avatar: byId[row.discordId]?.avatar || null,
+          }));
+        } catch (e) { console.error('[admin] supporters enrich failed:', e.message); }
+      }
+      res.json(enriched);
+    } catch (e) {
+      console.error('[admin] supporters list failed:', e.message);
+      res.status(500).json({ error: 'Failed to list supporters' });
+    }
+  });
+
+  router.post('/api/admin/supporters', requireAuth, requirePlatformAdmin, async (req, res) => {
+    const discordId = String(req.body?.discordId || '').trim();
+    if (!/^\d{5,}$/.test(discordId)) return res.status(400).json({ error: 'Valid Discord ID required' });
+    try {
+      await supporters.addSupporter(discordId, req.user.id);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[admin] supporters add failed:', e.message);
+      res.status(500).json({ error: 'Failed to add supporter' });
+    }
+  });
+
+  router.delete('/api/admin/supporters/:id', requireAuth, requirePlatformAdmin, async (req, res) => {
+    const id = String(req.params.id || '').trim();
+    try {
+      await supporters.removeSupporter(id);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[admin] supporters remove failed:', e.message);
+      res.status(500).json({ error: 'Failed to remove supporter' });
     }
   });
 

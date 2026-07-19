@@ -284,6 +284,8 @@ const MULTI_TENANT = process.env.MULTI_TENANT === 'true';
 tenants.initTenants({ pgPool }).catch(e => console.error('[tenants] init error:', e.message));
 const admins = require('./lib/admins');
 admins.initAdmins({ pgPool }).catch(e => console.error('[admins] init error:', e.message));
+const supporters = require('./lib/supporters');
+supporters.initSupporters({ pgPool }).catch(e => console.error('[supporters] init error:', e.message));
 const subscriptions = require('./lib/subscriptions');
 subscriptions.initSubscriptions({ pgPool }).catch(e => console.error('[subscriptions] init error:', e.message));
 const featureGrants = require('./lib/featureGrants');
@@ -612,7 +614,7 @@ setInterval(() => auditLog.prune(), 60 * 60 * 1000);
 app.use(require('./routes/admin.routes')({
   requireAuth, requireAdmin, requirePlatformAdmin, requireTenantAdmin,
   getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats: huntsCore.getHuntStats,
-  pgPool, admins, tenants, ADMIN_IDS, statsStore,
+  pgPool, admins, supporters, tenants, ADMIN_IDS, statsStore,
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
   emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
   subscriptions, auditLog,
