@@ -10,7 +10,7 @@
 // huntCallRequests is process-local pending-request state, owned here.
 
 const express = require('express');
-const { sanitizeBonusReplayUrls } = require('../lib/hunts-core');
+const { sanitizeBonusReplayUrls, bindEquityIdentityByName } = require('../lib/hunts-core');
 
 module.exports = function callsRoutes(deps) {
   const {
@@ -172,6 +172,9 @@ module.exports = function callsRoutes(deps) {
       if (!hunts[userId].callsPermissions.includes(reqItem.userId)) {
         hunts[userId].callsPermissions.push(reqItem.userId);
       }
+      // Attach the verified, owner-approved identity to the member's equity row if unambiguous.
+      // Display name for matching comes from the pending request (reqItem.displayName).
+      bindEquityIdentityByName(hunts[userId], { userId: reqItem.userId, name: reqItem.displayName });
       persistHunts();
       // Notify the requester
       io.to(`hunt:${userId}`).emit('calls:granted', { userId: reqItem.userId });
