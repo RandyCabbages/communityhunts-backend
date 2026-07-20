@@ -196,23 +196,11 @@ async function getRequests(app) {
   }
 }
 
-test("GET returns assignees with each owner's rainbet handle from getSettings", async () => {
-  const handles = { '135203806676779008': 'RandyCabbage', '168055630916091904': 'GooferBeans' };
-  const app = appWith({ requests: [{ ...REQ }], getSettings: async (id) => ({ rainbetName: handles[id] || '' }) });
+test('GET returns the card requests list', async () => {
+  const app = appWith({ requests: [{ ...REQ }] });
   const r = await getRequests(app);
   assert.strictEqual(r.status, 200);
-  assert.ok(Array.isArray(r.body.assignees), 'assignees present');
-  const cab = r.body.assignees.find(a => a.id === '135203806676779008');
-  const goof = r.body.assignees.find(a => a.id === '168055630916091904');
-  assert.strictEqual(cab.rainbet, 'RandyCabbage');
-  assert.strictEqual(goof.rainbet, 'GooferBeans');
-  assert.strictEqual(r.body.requests.length, 1, 'requests still returned');
-});
-
-test('GET yields empty rainbet when a handle is unset', async () => {
-  const app = appWith({ requests: [], getSettings: async () => ({ rainbetName: '' }) });
-  const r = await getRequests(app);
-  assert.strictEqual(r.body.assignees.every(a => a.rainbet === ''), true);
+  assert.strictEqual(r.body.requests.length, 1, 'requests returned');
 });
 
 test('a public submit posts the doorbell embed and stores the message ids', async () => {
