@@ -16,7 +16,7 @@ const { sanitizePayouts } = require('../lib/payouts');
 module.exports = function callsRoutes(deps) {
   const {
     hunts, io, persistHunts,
-    requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt,
+    requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged,
     normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
     auditLog,
   } = deps;
@@ -27,7 +27,9 @@ module.exports = function callsRoutes(deps) {
 
   // Shared add-call logic for both the equity-member endpoint and the public link endpoint.
   // `isEditor` controls the rolling-mode + callLimit exemptions (owners/admins bypass them).
-  function addCallToHunt(hunt, user, slot, isEditor, source) {
+  // `limitExempt` additionally waives ONLY the per-person callLimit (privileged: supporter/king/mod),
+  // without granting the rolling-mode edit bypass.
+  function addCallToHunt(hunt, user, slot, isEditor, source, limitExempt) {
     if (!slot?.trim()) return { error: 'Slot name required', status: 400 };
 
     // Block non-editors from adding calls when the hunt is rolling
@@ -38,9 +40,9 @@ module.exports = function callsRoutes(deps) {
     if (hunt.calls.some(c => normalizeSlot(c.slot) === normalizeSlot(slot)))
       return { error: `"${slot}" was already suggested`, status: 400 };
 
-    // Per-person limit (not applied to editors/admins)
+    // Per-person limit (not applied to editors/admins, or limit-exempt privileged callers)
     const callerName = nameOf(user);
-    if (hunt.callLimit > 0 && !isEditor) {
+    if (hunt.callLimit > 0 && !isEditor && !limitExempt) {
       const myCount = hunt.calls.filter(c => c.user.toLowerCase() === callerName).length;
       if (myCount >= hunt.callLimit)
         return { error: `You've reached the limit of ${hunt.callLimit} calls`, status: 400 };
@@ -70,7 +72,7 @@ module.exports = function callsRoutes(deps) {
       return res.status(403).json({error:'Not an equity member'});
 
     const isEditor = canEditHunt(req, req.params.userId);
-    const result = addCallToHunt(hunt, req.user, req.body.slot, isEditor);
+    const result = addCallToHunt(hunt, req.user, req.body.slot, isEditor, undefined, isPrivileged(req));
     if (result.error) return res.status(result.status).json({error: result.error});
     res.json({ok:true, call: result.call});
   });
@@ -85,7 +87,7 @@ module.exports = function callsRoutes(deps) {
 
     // Owners/admins/editors keep their exemptions; everyone else is a limited submitter.
     const isEditor = canEditHunt(req, req.params.userId);
-    const result = addCallToHunt(hunt, req.user, req.body.slot, isEditor, 'public');
+    const result = addCallToHunt(hunt, req.user, req.body.slot, isEditor, 'public', isPrivileged(req));
     if (result.error) return res.status(result.status).json({error: result.error});
     res.json({ok:true, call: result.call});
   });
