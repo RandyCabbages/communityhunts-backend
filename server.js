@@ -489,6 +489,17 @@ app.use(require('./routes/cardRequests.routes')({
   channelId: (process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || '').trim(),
 }));
 
+// Supporter applications ("Support Us" apply flow) — signed-in submit, owner-only review. Posts to
+// the same shop-requests channel as Shop Requests; granting adds the user to the supporters table.
+const supporterApplications = require('./lib/supporterApplications');
+supporterApplications.initSupporterApplications({ pgPool }).catch(e => console.error('[supapp] init error:', e.message));
+app.use(require('./routes/supporterApplications.routes')({
+  requireAuth, requirePlatformAdmin, supporterApplications,
+  getPlatformBotToken: tenants.getPlatformBotToken,
+  channelId: (process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || '').trim(),
+  supporters,
+}));
+
 // Bug-tickets / feature-suggestions — public submit (POST /api/tickets in misc.routes), owner-only
 // triage here. Persisted (lib/tickets, hunts_kv 'tickets'); the phase-embed edit uses the platform
 // bot, same as Shop Requests. Injected into misc.routes below so the public submit can persist.
