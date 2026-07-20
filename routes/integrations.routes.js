@@ -80,12 +80,12 @@ module.exports = function integrationsRoutes(deps) {
   // Public supporters roster for the Wall of Supporters on /support-us. Enriched with display
   // name + avatar from the known_users directory (best-effort; unknown ids still list by id).
   // No secrets — supporter status is already public via the flair badge.
-  router.get('/api/supporters/public', async (req, res) => {
+  router.get('/api/supporters/public', throttle(30, 60_000), async (req, res) => {
     let rows = [];
-    try { rows = await supporters.listSupporters(); } catch (e) { rows = []; }
+    try { rows = await supporters.listSupporters(); } catch (e) { console.error('[supporters] listSupporters failed:', e.message); rows = []; }
     const out = await Promise.all(rows.map(async (r) => {
       let known = null;
-      try { known = getKnownUser ? await getKnownUser(r.discordId) : null; } catch (e) {}
+      try { known = getKnownUser ? await getKnownUser(r.discordId) : null; } catch (e) { console.error('[supporters] getKnownUser failed:', e.message); }
       return {
         discordId: String(r.discordId),
         displayName: known && known.displayName ? String(known.displayName) : null,

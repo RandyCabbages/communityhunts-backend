@@ -73,7 +73,7 @@ module.exports = function supporterApplicationsRoutes(deps) {
     const recent = (ipHits.get(ip) || []).filter(t => now - t < 10 * 60 * 1000);
     if (recent.length >= 5) return res.status(429).json({ error: 'Too many requests — please try again in a few minutes' });
     if (supporterApplications.openCountFor(req.user.id) >= MAX_OPEN_PER_USER)
-      return res.status(429).json({ error: "You already have an open application — we'll be in touch about that one first" });
+      return res.status(429).json({ error: "You already have open applications — we'll be in touch about those first" });
 
     const err = supporterApplications.validateInput(req.body);
     if (err) return res.status(400).json({ error: err });
