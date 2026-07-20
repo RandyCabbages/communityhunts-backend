@@ -364,6 +364,9 @@ app.use(require('./routes/auth.routes')({
   auditLog,
 }));
 
+// Shared privilege gate (owner/king/mod/supporter) — see lib/privilege.js. Used by call-limit,
+// ticket-priority, and cosmetics enforcement below.
+const { isPrivileged } = require('./lib/privilege')({ reqIsMod, supporters });
 
 // Reject malformed / oversized hunt payloads (memory + DoS protection).
 const MAX_BONUSES = 1000, MAX_EQUITY = 300, MAX_CALLS = 1000, MAX_VAULT = 500;
