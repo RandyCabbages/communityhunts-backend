@@ -20,7 +20,7 @@ const ITEM_TIERS = {
   card_gold:null, card_cyber:null, card_blood:null, card_phantom:null,
   card_inferno:null, card_galaxy:null, card_diamond:null, card_dragon:null,
 
-  theme_midnight:'free',
+  theme_midnight:'free', theme_patron:'free',
   theme_ember:'basic', theme_frost:'pro', theme_neon:'pro', theme_hacker:'ultimate',
   theme_gold:null, theme_rose:null, theme_sunset:null,
 
@@ -29,12 +29,12 @@ const ITEM_TIERS = {
   sound_hype:'ultimate',
   sound_casino:null, sound_scifi:null, sound_vapor:null, sound_anime:null, sound_pirate:null,
 
-  effect_confetti:'free', effect_flash:'basic', effect_shake:'basic', effect_sparkles:'basic',
+  effect_confetti:'free', effect_patron:'free', effect_flash:'basic', effect_shake:'basic', effect_sparkles:'basic',
   effect_coins:'pro', effect_meteors:'pro', effect_neon:'pro',
   effect_lightning:'ultimate', effect_slots:'ultimate',
   effect_fireworks:null, effect_diamonds:null, effect_money:null,
 
-  bg_stars:'free', bg_particles:'basic', bg_embers:'basic',
+  bg_stars:'free', bg_patron:'free', bg_particles:'basic', bg_embers:'basic',
   bg_aurora:'pro', bg_nebula:'pro', bg_space:'pro',
   bg_matrix:'ultimate',
   bg_smoke:null, bg_grid:null,
@@ -44,6 +44,12 @@ const ITEM_TIERS = {
 // 'free' so grant/purchase validation passes; the real mod gate is enforced on the equip path
 // (settings.routes.js PUT /api/settings cosmetics save loop) where `req` (and thus reqIsMod) exists.
 const MOD_ONLY_ITEMS = new Set(['card_mod']);
+
+// Supporter-only cosmetics — equippable only by supporters (global), the tenant King, or platform
+// admins. Tier above is 'free' so grant/validate passes; the real gate is on the equip path in
+// settings.routes.js (where reqIsMod/supporters/req.tenant are available), mirroring MOD_ONLY_ITEMS.
+// MUST stay in sync with the frontend catalog's `supporterOnly` items (Plan 2).
+const SUPPORTER_ONLY_ITEMS = new Set(['theme_patron', 'effect_patron', 'bg_patron']);
 
 // Owner-exclusive / commissioned cards — equippable ONLY by the specific Discord ID they were made
 // for. Tier above is 'free' (so grant/purchase validation passes and the Shop can showcase them to
@@ -254,3 +260,4 @@ module.exports.isItemAccessible = isItemAccessible;
 module.exports.ITEM_TIERS = ITEM_TIERS;
 module.exports.MOD_ONLY_ITEMS = MOD_ONLY_ITEMS;
 module.exports.EXCLUSIVE_ITEMS = EXCLUSIVE_ITEMS;
+module.exports.SUPPORTER_ONLY_ITEMS = SUPPORTER_ONLY_ITEMS;

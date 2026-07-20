@@ -28,7 +28,7 @@ const SUGGESTION_TYPES = new Set(['Feature Request']);
 const ticketHits = new Map(); // per-IP ticket timestamps for rate limiting
 
 module.exports = function miscRoutes(deps) {
-  const { hunts, archive, tickets, getPlatformBotToken, statsStore } = deps;
+  const { hunts, archive, tickets, getPlatformBotToken, statsStore, isPrivileged } = deps;
   const router = express.Router();
 
   // Selection (300x floor, dedupe, recency sort, 2-per-user cap, 24-window) lives in
@@ -133,6 +133,13 @@ module.exports = function miscRoutes(deps) {
         timestamp: new Date().toISOString(),
         footer: { text: 'CommunityHunts' },
       };
+
+      // Add Supporter marker for privileged users
+      if (typeof isPrivileged === 'function' && isPrivileged(req)) {
+        embed.title = `💜 ${embed.title}`;
+        (embed.fields = embed.fields || []).push({ name: 'Priority', value: '💜 Supporter', inline: true });
+      }
+
       try {
         const r = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
           method: 'POST',

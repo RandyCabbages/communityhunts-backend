@@ -11,7 +11,7 @@
 const express = require('express');
 
 module.exports = function integrationsRoutes(deps) {
-  const { integrations, tenants, memberships, hunts, normalizeSlot, requireAuth, supporters } = deps;
+  const { integrations, tenants, memberships, hunts, normalizeSlot, requireAuth, supporters, getKnownUser } = deps;
   const router = express.Router();
 
   // Lightweight per-caller throttle for the upstream-proxy endpoints (security audit 2026-07-18 #7):
@@ -75,6 +75,24 @@ module.exports = function integrationsRoutes(deps) {
       mods: (t.modIds || []).map(String),
       supporters: supporters.getSupporterIds(),
     });
+  });
+
+  // Public supporters roster for the Wall of Supporters on /support-us. Enriched with display
+  // name + avatar from the known_users directory (best-effort; unknown ids still list by id).
+  // No secrets — supporter status is already public via the flair badge.
+  router.get('/api/supporters/public', throttle(30, 60_000), async (req, res) => {
+    let rows = [];
+    try { rows = await supporters.listSupporters(); } catch (e) { console.error('[supporters] listSupporters failed:', e.message); rows = []; }
+    const out = await Promise.all(rows.map(async (r) => {
+      let known = null;
+      try { known = getKnownUser ? await getKnownUser(r.discordId) : null; } catch (e) { console.error('[supporters] getKnownUser failed:', e.message); }
+      return {
+        discordId: String(r.discordId),
+        displayName: known && known.displayName ? String(known.displayName) : null,
+        avatar: known && known.avatar ? String(known.avatar) : null,
+      };
+    }));
+    res.json({ supporters: out });
   });
 
   // Directory for the platform home — minimal public fields per tenant, incl. member count.

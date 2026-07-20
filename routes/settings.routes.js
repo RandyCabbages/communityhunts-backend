@@ -15,12 +15,12 @@
 
 const express = require('express');
 const { DEFAULT_OVERLAY_CONFIG, sanitizeOverlayConfig } = require('../lib/overlayConfig');
-const { isItemAccessible, ITEM_TIERS, MOD_ONLY_ITEMS, EXCLUSIVE_ITEMS } = require('./cosmetics.routes');
+const { isItemAccessible, ITEM_TIERS, MOD_ONLY_ITEMS, EXCLUSIVE_ITEMS, SUPPORTER_ONLY_ITEMS } = require('./cosmetics.routes');
 const { userCanUse, fullExtensionFor } = require('../lib/features');
 const { isRealDiscordId } = require('../lib/userIds');
 
 module.exports = function settingsRoutes(deps) {
-  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, requirePlatformAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore, refreshGuildRoles, auditLog } = deps;
+  const { settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, requirePlatformAdmin, io, subscriptions, featureGrants, hunts, archive, statsStore, refreshGuildRoles, auditLog, supporters } = deps;
   const { getSettings, saveSettings, deleteSettings, resolveUserIdByName } = settings;
   const { computeUserHuntStats } = require('../lib/userStats');
 
@@ -99,11 +99,19 @@ module.exports = function settingsRoutes(deps) {
       // isItemAccessible/getAccessLabel mod grant): any KNOWN item is equippable. Everyone else goes
       // through the unchanged tier/ownership gate.
       const priv = isPlatformAdmin(req.user) || reqIsMod(req);
+      // Supporters (global) + the tenant King get the whole catalog free too (like mods), and are
+      // the ONLY non-admins who may equip SUPPORTER_ONLY_ITEMS. Does NOT widen the modOnly/exclusive
+      // gates (those stay `priv`-only), so a supporter can't wear card_mod or someone's commission.
+      const isSup = !!(supporters && supporters.isSupporter(req.user.id));
+      const isKing = !!(req.tenant && req.tenant.hostDiscordId && String(req.tenant.hostDiscordId) === String(req.user.id));
+      const freeAll = priv || isSup || isKing;
       for (const k of ['card','theme','sound','effect','flair','background']) {
         if (c[k] === undefined) continue;
         const itemId = c[k] ? String(c[k]).slice(0, 64) : null;
         // Mod-only items (e.g. card_mod): only community mods or platform admins may equip.
         if (itemId && MOD_ONLY_ITEMS && MOD_ONLY_ITEMS.has(itemId) && !priv) continue;
+        // Supporter-only items: only supporters / King / admins may equip.
+        if (itemId && SUPPORTER_ONLY_ITEMS && SUPPORTER_ONLY_ITEMS.has(itemId) && !priv && !isSup && !isKing) continue;
         // Owner-exclusive / commissioned cards: only the exact Discord ID they were made for may
         // equip, unless it was admin-granted (in owned) or the caller is priv (mod/admin). Mirrors
         // the frontend catalog's exclusiveUserId gate — enforced here because ITEM_TIERS marks these
@@ -111,8 +119,8 @@ module.exports = function settingsRoutes(deps) {
         if (itemId && EXCLUSIVE_ITEMS && EXCLUSIVE_ITEMS[itemId]
             && EXCLUSIVE_ITEMS[itemId] !== String(req.user.id)
             && !owned.includes(itemId) && !priv) continue;
-        // priv → allow any known item; non-priv → normal accessibility gate (unchanged behaviour).
-        if (itemId && (priv ? !(itemId in ITEM_TIERS) : !isItemAccessible(itemId, userTier, owned))) continue;
+        // freeAll (admin/mod/supporter/king) → allow any known item; else → normal accessibility gate.
+        if (itemId && (freeAll ? !(itemId in ITEM_TIERS) : !isItemAccessible(itemId, userTier, owned))) continue;
         safe[k] = itemId;
       }
       if (typeof c.soundVolume === 'number') safe.soundVolume = Math.max(0, Math.min(1, c.soundVolume));

@@ -364,6 +364,9 @@ app.use(require('./routes/auth.routes')({
   auditLog,
 }));
 
+// Shared privilege gate (owner/king/mod/supporter) — see lib/privilege.js. Used by call-limit,
+// ticket-priority, and cosmetics enforcement below.
+const { isPrivileged } = require('./lib/privilege')({ reqIsMod, supporters });
 
 // Reject malformed / oversized hunt payloads (memory + DoS protection).
 const MAX_BONUSES = 1000, MAX_EQUITY = 300, MAX_CALLS = 1000, MAX_VAULT = 500;
@@ -486,6 +489,17 @@ app.use(require('./routes/cardRequests.routes')({
   channelId: (process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || '').trim(),
 }));
 
+// Supporter applications ("Support Us" apply flow) — signed-in submit, owner-only review. Posts to
+// the same shop-requests channel as Shop Requests; granting adds the user to the supporters table.
+const supporterApplications = require('./lib/supporterApplications');
+supporterApplications.initSupporterApplications({ pgPool }).catch(e => console.error('[supapp] init error:', e.message));
+app.use(require('./routes/supporterApplications.routes')({
+  requireAuth, requirePlatformAdmin, supporterApplications,
+  getPlatformBotToken: tenants.getPlatformBotToken,
+  channelId: (process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || '').trim(),
+  supporters,
+}));
+
 // Bug-tickets / feature-suggestions — public submit (POST /api/tickets in misc.routes), owner-only
 // triage here. Persisted (lib/tickets, hunts_kv 'tickets'); the phase-embed edit uses the platform
 // bot, same as Shop Requests. Injected into misc.routes below so the public submit can persist.
@@ -506,7 +520,7 @@ app.use(require('./routes/overdrop.routes')({ requireMod, overdrop }));
 // Slot-call + call-permission routes (routes/calls.routes.js). Owns huntCallRequests state.
 app.use(require('./routes/calls.routes')({
   hunts, io, persistHunts,
-  requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt,
+  requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged,
   normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
   auditLog,
 }));
@@ -643,7 +657,7 @@ setTimeout(startPolling, 3000);
 
 app.use(require('./routes/integrations.routes')({
   integrations, tenants, memberships, hunts, normalizeSlot, requireAuth,
-  supporters,
+  supporters, getKnownUser: settings.getKnownUser,
 }));
 
 
@@ -659,12 +673,12 @@ app.use(require('./routes/slots.routes')({ slots, getSlotCallCounts }));
 require('./lib/rainbetSlotSync').startRainbetSlotSync(slots);
 
 // Misc leaf routes: /api/bangers (reads hunts+archive), /api/tickets (persists via tickets store), /api/health.
-app.use(require('./routes/misc.routes')({ hunts, archive, tickets, getPlatformBotToken: tenants.getPlatformBotToken, statsStore }));
+app.use(require('./routes/misc.routes')({ hunts, archive, tickets, getPlatformBotToken: tenants.getPlatformBotToken, statsStore, isPrivileged }));
 
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
   settings, pgPool, memberships, isPlatformAdmin, reqIsMod, reqIsVipHost, reqHasFullExtension, requireAuth, requireAdmin, requirePlatformAdmin, io, subscriptions, featureGrants,
-  hunts, archive, statsStore, refreshGuildRoles, auditLog,
+  hunts, archive, statsStore, refreshGuildRoles, auditLog, supporters,
 }));
 
 // Stripe checkout, portal, and webhook routes (routes/stripe.routes.js).
