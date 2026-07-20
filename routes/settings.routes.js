@@ -130,6 +130,13 @@ module.exports = function settingsRoutes(deps) {
     if (req.body.overlayConfig !== undefined && io) {
       io.to(`hunt:${req.user.id}`).emit('overlay-config:update', current.overlayConfig);
     }
+    // Live-push a name change ("the person adds it") to every open hunt's equity card.
+    if (rainbetName !== undefined || twitchName !== undefined) {
+      emitIdentityUpdate(req.user.id, current.discordDisplayName, {
+        ...(rainbetName !== undefined ? { rainbetName: current.rainbetName } : {}),
+        ...(twitchName  !== undefined ? { twitchName:  current.twitchName  } : {}),
+      }, current.anonymous);
+    }
     res.json({ ok: true, settings: current });
   });
 
@@ -141,6 +148,24 @@ module.exports = function settingsRoutes(deps) {
     !s.anonymous
     || (req.user && String(req.user.id) === String(targetId))
     || (typeof reqIsMod === 'function' && reqIsMod(req));
+
+  // Push a Rainbet/Twitch identity change to every open hunt so equity cards update LIVE instead
+  // of waiting on the frontend's 60s card-info poll. Broadcast globally (small scale) — each open
+  // HuntTracker self-selects whether the changed user is on its board (by real id / host id / name)
+  // and patches only the field(s) present. `fields` carries whichever of rainbetName/twitchName
+  // changed; a Rainbet edit never carries the Twitch value and vice-versa.
+  // Privacy: an anonymous user's names are hidden from regular viewers (canSeeIdentity), and a
+  // single global push can't filter per-recipient — so we SKIP the push entirely when the target
+  // is anonymous. Privileged viewers (self/mods/admins) still get the change via the per-viewer
+  // 60s poll, which applies canSeeIdentity. Non-anonymous is the common case.
+  const emitIdentityUpdate = (userId, name, fields, anonymous) => {
+    if (!io || anonymous) return;
+    const payload = { userId: userId ? String(userId) : null, name: name || '' };
+    if (fields.rainbetName !== undefined) payload.rainbetName = fields.rainbetName;
+    if (fields.twitchName  !== undefined) payload.twitchName  = fields.twitchName;
+    if (payload.rainbetName === undefined && payload.twitchName === undefined) return;
+    io.emit('settings:update', payload);
+  };
 
   // GET /api/extension/entitlement — does the caller have Full (Rainbet) extension access?
   // The self-distributed Full extension calls this on load to gate its Rainbet features
@@ -478,11 +503,13 @@ module.exports = function settingsRoutes(deps) {
     }
   });
 
-  // POST /api/admin/set-user-field — let an admin manually set a per-user identity field
-  // (rainbetName or twitchName) for someone else. Accepts either { userId, field, value } or
-  // { name, field, value }. Name-only path first tries to resolve to an existing settings row
-  // so writes hit the same record reads find; falls back to a synthetic manual: id when missing.
-  router.post('/api/admin/set-user-field', requirePlatformAdmin, async (req, res) => {
+  // Shared handler for "set someone else's Rainbet/Twitch name" — mounted on BOTH the admin route
+  // (requirePlatformAdmin) and the mod route (requireAuth + reqIsMod) below, so a community mod's
+  // save STICKS server-side just like an admin's. Accepts { userId, field, value } or
+  // { name, field, value }. Name-only path resolves to an existing settings row first (real-ID
+  // priority, so writes hit the same record reads find); falls back to a synthetic manual: id.
+  // Every write live-pushes a settings:update so open equity cards refresh without the 60s poll.
+  const setUserFieldHandler = async (req, res) => {
     const field = String(req.body?.field || '').trim();
     if (!['rainbetName', 'twitchName'].includes(field))
       return res.status(400).json({ error: "field must be 'rainbetName' or 'twitchName'" });
@@ -498,6 +525,7 @@ module.exports = function settingsRoutes(deps) {
       const current = await getSettings(userId);
       current[field] = value;
       await saveSettings(userId, current);
+      emitIdentityUpdate(userId, current.discordDisplayName || name, { [field]: value }, current.anonymous);
       return res.json({ ok: true, scope: 'userId', userId, field, value });
     }
 
@@ -506,6 +534,7 @@ module.exports = function settingsRoutes(deps) {
       const current = await getSettings(resolvedId);
       current[field] = value;
       await saveSettings(resolvedId, current);
+      emitIdentityUpdate(resolvedId, current.discordDisplayName || name, { [field]: value }, current.anonymous);
       return res.json({ ok: true, scope: 'resolved', name, userId: resolvedId, field, value });
     }
 
@@ -515,7 +544,19 @@ module.exports = function settingsRoutes(deps) {
     current.discordDisplayName  = current.discordDisplayName || name;
     current.discordUsername     = current.discordUsername    || name;
     await saveSettings(syntheticId, current);
+    emitIdentityUpdate(syntheticId, name, { [field]: value }, current.anonymous);
     res.json({ ok: true, scope: 'name', name, syntheticId, field, value });
+  };
+
+  // POST /api/admin/set-user-field — platform admin sets a per-user identity field for someone.
+  router.post('/api/admin/set-user-field', requirePlatformAdmin, setUserFieldHandler);
+
+  // POST /api/mod/set-user-field — same, for community mods (reqIsMod folds in platform admins).
+  // Lets a mod's Rainbet/Twitch save persist instead of living only in their local card cache.
+  router.post('/api/mod/set-user-field', requireAuth, (req, res) => {
+    if (typeof reqIsMod !== 'function' || !reqIsMod(req))
+      return res.status(403).json({ error: 'Mod access required' });
+    return setUserFieldHandler(req, res);
   });
 
   // POST /api/admin/set-preferred-slots — admin sets another user's preferred-slots list.
