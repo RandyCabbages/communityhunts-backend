@@ -11,7 +11,7 @@
 const express = require('express');
 
 module.exports = function integrationsRoutes(deps) {
-  const { integrations, tenants, memberships, hunts, normalizeSlot, requireAuth, supporters, getKnownUser } = deps;
+  const { integrations, tenants, memberships, hunts, normalizeSlot, requireAuth, supporters, getKnownUser, getSettings } = deps;
   const router = express.Router();
 
   // Lightweight per-caller throttle for the upstream-proxy endpoints (security audit 2026-07-18 #7):
@@ -84,12 +84,15 @@ module.exports = function integrationsRoutes(deps) {
     let rows = [];
     try { rows = await supporters.listSupporters(); } catch (e) { console.error('[supporters] listSupporters failed:', e.message); rows = []; }
     const out = await Promise.all(rows.map(async (r) => {
-      let known = null;
+      let known = null, settings = null;
       try { known = getKnownUser ? await getKnownUser(r.discordId) : null; } catch (e) { console.error('[supporters] getKnownUser failed:', e.message); }
+      try { settings = getSettings ? await getSettings(r.discordId) : null; } catch (e) { console.error('[supporters] getSettings failed:', e.message); }
+      const card = settings && settings.cosmetics && settings.cosmetics.card ? String(settings.cosmetics.card) : null;
       return {
         discordId: String(r.discordId),
         displayName: known && known.displayName ? String(known.displayName) : null,
         avatar: known && known.avatar ? String(known.avatar) : null,
+        cosmeticCard: card,   // their equipped equity card (public; shown in hunts to everyone anyway)
       };
     }));
     res.json({ supporters: out });

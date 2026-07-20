@@ -657,7 +657,7 @@ setTimeout(startPolling, 3000);
 
 app.use(require('./routes/integrations.routes')({
   integrations, tenants, memberships, hunts, normalizeSlot, requireAuth,
-  supporters, getKnownUser: settings.getKnownUser,
+  supporters, getKnownUser: settings.getKnownUser, getSettings: settings.getSettings,
 }));
 
 
