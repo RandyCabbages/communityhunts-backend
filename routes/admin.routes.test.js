@@ -110,3 +110,66 @@ test('GET /api/admin/communities returns cross-tenant list with plan + counts (p
     await new Promise(res => server.close(res));
   }
 });
+
+// ── Banned-user management ──────────────────────────────────────────
+// A fake bans module + auditLog capturing calls, mounted behind a passing platform-admin gate.
+function banApp({ platformAdmin = true, bansImpl, audit }) {
+  const app = express();
+  app.use(express.json());
+  app.use((req, res, next) => { req.user = { id: 'admin1', displayName: 'Admin' }; req.tenant = BEAN; next(); });
+  const pass = (req, res, next) => next();
+  const gate = platformAdmin ? pass : (req, res, next) => res.status(403).json({ error: 'platform' });
+  app.use(adminRoutes({
+    requireAuth: pass, requireAdmin: pass, requirePlatformAdmin: gate, requireTenantAdmin: pass,
+    getAllHunts: () => [], getArchivedHunts: () => [], getGotInLog: () => [], getHuntsFullExport: () => [], getHuntStats: () => ({}),
+    pgPool: null, admins: {}, bans: bansImpl, ADMIN_IDS: [], statsStore: {},
+    tenants: { isPlatformOwnerId: (id) => id === '135203806676779008', BEAN_TENANT: BEAN },
+    hunts: {}, archive: [], archiveHunt() {}, unarchiveHunt() {}, persistArchive() {},
+    emitHubUpdate() {}, publicHuntView: h => h, emitHuntUpdate() {}, io: { emit() {} }, uid: () => 'x', cleanupStaleHunts() {},
+    subscriptions: {}, auditLog: audit || { record() {} },
+  }));
+  return app;
+}
+
+async function req(app, method, pathname, body) {
+  const server = await new Promise(r => { const s = app.listen(0, () => r(s)); });
+  try {
+    const r = await fetch(`http://127.0.0.1:${server.address().port}${pathname}`, {
+      method, headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return { status: r.status, body: await r.json().catch(() => null) };
+  } finally { await new Promise(res => server.close(res)); }
+}
+
+test('POST /api/admin/banned-users bans a user (records banned_by + audit)', async () => {
+  const added = [];
+  const audit = { records: [], record(e) { this.records.push(e); } };
+  const app = banApp({ bansImpl: { addBan: async (id, opts) => added.push({ id, opts }), listBans: async () => [] }, audit });
+  const { status } = await req(app, 'POST', '/api/admin/banned-users', { discordId: '693694981457838140', reason: 'scamming' });
+  assert.strictEqual(status, 200);
+  assert.strictEqual(added[0].id, '693694981457838140');
+  assert.strictEqual(added[0].opts.bannedBy, 'admin1');
+  assert.ok(audit.records.some(r => r.action === 'ban.add'));
+});
+
+test('POST /api/admin/banned-users rejects a bad id and refuses the owner', async () => {
+  const app = banApp({ bansImpl: { addBan: async () => { throw new Error('should not be called'); } } });
+  assert.strictEqual((await req(app, 'POST', '/api/admin/banned-users', { discordId: 'nope' })).status, 400);
+  assert.strictEqual((await req(app, 'POST', '/api/admin/banned-users', { discordId: '135203806676779008' })).status, 400);
+});
+
+test('DELETE /api/admin/banned-users/:id unbans (audit ban.remove)', async () => {
+  const removed = [];
+  const audit = { records: [], record(e) { this.records.push(e); } };
+  const app = banApp({ bansImpl: { removeBan: async (id) => removed.push(id) }, audit });
+  const { status } = await req(app, 'DELETE', '/api/admin/banned-users/693694981457838140');
+  assert.strictEqual(status, 200);
+  assert.deepStrictEqual(removed, ['693694981457838140']);
+  assert.ok(audit.records.some(r => r.action === 'ban.remove'));
+});
+
+test('banned-user routes are platform-admin gated (403 for non-platform-admin)', async () => {
+  const app = banApp({ platformAdmin: false, bansImpl: { listBans: async () => [] } });
+  assert.strictEqual((await req(app, 'GET', '/api/admin/banned-users')).status, 403);
+});

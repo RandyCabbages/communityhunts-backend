@@ -18,7 +18,7 @@ module.exports = function authRoutes(deps) {
     passport, FRONTEND_URL, requireAuth,
     reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken, guildFlags,
     recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles, featureGrants,
-    auditLog,
+    auditLog, bans,
   } = deps;
   const router = express.Router();
 
@@ -48,6 +48,12 @@ module.exports = function authRoutes(deps) {
   router.get('/auth/discord/callback',
     passport.authenticate('discord', { failureRedirect: `${FRONTEND_URL}/?error=auth` }),
     (req, res) => {
+      // Banned users: stop here before issuing a token. Bounce to the frontend with ?banned=1
+      // so it shows the ban notice ("tries to get into the hub → popup"). No session token,
+      // and every subsequent API call is refused by the global ban gate anyway.
+      if (bans && req.user && bans.isBanned(req.user.id)) {
+        return res.redirect(`${FRONTEND_URL}/?banned=1`);
+      }
       // Record this user as known so they show up in equity-name autocomplete for others
       recordKnownUser(req.user);
       if (req.user) auditLog.record({ category: 'auth', action: 'auth.login',

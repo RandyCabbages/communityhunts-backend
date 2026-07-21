@@ -22,9 +22,26 @@ module.exports = function huntsRoutes(deps) {
     hunts, archive, getPublicHunts, getArchivedHunts,
     emitHubUpdate, emitHuntUpdate, publicHuntView, uid, touch,
     persistHunts, archiveHunt, unarchiveHunt, io, rejectBadHuntInput,
-    resolveUserIdByName, getCreatorLive, refreshCreatorsLive, getKnownUser, auditLog,
+    resolveUserIdByName, getCreatorLive, refreshCreatorsLive, getKnownUser, auditLog, bans,
   } = deps;
   const router = express.Router();
+
+  // Ban check for a runner's equity list. Given a set of Discord IDs (the members in the hunt
+  // the runner is editing), return only the banned ones + reason, so the frontend can warn the
+  // runner that they're handing a spot to a known scammer. Auth-gated: only used by hunt runners,
+  // and it reveals no more than the warning box already shows. Never blocks — it only informs.
+  router.post('/api/banned-status', requireAuth, (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const out = {};
+    for (const raw of ids.slice(0, 100)) {
+      const id = String(raw || '').trim();
+      if (id && bans && bans.isBanned(id)) {
+        const b = bans.getBan(id) || {};
+        out[id] = { banned: true, reason: b.reason };
+      }
+    }
+    res.json(out);
+  });
 
   // ── Invited-editor helper ──────────────────────────────────────────
   // invitedEditors holds Discord ID strings (matched by id in canEditHunt — never by name).

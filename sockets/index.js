@@ -12,7 +12,7 @@
 // was watching. Keep it nested.
 
 module.exports = function registerSockets(io, deps) {
-  const { getPublicHunts, publicHuntView, emitHubUpdate, tenantOf, integrations, viewers, hunts, overdrop, verifyToken } = deps;
+  const { getPublicHunts, publicHuntView, emitHubUpdate, tenantOf, integrations, viewers, hunts, overdrop, verifyToken, isBanned } = deps;
 
   // Authenticate the handshake: a socket's identity comes from its VERIFIED bearer token, never a
   // client-sent 'identify' event (which was spoofable — any socket could claim any user id and be
@@ -25,6 +25,9 @@ module.exports = function registerSockets(io, deps) {
       const token = socket.handshake.auth && socket.handshake.auth.token;
       if (token && verifyToken) { const v = verifyToken(token); if (v && v.id) uid = String(v.id); }
     } catch { /* stay anonymous */ }
+    // A banned user is cut off from live data too — reject the handshake. (Anonymous/invalid
+    // tokens stay anonymous and connect normally; only a VERIFIED banned id is refused.)
+    if (uid && isBanned && isBanned(uid)) return next(new Error('banned'));
     socket.data.userId = uid;
     next();
   });

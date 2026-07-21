@@ -29,7 +29,7 @@ module.exports = function adminRoutes(deps) {
   const {
     requireAuth, requireAdmin, requirePlatformAdmin, requireTenantAdmin,
     getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats,
-    pgPool, admins, supporters, tenants, ADMIN_IDS, statsStore,
+    pgPool, admins, bans, supporters, tenants, ADMIN_IDS, statsStore,
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
     subscriptions, auditLog,
@@ -223,6 +223,71 @@ module.exports = function adminRoutes(deps) {
     } catch (e) {
       console.error('[admin] platform-admins remove failed:', e.message);
       res.status(500).json({ error: 'Failed to remove admin' });
+    }
+  });
+
+  // ── Banned-user management ─────────────────────────────────────────
+  // A banned user is blocked from the whole platform (website, extension, API, sockets) on
+  // every tenant. Global, like platform admins — so platform-admin only. Managed here + on the
+  // user profile Ban button; enforced by the global ban gate (server.js) + socket handshake.
+  router.get('/api/admin/banned-users', requireAuth, requirePlatformAdmin, async (req, res) => {
+    try {
+      const rows = await bans.listBans(); // [{ discordId, reason, message, bannedBy, bannedAt }]
+      let enriched = rows;
+      if (pgPool && rows.length) {
+        try {
+          const ids = rows.map(r => r.discordId);
+          const r = await pgPool.query(
+            `SELECT user_id, display_name, avatar FROM known_users WHERE user_id = ANY($1)`, [ids]);
+          const byId = {};
+          for (const u of r.rows) byId[u.user_id] = u;
+          enriched = rows.map(row => ({
+            ...row,
+            displayName: byId[row.discordId]?.display_name || null,
+            avatar: byId[row.discordId]?.avatar || null,
+          }));
+        } catch (e) { console.error('[admin] banned-users enrich failed:', e.message); }
+      }
+      res.json(enriched);
+    } catch (e) {
+      console.error('[admin] banned-users list failed:', e.message);
+      res.status(500).json({ error: 'Failed to list banned users' });
+    }
+  });
+
+  // Ban a user. reason/message optional — lib/bans defaults them to the standard scam copy.
+  router.post('/api/admin/banned-users', requireAuth, requirePlatformAdmin, async (req, res) => {
+    const discordId = String(req.body?.discordId || '').trim();
+    if (!/^\d{5,}$/.test(discordId)) return res.status(400).json({ error: 'Valid Discord ID required' });
+    if (tenants.isPlatformOwnerId(discordId)) return res.status(400).json({ error: 'Cannot ban the platform owner' });
+    const reason = req.body?.reason ? String(req.body.reason).trim().slice(0, 200) : undefined;
+    const message = req.body?.message ? String(req.body.message).trim().slice(0, 500) : undefined;
+    try {
+      await bans.addBan(discordId, { reason, message, bannedBy: req.user.id });
+      auditLog.record({ category: 'admin', action: 'ban.add', actorId: req.user.id,
+        actorName: req.user.displayName, targetId: discordId,
+        tenantId: req.tenant && req.tenant.id, ip: req.ip,
+        summary: `${req.user.displayName || req.user.id} banned ${discordId}` });
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[admin] banned-users add failed:', e.message);
+      res.status(500).json({ error: 'Failed to ban user' });
+    }
+  });
+
+  // Unban a user.
+  router.delete('/api/admin/banned-users/:id', requireAuth, requirePlatformAdmin, async (req, res) => {
+    const id = String(req.params.id || '').trim();
+    try {
+      await bans.removeBan(id);
+      auditLog.record({ category: 'admin', action: 'ban.remove', actorId: req.user.id,
+        actorName: req.user.displayName, targetId: id,
+        tenantId: req.tenant && req.tenant.id, ip: req.ip,
+        summary: `${req.user.displayName || req.user.id} unbanned ${id}` });
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[admin] banned-users remove failed:', e.message);
+      res.status(500).json({ error: 'Failed to unban user' });
     }
   });
 

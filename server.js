@@ -284,6 +284,8 @@ const MULTI_TENANT = process.env.MULTI_TENANT === 'true';
 tenants.initTenants({ pgPool }).catch(e => console.error('[tenants] init error:', e.message));
 const admins = require('./lib/admins');
 admins.initAdmins({ pgPool }).catch(e => console.error('[admins] init error:', e.message));
+const bans = require('./lib/bans');
+bans.initBans({ pgPool }).catch(e => console.error('[bans] init error:', e.message));
 const supporters = require('./lib/supporters');
 supporters.initSupporters({ pgPool }).catch(e => console.error('[supporters] init error:', e.message));
 const subscriptions = require('./lib/subscriptions');
@@ -355,13 +357,25 @@ async function reqHasFullExtension(req) {
   })).access;
 }
 
+// Hard ban gate. A banned user is refused everywhere — website, extension, API, any tenant —
+// with a 403 the frontend/extension render as the ban notice. Runs after req.user is populated
+// (session + bearer) and before every route mount. Only /auth/logout is exempt so a banned user
+// can still sign out and isn't trapped in a redirect loop. Anonymous requests (no req.user) pass.
+app.use((req, res, next) => {
+  if (req.user && req.path !== '/auth/logout' && bans.isBanned(req.user.id)) {
+    return res.status(403).json({ error: 'banned', banned: true,
+      message: (bans.getBan(req.user.id) || {}).message || bans.DEFAULT_BAN_MESSAGE });
+  }
+  next();
+});
+
 // Auth + community-membership routes (routes/auth.routes.js). Mounted here, after the lib deps
 // exist. Passport strategy is configured above; resolveTenant (global) already set req.tenant.
 app.use(require('./routes/auth.routes')({
   passport, FRONTEND_URL, requireAuth,
   reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken, guildFlags,
   recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles, featureGrants,
-  auditLog,
+  auditLog, bans,
 }));
 
 // Shared privilege gate (owner/king/mod/supporter) — see lib/privilege.js. Used by call-limit,
@@ -406,7 +420,7 @@ app.use(require('./routes/hunts.routes')({
   getCreatorLive: integrations.getCreatorLive,
   refreshCreatorsLive: () => integrations.checkCreatorsLive(io, creatorPollDeps),
   getKnownUser: settings.getKnownUser,
-  auditLog,
+  auditLog, bans,
 }));
 
 // Mod hunt + Affiliate hunt — two fixed-key shared hunts (routes/mod-hunt.routes.js).
@@ -628,7 +642,7 @@ setInterval(() => auditLog.prune(), 60 * 60 * 1000);
 app.use(require('./routes/admin.routes')({
   requireAuth, requireAdmin, requirePlatformAdmin, requireTenantAdmin,
   getAllHunts, getArchivedHunts, getGotInLog, getHuntsFullExport, getHuntStats: huntsCore.getHuntStats,
-  pgPool, admins, supporters, tenants, ADMIN_IDS, statsStore,
+  pgPool, admins, bans, supporters, tenants, ADMIN_IDS, statsStore,
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
   emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
   subscriptions, auditLog,
@@ -740,7 +754,7 @@ app.use((err, req, res, next) => {
 // hunts-core so live counts stay coherent.
 require('./sockets')(io, {
   getPublicHunts, publicHuntView, emitHubUpdate, tenantOf, integrations, viewers, hunts,
-  overdrop, verifyToken,
+  overdrop, verifyToken, isBanned: bans.isBanned,
 });
 
 server.listen(PORT, () => console.log(`✅ Server on port ${PORT}`));
