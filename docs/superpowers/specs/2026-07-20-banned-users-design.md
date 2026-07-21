@@ -28,7 +28,8 @@ Matching is always by **Discord ID**, never display name.
 
 ## Storage — `lib/bans.js` (backend)
 
-Mirror the existing `lib/admins.js` DI + cache pattern exactly.
+Mirror the existing `lib/admins.js` DI + cache pattern exactly. **The list is managed
+entirely from the admin panel — no hardcoded IDs, no env seed.**
 
 - Postgres table:
   ```sql
@@ -36,24 +37,51 @@ Mirror the existing `lib/admins.js` DI + cache pattern exactly.
     discord_id TEXT PRIMARY KEY,
     reason     TEXT,                       -- short, shown to runners e.g. "scamming"
     message    TEXT,                       -- full lockout copy shown to the banned user
-    banned_by  TEXT,
+    banned_by  TEXT,                       -- platform-admin discord id who applied the ban
     banned_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
   ```
 - In-memory `Set` cache of banned discord_id strings + `reloadBanCache()`.
-- `initBans({ pgPool })` — creates the table, seeds from env `BANNED_IDS`
-  (comma-separated) via `INSERT … ON CONFLICT (discord_id) DO NOTHING`, loads cache.
-  No-ops safely with no DB (logs and disables, like admins).
-- Exports: `isBanned(id)`, `getBan(id)` → `{ reason, message, … }` (or null),
-  `addBan(id, { reason, message, bannedBy })`, `removeBan(id)`, `listBans()`,
-  `reloadBanCache()`.
+- `initBans({ pgPool })` — creates the table and loads the cache. No-ops safely with no DB
+  (logs and disables, like admins). No env seeding.
+- Exports: `isBanned(id)`, `getBan(id)` → `{ reason, message, bannedBy, bannedAt }` (or null),
+  `addBan(id, { reason, message, bannedBy })` (INSERT … ON CONFLICT DO UPDATE, then reload),
+  `removeBan(id)` (delete, then reload), `listBans()`, `reloadBanCache()`.
 - Constants:
   - `DEFAULT_BAN_MESSAGE = "You have been banned from communityhunts.gg for taking advantage of your community, please repay before you can continue."`
   - `DEFAULT_BAN_REASON  = "scamming"`
-- Wire `initBans` in `server.js` next to `initAdmins`.
+  - `addBan` defaults `reason`/`message` to these when the caller omits them.
+- Wire `initBans` in `server.js` next to `initAdmins`, and inject `bans` into the admin
+  router deps, the auth/middleware layer, and the socket handshake.
 
-**Activation for Raph:** set `BANNED_IDS=693694981457838140` in Railway. No redeploy
-needed to add/remove later once the table exists (managed via the DB / a future admin UI).
+**Activation for Raph:** open the admin panel → **Banned** tool (or the Ban button on his
+user profile) → enter `693694981457838140` → he's banned immediately (cache reloads on
+write). Reversible from the same screen.
+
+## Admin panel — managing the ban list
+
+Ban is **platform-wide** (a banned user is banned across every tenant, exactly like a
+platform admin is admin across every tenant), so management is gated by
+`requirePlatformAdmin` and lives in the **platform** admin scope.
+
+**Backend routes** (`routes/admin.routes.js`, mirroring the `/api/admin/platform-admins`
+trio, backed by the injected `bans` module + `known_users` enrichment for display):
+- `GET    /api/admin/banned-users`      — list bans, enriched with `{ displayName, avatar }`.
+- `POST   /api/admin/banned-users`      — body `{ discordId, reason?, message? }`; sets
+  `banned_by = req.user.id`; audit-logs a `ban.add`.
+- `DELETE /api/admin/banned-users/:id`  — unban; audit-logs a `ban.remove`.
+
+**Frontend:**
+- New `src/admin/AdminBans.js`, mirroring `AdminAdmins.js`: a Discord-ID input + optional
+  reason/message fields to add a ban, and a list of current bans (name/avatar/reason/date)
+  each with an Unban button.
+- Register in `src/admin/registry/tools.js` as a **platform**-scope tool:
+  `{ id:'banned', path:'banned', label:'Banned', component: AdminBans, scope:'platform', visible: platformAdmin }`.
+- `src/admin/adminApi.js`: `fetchBannedUsers()`, `addBan({ discordId, reason, message })`,
+  `removeBan(id)` (mirror `fetchPlatformAdmins`/`addPlatformAdmin`/`removePlatformAdmin`).
+- **Ban/Unban button on the user profile** (`src/admin/UserProfile.js` / `AdminUsers`),
+  shown to platform admins, calling the same endpoints — the "find them and block them
+  right here" path. Confirms before banning.
 
 ## Enforcement — half #1 (hard lockout of the banned user)
 
@@ -126,19 +154,25 @@ matched and won't warn. This is acceptable: real adds of a known user carry the 
 ## Testing
 
 - `lib/bans.test.js` — `isBanned`/`getBan`/`addBan`/`removeBan`/`listBans`, no-DB no-op,
-  `BANNED_IDS` env-seed parsing, default message/reason fallback.
+  default message/reason fallback when omitted.
 - `enforceBan` unit test — banned `req.user` → 403 `{ banned:true, message }`;
   non-banned → `next()`; `/auth/logout` exempt.
+- Admin-routes test — `/api/admin/banned-users` GET/POST/DELETE gated by
+  `requirePlatformAdmin`; POST records `banned_by` + audit; DELETE unbans + audit.
 - Serializer test — privileged equity view flags `banned` members by discordId; public
   view never includes `banned` or `discordId`.
 
 ## Ship path
 
-1. Backend: `lib/bans.js` + `initBans` in `server.js` + `enforceBan` middleware + OAuth
-   callback check + socket handshake check + privileged-serializer annotation + tests.
-2. Frontend: `api.js` 403 branch + `BanModal` + `?banned=1` handling + runner warning hook.
-3. Extension: auth-bridge/background 403 handling + panel ban message.
-4. Set `BANNED_IDS=693694981457838140` in Railway to activate Raph.
+1. Backend: `lib/bans.js` + `initBans`/deps wiring in `server.js` + `enforceBan` middleware
+   + OAuth callback check + socket handshake check + privileged-serializer annotation +
+   admin routes (`/api/admin/banned-users` GET/POST/DELETE) + tests.
+2. Frontend (admin): `AdminBans.js` tool + registry entry + `adminApi.js` fns + Ban/Unban
+   button on the user profile.
+3. Frontend (app): `api.js` 403 branch + `BanModal` + `?banned=1` handling + runner
+   warning hook.
+4. Extension: auth-bridge/background 403 handling + panel ban message.
+5. Activate Raph from the admin panel (Banned tool or his user profile) — no deploy step.
 
 ## Notes
 
