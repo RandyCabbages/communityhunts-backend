@@ -18,5 +18,16 @@ nixPkgs = [
   "cups",
   "expat",
   "alsa-lib",
-  "dbus"
+  "dbus",
+  # Xvfb virtual framebuffer — Cloudflare's Managed Challenge on rainbet.com only
+  # clears for a HEADED browser (see scripts/check_new_slots.js), so the in-process
+  # slot sync must run headed. Railway has no display; Xvfb provides a virtual one.
+  "xorg.xvfb"
 ]
+
+# Run the server under a virtual display so patchright can launch Chromium HEADED
+# (SCRAPE_HEADLESS=false). Xvfb backgrounds itself; the short sleep lets it bind
+# :99 before the initial slot sync fires. If Xvfb dies the server keeps serving —
+# only the new-releases scrape degrades (same as the old headless behavior).
+[start]
+cmd = "Xvfb :99 -screen 0 1280x900x24 -nolisten tcp & sleep 2; export DISPLAY=:99 SCRAPE_HEADLESS=false; node server.js"
