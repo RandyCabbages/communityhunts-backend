@@ -61,6 +61,9 @@ const toPascal = slug => slug.split('-').map(w => w.charAt(0).toUpperCase() + w.
 // a wrong slug 404s). slot.report says "chaos-crew-2"; Rainbet serves …-chaos-crew-ii.
 const SLUG_FIXES = {
   'hacksaw-chaos-crew-2': 'hacksaw-chaos-crew-ii',
+  // slot.report says "phoenix-duel-reels"; Rainbet serves the slug as one word,
+  // hacksaw-phoenix-duelreels (the hyphenated form 404s). Verified on rainbet.com.
+  'hacksaw-phoenix-duel-reels': 'hacksaw-phoenix-duelreels',
 };
 
 const RELEVANT_PROVIDERS = new Set([
