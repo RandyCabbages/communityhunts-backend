@@ -9,6 +9,8 @@
 //   GET    /api/admin/gotin-log                          — every got-in {ts,slot,bet}, newest first (admin)
 //   GET    /api/admin/gotin-log.xlsx                     — multi-tab workbook (admin OR GOTIN_EXPORT_KEY)
 //   GET    /api/admin/overview                           — dashboard counts (admin)
+//   GET    /api/admin/metrics/overview                   — Mission Control aggregates, ?range= ?scope= (admin)
+//   GET    /api/admin/metrics/live                       — Mission Control live tick, ?cursor= ?scope= (admin)
 //   GET    /api/admin/platform-admins                    — list platform admins (platform admin)
 //   POST   /api/admin/platform-admins                    — add a DB platform admin
 //   DELETE /api/admin/platform-admins/:id                — remove a DB platform admin
@@ -24,6 +26,7 @@
 const express = require('express');
 const { buildGotInWorkbook, ymdInTz } = require('../lib/gotin-export');
 const { CURRENCIES, inTenant } = require('../lib/hunts-core');
+const { computeOverviewMetrics, groupHuntsByCurrency } = require('../lib/adminMetrics');
 
 module.exports = function adminRoutes(deps) {
   const {
@@ -33,6 +36,7 @@ module.exports = function adminRoutes(deps) {
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
     subscriptions, auditLog, getPlatformBotToken, recordAlias, recordKnownUser,
+    activityFeed, presence,
   } = deps;
   const router = express.Router();
 
@@ -134,6 +138,149 @@ module.exports = function adminRoutes(deps) {
       communityName: req.tenant?.displayName || 'Bean',
       userCount, activeHuntCount, archivedHuntCount,
       recentLogins,
+    });
+  });
+
+  // ── Mission Control dashboard ──────────────────────────────────────────────
+  const RANGE_MS = {
+    today: 24 * 3600 * 1000,
+    '7d': 7 * 24 * 3600 * 1000,
+    '30d': 30 * 24 * 3600 * 1000,
+    all: null,
+  };
+
+  // Monthly-equivalent list prices per individual tier. The subscriptions table stores tier +
+  // expires_at but NO billing interval, so an annual sub is indistinguishable from a monthly one
+  // — this is an ESTIMATE and the UI labels it as such. Community plans are negotiated per host
+  // (no fixed price) and are deliberately excluded rather than guessed at.
+  const TIER_MONTHLY = { basic: 9.99, pro: 19.99, ultimate: 39.99 };
+
+  // RAW hunt objects for a tenant — NOT getAllHunts(), which maps through huntSummary and strips
+  // bonuses/calls (and drops equity on live hunts). The metrics need those arrays. Mirrors
+  // tenantHuntsUnion in lib/hunts-core.js (current ∪ archived, deduped by huntId), which is not
+  // exported.
+  //
+  // Deviation from getHuntStats: the mod/affiliate fixed-key hunts are NOT excluded here. This is
+  // an operator console answering "what is happening right now" — hiding the community's own mod
+  // hunt from its admin would be a bug, not a feature.
+  function rawHuntsForTenant(tenantId) {
+    const current = Object.values(hunts).filter(h => inTenant(h, tenantId));
+    const seen = new Set(current.map(h => h.huntId).filter(Boolean));
+    const archivedOnly = archive.filter(h => inTenant(h, tenantId) && (!h.huntId || !seen.has(h.huntId)));
+    return [...current, ...archivedOnly];
+  }
+
+  // Every hunt visible at the requested scope. Platform scope unions every tenant and tags each
+  // hunt, so the frontend can label blended rows — a cross-community leaderboard that hides which
+  // community a row came from is unreadable.
+  function huntsForScope(req, scope) {
+    if (scope === 'platform') {
+      const out = [];
+      for (const t of tenants.getAllTenants()) {
+        for (const h of rawHuntsForTenant(t.id)) out.push({ ...h, tenantId: t.id, tenantName: t.displayName });
+      }
+      return out;
+    }
+    const tenantId = req.tenant?.id || 'bean';
+    const name = req.tenant?.displayName || 'Bean';
+    return rawHuntsForTenant(tenantId).map(h => ({ ...h, tenantId, tenantName: name }));
+  }
+
+  const scopeOf = (req) => String(req.query.scope || '') === 'platform' ? 'platform' : 'community';
+
+  // Platform scope crosses tenant boundaries, so it needs the platform gate ON TOP of requireAdmin
+  // — a community admin must never aggregate other communities' data. Reuses the injected
+  // requirePlatformAdmin middleware rather than re-deriving the predicate, so this can't drift
+  // from every other platform-gated route.
+  const gatePlatformScope = (req, res, next) =>
+    scopeOf(req) === 'platform' ? requirePlatformAdmin(req, res, next) : next();
+
+  router.get('/api/admin/metrics/overview', requireAuth, requireAdmin, gatePlatformScope, async (req, res) => {
+    const scope = scopeOf(req);
+    const range = Object.prototype.hasOwnProperty.call(RANGE_MS, String(req.query.range))
+      ? String(req.query.range) : 'today';
+    const rangeMs = RANGE_MS[range];
+    const now = Date.now();
+
+    const all = huntsForScope(req, scope);
+    const groups = groupHuntsByCurrency(all);
+    const currencies = [...groups.keys()]
+      .sort((a, b) => groups.get(b).length - groups.get(a).length)
+      .map(code => ({ code, hunts: groups.get(code).length }));
+
+    const byCurrency = {};
+    for (const { code } of currencies) {
+      byCurrency[code] = computeOverviewMetrics(groups.get(code), { now, rangeMs, currency: code });
+    }
+
+    // Active non-free subscriptions, with a monthly-equivalent estimate (see TIER_MONTHLY).
+    let subs = { active: 0, monthlyEstimate: 0 };
+    try {
+      const rows = await subscriptions.listSubscriptions();
+      const alive = (rows || []).filter(r => !r.expiresAt || new Date(r.expiresAt).getTime() > now);
+      subs = {
+        active: alive.length,
+        monthlyEstimate: alive.reduce((s, r) => s + (TIER_MONTHLY[r.tier] || 0), 0),
+      };
+    } catch (e) { console.error('[admin] metrics subs failed:', e.message); }
+
+    let recentLogins = [];
+    if (pgPool) {
+      try {
+        const sql = scope === 'platform'
+          ? `SELECT user_id, display_name, avatar, last_seen FROM known_users
+             ORDER BY last_seen DESC NULLS LAST LIMIT 8`
+          : `SELECT ku.user_id, ku.display_name, ku.avatar, ku.last_seen
+             FROM community_members cm JOIN known_users ku ON ku.user_id = cm.user_id
+             WHERE cm.tenant_id=$1 ORDER BY ku.last_seen DESC NULLS LAST LIMIT 8`;
+        const r = await pgPool.query(sql, scope === 'platform' ? [] : [req.tenant?.id || 'bean']);
+        recentLogins = r.rows.map(u => ({
+          id: u.user_id, displayName: u.display_name, avatar: u.avatar, lastSeen: u.last_seen }));
+      } catch (e) { console.error('[admin] metrics logins failed:', e.message); }
+    }
+
+    res.json({
+      scope,
+      scopeLabel: scope === 'platform' ? 'All communities' : `${req.tenant?.displayName || 'Bean'} community`,
+      range, currencies, byCurrency, subs, recentLogins, generatedAt: now,
+    });
+  });
+
+  router.get('/api/admin/metrics/live', requireAuth, requireAdmin, gatePlatformScope, (req, res) => {
+    const scope = scopeOf(req);
+    const tenantId = req.tenant?.id || 'bean';
+    // Presence filters on the socket's handshake slug; platform scope counts every tenant.
+    const tenantSlug = scope === 'platform' ? null : (req.tenant?.slug || null);
+
+    const live = huntsForScope(req, scope).filter(h => h.isLive && !h.archivedAt);
+    const huntRows = live.map(h => {
+      const bonuses = h.bonuses || [];
+      const total = bonuses.length;
+      const opened = bonuses.filter(b => b && b.win != null).length;
+      const startCost = (h.equity || []).reduce((s, e) => s + (Number(e?.amount) || 0), 0);
+      const won = bonuses.reduce((s, b) => s + (Number(b?.win) || 0), 0);
+      const remaining = total - opened;
+      return {
+        userId: h.user?.id || null,
+        name: h.user?.displayName || 'Hunter',
+        avatar: h.user?.avatar || null,
+        tenantName: scope === 'platform' ? (h.tenantName || null) : null,
+        opened, total, startCost,
+        pnl: won - startCost,
+        currency: h.currency || 'USD',
+        pct: total > 0 ? Math.round((opened / total) * 100) : 0,
+        // What each remaining bonus must average to cover the start cost. null = already covered.
+        breakEvenPerBonus: remaining > 0 && won < startCost ? (startCost - won) / remaining : null,
+      };
+    });
+
+    const { events, cursor } = activityFeed
+      ? activityFeed.since(scope === 'platform' ? null : tenantId, req.query.cursor, 20)
+      : { events: [], cursor: 0 };
+
+    res.json({
+      online: presence ? presence.countOnline(tenantSlug) : 0,
+      hunts: huntRows, feed: events, cursor, generatedAt: Date.now(),
     });
   });
 

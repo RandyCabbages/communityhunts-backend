@@ -15,6 +15,7 @@
 const express = require('express');
 const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquityMember } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
+const { diffOpenedBonuses } = require('../lib/activityFeed');
 
 module.exports = function huntsRoutes(deps) {
   const {
@@ -23,7 +24,7 @@ module.exports = function huntsRoutes(deps) {
     emitHubUpdate, emitHuntUpdate, publicHuntView, uid, touch,
     persistHunts, archiveHunt, unarchiveHunt, io, rejectBadHuntInput,
     resolveUserIdByName, getCreatorLive, refreshCreatorsLive, getKnownUser, auditLog, bans,
-    findAliasOwners,
+    findAliasOwners, activityFeed,
   } = deps;
   const router = express.Router();
 
@@ -177,6 +178,11 @@ module.exports = function huntsRoutes(deps) {
     persistHunts();
     // Fire-and-forget: pick up the new hunt's creator without waiting a poll cycle.
     refreshCreatorsLive();
+    activityFeed?.push(req.tenant.id, {
+      type: 'hunt',
+      text: `${req.user.displayName || req.user.username} opened a hunt`,
+      meta: { userId: String(req.user.id) },
+    });
     res.json({ok:true});
   });
 
@@ -337,6 +343,17 @@ module.exports = function huntsRoutes(deps) {
       _before,
       { bonuses: hunts[req.user.id].bonuses, equity: hunts[req.user.id].equity, calls: hunts[req.user.id].calls },
       { targetId: req.user.id, targetName: req.user.displayName });
+    // Admin Mission Control live feed. Reuses the _before snapshot the audit log already took,
+    // so this adds a diff and no extra copy on the hottest save path. Multiplier-only text —
+    // the feed never shows an amount, which keeps it currency-agnostic. Best-effort throughout.
+    for (const b of diffOpenedBonuses(_before.bonuses, hunts[req.user.id].bonuses)) {
+      const mult = Number(b.bet) > 0 ? Number(b.win) / Number(b.bet) : 0;
+      activityFeed?.push(hunts[req.user.id].tenantId || req.tenant.id, {
+        type: mult >= 100 ? 'bigwin' : 'bonus',   // 100x+ gets its own colour in the feed
+        text: `${String(b.slot || 'A bonus').trim()} paid ${Math.round(mult)}x`,
+        meta: { slot: b.slot || null, mult, win: Number(b.win) || 0 },
+      });
+    }
     res.json({ok:true});
   });
 

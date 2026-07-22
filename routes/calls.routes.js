@@ -18,7 +18,7 @@ module.exports = function callsRoutes(deps) {
     hunts, io, persistHunts,
     requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged,
     normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
-    auditLog,
+    auditLog, activityFeed,
   } = deps;
   const router = express.Router();
 
@@ -61,6 +61,13 @@ module.exports = function callsRoutes(deps) {
     hunt.calls = [...pendingCalls, newCall, ...otherCalls];
     hunt.updatedAt = new Date().toISOString();
     emitHuntUpdate(hunt.user.id); // per-socket (persists + redacts anonymous names)
+    // Admin Mission Control live feed (transient, best-effort — optional-chained so a missing
+    // dep can never break a call submission).
+    activityFeed?.push(hunt.tenantId || 'bean', {
+      type: 'call',
+      text: `${newCall.user} called ${newCall.slot}`,
+      meta: { slot: newCall.slot, callerId: newCall.callerId || null },
+    });
     return { ok: true, call: newCall };
   }
 
