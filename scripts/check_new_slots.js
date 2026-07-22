@@ -64,6 +64,9 @@ const SLUG_FIXES = {
   // slot.report says "phoenix-duel-reels"; Rainbet serves the slug as one word,
   // hacksaw-phoenix-duelreels (the hyphenated form 404s). Verified on rainbet.com.
   'hacksaw-phoenix-duel-reels': 'hacksaw-phoenix-duelreels',
+  // slot.report constructs "…bonanza-keeping-it-reel"; Rainbet serves the game at
+  // pragmatic-play-big-bass-keeping-it-reel (the bonanza form 404s). Verified on rainbet.com.
+  'pragmatic-play-big-bass-bonanza-keeping-it-reel': 'pragmatic-play-big-bass-keeping-it-reel',
 };
 
 const RELEVANT_PROVIDERS = new Set([
