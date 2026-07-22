@@ -46103,5 +46103,15 @@
     "rainbetSlug": "bgaming-reel-of-ra",
     "name": "Reel of Ra",
     "thumb": "https://cdn.rainbet.com/slots/Reel%20of%20Ra.png"
+  },
+  {
+    "rainbetSlug": "bgaming-chicken-fire",
+    "name": "Chicken Fire",
+    "thumb": "https://cdn.softswiss.net/i/s4/bgaming/ChickenFire.webp"
+  },
+  {
+    "rainbetSlug": "play-n-go-tower-run-treasure-steps",
+    "name": "Tower Run Treasure Steps",
+    "thumb": "https://cdn.softswiss.net/i/s4/playngo/TowerRunTreasureSteps.webp"
   }
 ]
