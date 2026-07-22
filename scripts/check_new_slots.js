@@ -67,6 +67,10 @@ const SLUG_FIXES = {
   // slot.report constructs "…bonanza-keeping-it-reel"; Rainbet serves the game at
   // pragmatic-play-big-bass-keeping-it-reel (the bonanza form 404s). Verified on rainbet.com.
   'pragmatic-play-big-bass-bonanza-keeping-it-reel': 'pragmatic-play-big-bass-keeping-it-reel',
+  // slot.report has two rows for this game; its "mr-null-s-wicked-wares" slug has no real
+  // thumb (falls back to slot.report's generic placeholder). Collapse onto the reviewed
+  // "mr-nulls-wicked-wares" row, which carries a real Rainbet-CDN thumb. Verified on rainbet.com.
+  'pragmatic-play-mr-null-s-wicked-wares': 'pragmatic-play-mr-nulls-wicked-wares',
 };
 
 const RELEVANT_PROVIDERS = new Set([
