@@ -12,8 +12,9 @@
 //   GET    /api/admin/metrics/overview                   — Mission Control aggregates, ?range= ?scope= (admin)
 //   GET    /api/admin/metrics/live                       — Mission Control live tick, ?cursor= ?scope= (admin)
 //   GET    /api/admin/identity/proposals                 — alias-match link proposals (platform admin)
-//   POST   /api/admin/identity/apply                     — apply confirmed links (platform admin)
-//   POST   /api/admin/identity/unlink                    — reverse a link (platform admin)
+//   POST   /api/admin/identity/apply                     — apply confirmed name links (platform admin)
+//   POST   /api/admin/identity/unlink-name               — undo an apply for one name (platform admin)
+//   POST   /api/admin/identity/unlink                    — reverse a single row link (platform admin)
 //   GET    /api/admin/platform-admins                    — list platform admins (platform admin)
 //   POST   /api/admin/platform-admins                    — add a DB platform admin
 //   DELETE /api/admin/platform-admins/:id                — remove a DB platform admin
@@ -30,7 +31,7 @@ const express = require('express');
 const { buildGotInWorkbook, ymdInTz } = require('../lib/gotin-export');
 const { CURRENCIES, inTenant } = require('../lib/hunts-core');
 const { computeOverviewMetrics, groupHuntsByCurrency } = require('../lib/adminMetrics');
-const { proposeFromAliases } = require('../lib/identityLink');
+const { collectUnlinkedNames, applyNameLinks, unlinkNameLinks } = require('../lib/identityLink');
 
 module.exports = function adminRoutes(deps) {
   const {
@@ -297,63 +298,86 @@ module.exports = function adminRoutes(deps) {
   const everyHunt = () => [...Object.values(hunts), ...archive];
   const huntByIdentityKey = (key) => everyHunt().find(h => identityKeyOf(h) === key) || null;
 
+  // One entry per PERSON, not per row. Real data: 81 distinct names across 10,345 rows — a
+  // per-row list is unreviewable, and shipping 10k objects back to /apply was O(links × hunts)
+  // and would stall the event loop.
   router.get('/api/admin/identity/proposals', requireAuth, requirePlatformAdmin, async (req, res) => {
     const list = everyHunt();
-    // Collect every unlinked name across every hunt, then resolve them all in ONE alias query.
-    const names = new Set();
-    for (const h of list) {
-      for (const e of h.equity || []) if (e && !e.discordId && e.name) names.add(String(e.name).trim());
-      for (const c of h.calls  || []) if (c && !c.callerId && c.user) names.add(String(c.user).trim());
-    }
+    const unlinked = collectUnlinkedNames(list);   // [{ name, rows, hunts }] sorted by rows desc
+
     let owners = new Map();
     try {
-      owners = findAliasOwners ? await findAliasOwners([...names]) : new Map();
+      owners = findAliasOwners ? await findAliasOwners(unlinked.map(u => u.name)) : new Map();
     } catch (e) { console.error('[admin] identity alias lookup failed:', e.message); }
 
-    const out = [];
-    let totalProposals = 0, totalAmbiguous = 0;
-    for (const h of list) {
-      const r = proposeFromAliases(h, owners);
-      if (!r.proposals.length && !r.ambiguous.length) continue;
-      totalProposals += r.proposals.length;
-      totalAmbiguous += r.ambiguous.length;
-      out.push({
-        huntKey: identityKeyOf(h),
-        hunterName: h.user?.displayName || h.user?.id || 'Unknown',
-        startedAt: h.startedAt || null,
-        proposals: r.proposals,
-        ambiguous: r.ambiguous,
-      });
+    const names = [], ambiguous = [], unmatched = [];
+    for (const u of unlinked) {
+      const set = owners.get(u.name);
+      if (!set || set.size === 0) { unmatched.push(u); continue; }
+      if (set.size > 1) { ambiguous.push({ ...u, count: set.size }); continue; }
+      const discordId = [...set][0];
+      // A synthetic manual:<name> row is a placeholder, never an identity.
+      if (!/^\d{17,20}$/.test(String(discordId))) { unmatched.push(u); continue; }
+      names.push({ ...u, discordId });
     }
-    res.json({ hunts: out, totals: { proposals: totalProposals, ambiguous: totalAmbiguous, names: names.size } });
+
+    res.json({
+      names, ambiguous, unmatched,
+      totals: {
+        names: unlinked.length,
+        matched: names.length,
+        rows: names.reduce((s, n) => s + n.rows, 0),
+        ambiguous: ambiguous.length,
+        unmatched: unmatched.length,
+      },
+    });
   });
 
+  // Body: { links: [{ name, discordId }] } — one decision per person. Applied in a SINGLE pass
+  // over every hunt (see lib/identityLink.applyNameLinks), so cost is O(rows) regardless of how
+  // many names were confirmed.
   router.post('/api/admin/identity/apply', requireAuth, requirePlatformAdmin, (req, res) => {
     const links = Array.isArray(req.body?.links) ? req.body.links : [];
-    let applied = 0; const skipped = [];
+    const nameToId = new Map();
     for (const l of links) {
-      const h = huntByIdentityKey(l.huntKey);
-      if (!h) { skipped.push({ ...l, why: 'hunt not found' }); continue; }
-      // Re-verify server-side: a client proposal is a HINT, never the authority. State can have
-      // moved since the proposal was generated.
-      const row = l.kind === 'equity'
-        ? (h.equity || []).find(e => e && (e.id === l.id || String(e.name || '').trim() === l.name))
-        : (h.calls  || []).find(c => c && (c.id === l.id || String(c.user || '').trim() === l.name));
-      if (!row) { skipped.push({ ...l, why: 'row not found' }); continue; }
-      if (l.kind === 'equity' ? row.discordId : row.callerId) { skipped.push({ ...l, why: 'already linked' }); continue; }
-      if (!/^\d{17,20}$/.test(String(l.discordId || ''))) { skipped.push({ ...l, why: 'not a real Discord id' }); continue; }
-      if (l.kind === 'equity') row.discordId = String(l.discordId); else row.callerId = String(l.discordId);
-      applied++;
-      auditLog.recordFromReq(req, {
-        category: 'hunt', action: 'identity.link', targetId: String(l.discordId),
-        summary: `Linked ${l.kind} "${l.name}" to ${l.discordId}`,
-        detail: { huntKey: l.huntKey, kind: l.kind, rowId: l.id, name: l.name },
-      });
+      if (l && l.name && /^\d{17,20}$/.test(String(l.discordId || ''))) {
+        nameToId.set(String(l.name), String(l.discordId));
+      }
     }
+    if (!nameToId.size) return res.json({ applied: 0, names: 0, byName: {} });
+
+    const { applied, byName } = applyNameLinks(everyHunt(), nameToId);
     if (applied) { persistHunts(); persistArchive(); }
-    res.json({ applied, skipped });
+
+    // ONE audit row for the batch — 10k rows would flood the log and bury everything else. The
+    // per-name breakdown in `detail` is what makes it reversible/inspectable.
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'identity.link',
+      targetId: nameToId.size === 1 ? [...nameToId.values()][0] : null,
+      summary: `Linked ${applied} row(s) across ${Object.keys(byName).length} name(s)`,
+      detail: { byName, links: [...nameToId.entries()].map(([name, discordId]) => ({ name, discordId })) },
+    });
+    res.json({ applied, names: Object.keys(byName).length, byName });
   });
 
+  // Undo an /apply for ONE name, at the same granularity it was applied. Body: { name, discordId }.
+  // Without this a 10,000-row apply is irreversible in practice and the "reversible" rail is a lie.
+  router.post('/api/admin/identity/unlink-name', requireAuth, requirePlatformAdmin, (req, res) => {
+    const { name, discordId } = req.body || {};
+    if (!name || !/^\d{17,20}$/.test(String(discordId || ''))) {
+      return res.status(400).json({ error: 'name and a real discordId are required' });
+    }
+    const { cleared } = unlinkNameLinks(everyHunt(), name, discordId);
+    if (cleared) { persistHunts(); persistArchive(); }
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'identity.unlink', targetId: String(discordId),
+      summary: `Unlinked ${cleared} row(s) for "${name}"`,
+      detail: { name, discordId, cleared },
+    });
+    res.json({ cleared });
+  });
+
+  // Row-level unlink — kept for surgical single-row corrections.
   router.post('/api/admin/identity/unlink', requireAuth, requirePlatformAdmin, (req, res) => {
     const { huntKey, kind, id } = req.body || {};
     const h = huntByIdentityKey(huntKey);
