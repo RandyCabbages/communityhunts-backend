@@ -49,9 +49,12 @@ module.exports = function callsRoutes(deps) {
         return { error: `You've reached the limit of ${hunt.callLimit} calls`, status: 400 };
     }
 
+    // `ts` exists so caller stats can eventually be range-filtered. Until enough history carries
+    // it, lib/adminMetrics.js reports caller hit rates ALL-TIME — filtering got-ins by range while
+    // the calls behind them are undateable produced a ~0% hit rate for everyone.
     const newCall = { id: Math.random().toString(36).slice(2,8), slot: slot.trim(),
       user: user.displayName||user.username, callerId: user.id ? String(user.id) : undefined,
-      status: 'pending', ...(source ? { source } : {}) };
+      status: 'pending', ts: Date.now(), ...(source ? { source } : {}) };
     // New calls go to the END of the pending queue. The old "insert after first 3"
     // splice predates round-robin + the top-4 lock: it shoved every incoming call up
     // top — even INTO the locked top 4, pushing locked calls down. Queue order is the
