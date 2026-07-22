@@ -74,9 +74,12 @@ CREATE INDEX IF NOT EXISTS idx_user_aliases_norm ON user_aliases (alias_norm);
 - `recordAlias(userId, name, source)`: normalize `name`; skip empty/blank; upsert
   `(user_id, alias_norm)` `ON CONFLICT DO NOTHING` (keep first-seen display + source), best-effort
   (log + swallow errors, no-op with no pgPool). Never throws.
-- `findAliasOwners(names)`: given an array of raw names, normalize them and
-  `SELECT alias_norm, user_id FROM user_aliases WHERE alias_norm = ANY($1)`; return
-  `Map<alias_norm, Set<user_id>>` (or `[]`/empty on no DB). Read-only, no side effects.
+- `findAliasOwners(names)`: given an array of raw names, normalize each, query
+  `SELECT alias_norm, user_id FROM user_aliases WHERE alias_norm = ANY($1)`, then map back so the
+  result is keyed by the **original raw name string** the caller passed:
+  `Map<rawName, Set<user_id>>`, containing only raw names that had ≥1 owner. Empty map on no DB.
+  Read-only, no side effects. Keying by raw name (not normalized) means consumers never need their
+  own `normalizeName`.
 
 ### 2. Capture hooks — populated for ALL users
 
@@ -98,13 +101,14 @@ CREATE INDEX IF NOT EXISTS idx_user_aliases_norm ON user_aliases (alias_norm);
 - `POST /api/banned-status` (`routes/hunts.routes.js:33`) accepts `{ ids, names }` (both optional
   arrays, each `.slice(0, 100)` capped). Matching:
   - **ids:** unchanged — `bans.isBanned(id)` → `bans.getBan(id).reason`.
-  - **names:** `findAliasOwners(names)` → for each input name, take its candidate user_ids,
+  - **names:** `findAliasOwners(names)` → for each raw input name, take its candidate user_ids,
     filter to `bans.isBanned(userId)`; if any is banned, that name is a hit with that ban's
-    `reason` (from `bans.getBan(userId)`). Orchestrated in the route (it already has `bans`; add
-    the directory lookup as a dep).
-  - Response shape is conditional for deploy-safety (§5):
-    - `names` present → `{ "ids": { "<id>": { "reason" } }, "names": { "<normName>": { "reason",
-      "alias" } } }`
+    `reason` (from `bans.getBan(userId)`). Orchestrated in the route: add `findAliasOwners` to the
+    hunts.routes deps (it already receives `getKnownUser` from settings, so settings funcs are
+    already threaded in — see hunts.routes.js:25); `bans` is already a dep.
+  - Response shape is conditional for deploy-safety (§6):
+    - `names` present → `{ "ids": { "<id>": { "reason" } }, "names": { "<rawName>": { "reason" } } }`
+      — `names` keyed by the exact raw name string the frontend sent.
     - `names` absent → the OLD flat `{ "<id>": { "reason" } }` (old frontend unchanged).
 
 ### 4. Admin UI (frontend + backend)
@@ -132,13 +136,15 @@ CREATE INDEX IF NOT EXISTS idx_user_aliases_norm ON user_aliases (alias_norm);
     authoritatively id-checked, so it is excluded from name-matching — this avoids false-flagging
     a legit linked member who happens to share a banned alias.
 - POST `{ ids, names }` (always sends `names`, even `[]`, so it always gets the new response
-  shape); store both returned maps. Effect key = sorted-unique id set + sorted-unique normalized
-  name set (editing amounts must not refetch).
+  shape); store both returned maps. Effect key = sorted-unique id set + sorted-unique name set
+  (editing amounts must not refetch).
 - Pure helper `deriveBannedMembers(equity, idMap, nameMap, dismissedSet)` → array of
-  `{ discordId?, name, reason, matchType: 'id' | 'name' }`. Precedence: an id match wins over a
-  name match for the same row. Dismissal keyed per row (id when present, else
-  `name:<normalizedName>`) so re-adding a dismissed member resurfaces them. Extracted into its own
-  module so it gets a `.test.js` (repo rule: pure logic is tested; the hook/component are not).
+  `{ discordId?, name, reason, matchType: 'id' | 'name' }`. `idMap` is keyed by discordId, `nameMap`
+  by the raw member name (as sent). Precedence: an id match wins over a name match for the same
+  row. Dismissal keyed per row (`id:<discordId>` when present, else `name:<rawName>`) so re-adding
+  a dismissed member resurfaces them. No frontend normalization needed — the backend echoes raw
+  names. Extracted into its own module so it gets a `.test.js` (repo rule: pure logic is tested;
+  the hook/component are not).
 - `BannedMemberWarning.js` — copy by `matchType`:
   - `id`:   "**{name}** is banned from CommunityHunts for {reason}." (current copy)
   - `name`: "A member named **{name}** matches a known scammer's alias — verify their Discord
