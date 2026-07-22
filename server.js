@@ -446,6 +446,15 @@ app.use(require('./routes/announcements.routes')({
   announcementsChannelId: process.env.DISCORD_ANNOUNCEMENTS_CHANNEL_ID,
 }));
 
+// Cross-hunt payout ledger (routes/ledger.routes.js). Reads hunt_history; the per-person
+// fold happens in the FRONTEND (giftLedger.js is the only home for gift/vault payout math,
+// and a second implementation here would drift). `archive` + `persistArchive` are passed
+// because hunt_history and the in-memory archive must both be written, and `huntKey` is
+// statsStore's own so the in-memory match uses huntId when present.
+app.use(require('./routes/ledger.routes')({
+  pgPool, requireAuth, reqIsMod, archive, persistArchive, huntKey: statsStore.huntKey,
+}));
+
 // Developer API keys (per-community). initApiKeys gets tenant + feature helpers for the
 // middlewares. `features` was already required + initialized above (~line 263) — reused here,
 // not re-required. Admin router only (session-authed, owner/platform admin); the public
