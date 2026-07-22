@@ -29,6 +29,11 @@ module.exports = function registerSockets(io, deps) {
     // tokens stay anonymous and connect normally; only a VERIFIED banned id is refused.)
     if (uid && isBanned && isBanned(uid)) return next(new Error('banned'));
     socket.data.userId = uid;
+    // Stamp the tenant the socket connected to, so presence (lib/presence.js) can be counted
+    // per community. Same source + 'bean' default as the connection handler's `slug` below.
+    // Client-supplied and therefore untrusted — but it only ever NARROWS a count, never grants
+    // access, so spoofing it achieves nothing.
+    socket.data.tenantSlug = socket.handshake.query._tenant || 'bean';
     next();
   });
 
