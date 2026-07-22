@@ -32,7 +32,7 @@ module.exports = function adminRoutes(deps) {
     pgPool, admins, bans, supporters, tenants, ADMIN_IDS, statsStore,
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
-    subscriptions, auditLog,
+    subscriptions, auditLog, getPlatformBotToken, recordAlias, recordKnownUser,
   } = deps;
   const router = express.Router();
 
@@ -264,6 +264,32 @@ module.exports = function adminRoutes(deps) {
     const message = req.body?.message ? String(req.body.message).trim().slice(0, 500) : undefined;
     try {
       await bans.addBan(discordId, { reason, message, bannedBy: req.user.id });
+      // Manual aliases → directory (best-effort).
+      const aliases = Array.isArray(req.body?.aliases) ? req.body.aliases : [];
+      for (const a of aliases.slice(0, 20)) {
+        if (recordAlias) recordAlias(discordId, a, 'manual');
+      }
+      // Best-effort Discord enrich — must NEVER block or fail the ban.
+      try {
+        const botToken = getPlatformBotToken && getPlatformBotToken();
+        if (botToken) {
+          const resp = await fetch(`https://discord.com/api/v10/users/${discordId}`,
+            { headers: { Authorization: `Bot ${botToken}` } });
+          if (resp.ok) {
+            const u = await resp.json().catch(() => null);
+            if (u && u.id) {
+              if (recordAlias && u.username) recordAlias(discordId, u.username, 'discord');
+              if (recordAlias && u.global_name) recordAlias(discordId, u.global_name, 'discord');
+              if (recordKnownUser) recordKnownUser({
+                id: String(u.id),
+                displayName: u.global_name || u.username || `User ${discordId}`,
+                username: u.username || null,
+                avatar: u.avatar || null,
+              });
+            }
+          }
+        }
+      } catch (e) { console.error('[admin] ban discord enrich failed:', e.message); }
       auditLog.record({ category: 'admin', action: 'ban.add', actorId: req.user.id,
         actorName: req.user.displayName, targetId: discordId,
         tenantId: req.tenant && req.tenant.id, ip: req.ip,

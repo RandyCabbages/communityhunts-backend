@@ -23,6 +23,7 @@ module.exports = function huntsRoutes(deps) {
     emitHubUpdate, emitHuntUpdate, publicHuntView, uid, touch,
     persistHunts, archiveHunt, unarchiveHunt, io, rejectBadHuntInput,
     resolveUserIdByName, getCreatorLive, refreshCreatorsLive, getKnownUser, auditLog, bans,
+    findAliasOwners,
   } = deps;
   const router = express.Router();
 
@@ -30,17 +31,34 @@ module.exports = function huntsRoutes(deps) {
   // the runner is editing), return only the banned ones + reason, so the frontend can warn the
   // runner that they're handing a spot to a known scammer. Auth-gated: only used by hunt runners,
   // and it reveals no more than the warning box already shows. Never blocks — it only informs.
-  router.post('/api/banned-status', requireAuth, (req, res) => {
+  router.post('/api/banned-status', requireAuth, async (req, res) => {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
-    const out = {};
+    const names = Array.isArray(req.body?.names) ? req.body.names : null;
+
+    const idOut = {};
     for (const raw of ids.slice(0, 100)) {
       const id = String(raw || '').trim();
       if (id && bans && bans.isBanned(id)) {
         const b = bans.getBan(id) || {};
-        out[id] = { banned: true, reason: b.reason };
+        idOut[id] = { banned: true, reason: b.reason };
       }
     }
-    res.json(out);
+
+    // Legacy clients omit `names` → keep the old flat { <id>: {...} } shape (deploy safety).
+    if (names === null) return res.json(idOut);
+
+    const nameOut = {};
+    const owners = findAliasOwners ? await findAliasOwners(names.slice(0, 100)) : new Map();
+    for (const [rawName, userIds] of owners) {
+      for (const uid of userIds) {
+        if (bans && bans.isBanned(uid)) {
+          const b = bans.getBan(uid) || {};
+          nameOut[rawName] = { banned: true, reason: b.reason };
+          break;
+        }
+      }
+    }
+    res.json({ ids: idOut, names: nameOut });
   });
 
   // ── Invited-editor helper ──────────────────────────────────────────
