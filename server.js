@@ -420,6 +420,7 @@ app.use(require('./routes/hunts.routes')({
   getCreatorLive: integrations.getCreatorLive,
   refreshCreatorsLive: () => integrations.checkCreatorsLive(io, creatorPollDeps),
   getKnownUser: settings.getKnownUser,
+  findAliasOwners: settings.findAliasOwners,
   auditLog, bans,
 }));
 

@@ -54,3 +54,53 @@ test('other tenant: 404 (inTenant guard)', async () => {
   const res = await get(appWith({ tenantId: 'trashguy' }), PATH);
   assert.strictEqual(res.status, 404);
 });
+
+// ── /api/banned-status: id + name matching ──────────────────────────
+function bannedApp({ bans, findAliasOwners }) {
+  const app = express();
+  app.use(express.json()); // banned-status reads req.body
+  app.use((req, res, next) => { req.tenant = { id: 'bean' }; req.user = { id: 'runner' }; next(); });
+  app.use(huntsRoutes({
+    requireAuth: (req, res, next) => next(),
+    canEditHunt: () => false, isEquityMember: () => false, reqIsMod: () => false,
+    hunts: {}, archive: [], getPublicHunts: () => [], getArchivedHunts: () => [],
+    emitHubUpdate() {}, emitHuntUpdate() {}, publicHuntView: h => h,
+    uid: () => 'x', touch() {}, persistHunts() {}, archiveHunt() {}, unarchiveHunt() {},
+    io: { emit() {} }, rejectBadHuntInput: () => null,
+    resolveUserIdByName: async () => null, getCreatorLive: () => ({ isLive: false }), refreshCreatorsLive() {},
+    bans, findAliasOwners,
+  }));
+  return app;
+}
+
+async function post(app, pathname, body) {
+  const server = await new Promise(r => { const s = app.listen(0, () => r(s)); });
+  try {
+    const r = await fetch(`http://127.0.0.1:${server.address().port}${pathname}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    return { status: r.status, body: await r.json().catch(() => null) };
+  } finally { await new Promise(res => server.close(res)); }
+}
+
+test('/api/banned-status: names omitted → legacy flat shape', async () => {
+  const app = bannedApp({
+    bans: { isBanned: (id) => id === '693', getBan: () => ({ reason: 'scamming' }) },
+    findAliasOwners: async () => new Map(),
+  });
+  const res = await post(app, '/api/banned-status', { ids: ['693', '111'] });
+  assert.deepStrictEqual(res.body, { '693': { banned: true, reason: 'scamming' } });
+});
+
+test('/api/banned-status: names present → {ids,names} and matches a banned alias', async () => {
+  const app = bannedApp({
+    bans: { isBanned: (id) => id === '693', getBan: () => ({ reason: 'scamming' }) },
+    findAliasOwners: async (names) => {
+      const m = new Map();
+      if (names.includes('rap')) m.set('rap', new Set(['693']));
+      return m;
+    },
+  });
+  const res = await post(app, '/api/banned-status', { ids: [], names: ['rap', 'Legit'] });
+  assert.deepStrictEqual(res.body, { ids: {}, names: { rap: { banned: true, reason: 'scamming' } } });
+});
