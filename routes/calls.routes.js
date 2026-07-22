@@ -92,6 +92,30 @@ module.exports = function callsRoutes(deps) {
     res.json({ok:true, call: result.call});
   });
 
+  // ── Remove a slot call ─────────────────────────────────────────────
+  // Editors/admins can remove any call. A regular caller can remove their OWN call, but
+  // only while it's still pending and the hunt isn't rolling (mirrors the add-call rule,
+  // so a caller can't yank a slot that may be up-next during Opening). Ownership is a
+  // strict Discord-ID match — display-name-only (Discord-imported/legacy) calls stay host-only.
+  router.delete('/api/hunts/:userId/calls/:callId', requireAuth, (req, res) => {
+    const { userId, callId } = req.params;
+    const hunt = hunts[userId];
+    if (!hunt) return res.status(404).json({ error: 'Hunt not found' });
+
+    const call = (hunt.calls || []).find(c => c.id === callId);
+    if (!call) return res.status(404).json({ error: 'Call not found' });
+
+    const isEditor = canEditHunt(req, userId);
+    const ownsIt = call.callerId && String(call.callerId) === String(req.user.id);
+    const canOwnerRemove = ownsIt && call.status === 'pending' && hunt.huntMode !== 'rolling';
+    if (!isEditor && !canOwnerRemove) return res.status(403).json({ error: 'Not allowed' });
+
+    hunt.calls = hunt.calls.filter(c => c.id !== callId);
+    hunt.updatedAt = new Date().toISOString();
+    emitHuntUpdate(userId); // per-socket (persists + redacts anonymous names)
+    res.json({ ok: true });
+  });
+
   // ── Edit any hunt (admin/editor) ───────────────────────────────────
   router.put('/api/hunts/:userId', requireAuth, (req, res) => {
     if (!canEditHunt(req, req.params.userId)) return res.status(403).json({error:'Not authorised'});
