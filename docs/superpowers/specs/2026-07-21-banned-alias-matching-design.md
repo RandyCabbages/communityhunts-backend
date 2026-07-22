@@ -61,14 +61,30 @@ existing ID match. Non-blocking and informational, exactly like the current warn
   }
   ```
 
-- **Auto-capture of display name:** the ADMIN add-ban route (`POST /api/admin/banned-users`)
-  resolves the banned id's display name by querying `known_users` via `pgPool` — the SAME
-  mechanism the list handler already uses to enrich rows (`SELECT display_name FROM known_users
-  WHERE user_id = $1`, see admin.routes.js:240). If a display name is found, merge it into
-  `aliases` (deduped by normalized form) before calling `addBan`. Manual aliases from the request
-  merge on top. Auto-capture lives in the route, not `addBan`, so `addBan` stays a pure
-  persistence primitive. (No new dep needed — `pgPool` is already in `admin.routes.js` deps;
-  `getKnownUser` is NOT, so do not use it here.)
+- **Auto-capture via live Discord fetch:** the ADMIN add-ban route (`POST /api/admin/banned-users`)
+  looks up the banned id against the Discord API to grab his CURRENT handles, mirroring the
+  proven pattern at `cardRequests.routes.js:103-130`:
+  - `getPlatformBotToken()` → `GET https://discord.com/api/v10/users/{id}` (headers
+    `Authorization: Bot <token>`). Returns `username` (the @handle) and `global_name` (display
+    name). Use `getPlatformBotToken()`, NOT `process.env.DISCORD_BOT_TOKEN` — the env token is
+    stale in Railway (401s); `getPlatformBotToken()` is the working token used across
+    cardRequests/announcements/adminTickets. (See the discord-bot-token-trap note.)
+  - Best-effort guild nickname: `tenants.getTenantDiscordConfig(req.tenant)` → `{ botToken,
+    guildId }` (the community bot, which IS a member of the tenant guild) →
+    `GET /guilds/{guildId}/members/{id}` → add `nick` if present. Skip silently if no guildId or
+    the call fails.
+  - Merge `username` + `global_name` + `nick` into `aliases` (deduped by normalized form), then
+    the admin's manual aliases on top. Opportunistically `recordKnownUser(resolved)` to backfill
+    the directory, exactly as cardRequests does.
+  - **Discord fetch is strictly best-effort — it must NEVER block or fail the ban.** Wrap in
+    try/catch; on any error (network, 404, 401, missing token) log and proceed with whatever
+    aliases we have (manual field + none from Discord). Auto-capture lives in the route, not
+    `addBan`, so `addBan` stays a pure persistence primitive.
+  - Discord returns only CURRENT handles — no name history exists in the API. Past/abandoned
+    names he used are covered only by the manual alias field.
+- **Dep wiring:** add `getPlatformBotToken` and `recordKnownUser` to the `admin.routes.js` deps
+  destructuring (lines 29-36) and to the `adminRoutes(deps)` call site in `server.js` (both are
+  already constructed there and passed to `cardRequests.routes.js`). `tenants` is already a dep.
 
 ### 3. Frontend warning derivation
 
@@ -120,7 +136,9 @@ Backend first, frontend second:
   - `matchNames`: hit, miss, case/space-insensitive, only-banned-return, no-DB no-op.
   - `/api/banned-status`: `{ names }` present → `{ ids, names }` shape; `{ names }` absent → old
     flat shape (deploy-safety branch).
-  - admin add-ban auto-captures `getKnownUser` display name into aliases.
+  - admin add-ban auto-captures Discord `username`/`global_name` into aliases (mock `fetch` +
+    `getPlatformBotToken`, as `admin.routes.test.js` already mocks tenants/fetch); ban still
+    succeeds when the Discord fetch throws (best-effort assertion).
 - **Frontend** (`src/hunt/deriveBannedMembers.test.js`):
   - id match, name match, id-precedence over name for one row, dismissed rows filtered,
     linked-row (has discordId) is NOT name-matched.
@@ -128,7 +146,8 @@ Backend first, frontend second:
 ## Files touched
 
 **Backend:** `lib/bans.js`, `routes/hunts.routes.js`, `routes/admin.routes.js` (auto-capture +
-aliases passthrough), bans/hunts tests.
+aliases passthrough), `server.js` (add `getPlatformBotToken`/`recordKnownUser` to the
+`adminRoutes(deps)` call), bans/hunts/admin tests.
 **Frontend:** `src/hunt/useBannedEquityWarning.js`, new `src/hunt/deriveBannedMembers.js` (+test),
 `src/hunt/BannedMemberWarning.js`, `src/admin/AdminBans.js`,
 `src/admin/userProfile/BanControl.js`, `src/admin/adminApi.js`.
