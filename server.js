@@ -37,6 +37,14 @@ function corsOrigin(origin, callback) {
 const io = new Server(server, {
   cors: { origin: corsOrigin, credentials: true }
 });
+
+// Admin Mission Control live data. Both are in-memory and derived — nothing to persist:
+// `presence` reads the socket server directly, and `activityFeed` is a transient ticker that a
+// deploy clears (same lifecycle as the OverDrop overlay state), NOT an audit trail.
+const { makeActivityFeed } = require('./lib/activityFeed');
+const { makePresence } = require('./lib/presence');
+const activityFeed = makeActivityFeed({ cap: 200 });
+const presence = makePresence(io);
 const SESSION_SECRET = process.env.SESSION_SECRET || (() => {
   console.warn('[security] SESSION_SECRET is not set — using a random per-boot secret. Set SESSION_SECRET in the environment so sessions/tokens survive restarts and cannot be forged with a known default.');
   return require('crypto').randomBytes(48).toString('hex');
@@ -375,7 +383,7 @@ app.use(require('./routes/auth.routes')({
   passport, FRONTEND_URL, requireAuth,
   reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken, guildFlags,
   recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles, featureGrants,
-  auditLog, bans,
+  auditLog, bans, activityFeed,
 }));
 
 // Shared privilege gate (owner/king/mod/supporter) — see lib/privilege.js. Used by call-limit,
@@ -421,7 +429,7 @@ app.use(require('./routes/hunts.routes')({
   refreshCreatorsLive: () => integrations.checkCreatorsLive(io, creatorPollDeps),
   getKnownUser: settings.getKnownUser,
   findAliasOwners: settings.findAliasOwners,
-  auditLog, bans,
+  auditLog, bans, activityFeed,
 }));
 
 // Mod hunt + Affiliate hunt — two fixed-key shared hunts (routes/mod-hunt.routes.js).
@@ -546,7 +554,7 @@ app.use(require('./routes/calls.routes')({
   hunts, io, persistHunts,
   requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged,
   normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
-  auditLog,
+  auditLog, activityFeed,
 }));
 
 // Share-link routes (routes/share.routes.js): token mint + public resolve.
@@ -655,7 +663,7 @@ app.use(require('./routes/admin.routes')({
   pgPool, admins, bans, supporters, tenants, ADMIN_IDS, statsStore,
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
   emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
-  subscriptions, auditLog,
+  subscriptions, auditLog, activityFeed, presence,
   getPlatformBotToken: tenants.getPlatformBotToken,
   recordAlias: settings.recordAlias,
   recordKnownUser: settings.recordKnownUser,

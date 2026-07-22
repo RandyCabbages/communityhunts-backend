@@ -18,7 +18,7 @@ module.exports = function authRoutes(deps) {
     passport, FRONTEND_URL, requireAuth,
     reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken, guildFlags,
     recordKnownUser, memberships, tenants, pgPool, subscriptions, refreshGuildRoles, featureGrants,
-    auditLog, bans,
+    auditLog, bans, activityFeed,
   } = deps;
   const router = express.Router();
 
@@ -60,6 +60,12 @@ module.exports = function authRoutes(deps) {
         actorId: req.user.id, actorName: req.user.displayName,
         tenantId: req.tenant && req.tenant.id, ip: req.ip,
         summary: `${req.user.displayName || req.user.id} logged in` });
+      // Admin Mission Control live feed (transient ticker — the auditLog above stays the record).
+      if (req.user) activityFeed?.push(req.tenant && req.tenant.id, {
+        type: 'login',
+        text: `${req.user.displayName || req.user.username} signed in`,
+        meta: { userId: String(req.user.id) },
+      });
       // Sync membership to their role for the community they signed in through (Bean today; the
       // slug they arrived via later). Guild flags are already on req.user from the passport strategy.
       reconcileMembership(req);
