@@ -16,6 +16,7 @@ const express = require('express');
 const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquityMember } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
 const { diffOpenedBonuses } = require('../lib/activityFeed');
+const { linkWithinHunt } = require('../lib/identityLink');
 
 module.exports = function huntsRoutes(deps) {
   const {
@@ -335,6 +336,10 @@ module.exports = function huntsRoutes(deps) {
     if (publicCallsPin !== undefined) hunts[req.user.id].publicCallsPin = publicCallsPin;
     if (currentSlot !== undefined) hunts[req.user.id].currentSlot = currentSlot;
     if (manualOrder !== undefined) hunts[req.user.id].manualOrder = manualOrder;
+    // Tier 1 identity linking: fill blank callerIds from THIS hunt's already-linked equity rows.
+    // Unique matches only, blanks only — see lib/identityLink.js. Runs before persist so the
+    // stored hunt and the audit snapshot below agree.
+    const _linked = linkWithinHunt(hunts[req.user.id]);
     touch(req.user.id);
     persistHunts();
     emitHuntUpdate(req.user.id);
@@ -343,6 +348,13 @@ module.exports = function huntsRoutes(deps) {
       _before,
       { bonuses: hunts[req.user.id].bonuses, equity: hunts[req.user.id].equity, calls: hunts[req.user.id].calls },
       { targetId: req.user.id, targetName: req.user.displayName });
+    if (_linked.links.length) {
+      auditLog.recordFromReq(req, {
+        category: 'hunt', action: 'identity.autolink', targetId: req.user.id,
+        summary: `${_linked.links.length} row(s) auto-linked to a Discord id`,
+        detail: { links: _linked.links },
+      });
+    }
     // Admin Mission Control live feed. Reuses the _before snapshot the audit log already took,
     // so this adds a diff and no extra copy on the hottest save path. Multiplier-only text —
     // the feed never shows an amount, which keeps it currency-agnostic. Best-effort throughout.
