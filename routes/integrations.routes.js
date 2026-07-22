@@ -52,6 +52,9 @@ module.exports = function integrationsRoutes(deps) {
       twitchChannel: t.twitchChannel || null,
       // The community's own social links ([{ type, url }]); the hub renders these, never Bean's.
       socials: Array.isArray(b.socials) ? b.socials : null,
+      // Owner-managed rotating taglines shown "up top" (hub hero, hunt top bar). null → the
+      // frontend falls back to its built-in defaults (Bean's seed list / neutral pool).
+      hashtags: Array.isArray(b.hashtags) ? b.hashtags : null,
       requiredRoles: b.requiredRoles || null,
       discordInvite: b.discordInvite || null,
       // Which casino the slot deep-links point at (null = none → linkless slot art).

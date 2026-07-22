@@ -427,6 +427,27 @@ module.exports = function adminRoutes(deps) {
     }
   });
 
+  // ── Community hashtags (owner-editable) ─────────────────────────────
+  // The rotating taglines shown "up top" on this community (hub hero, hunt top bar). Stored in
+  // branding.hashtags; sanitized in lib/tenants (leading #, no whitespace/markup). Tenant-scoped
+  // via req.tenant, so a community only edits its own. Empty array clears them (display falls back
+  // to the built-in defaults).
+  router.get('/api/admin/hashtags', requireAuth, requireAdmin, (req, res) => {
+    res.json({
+      communityName: req.tenant?.displayName || 'Bean',
+      hashtags: (req.tenant.branding && req.tenant.branding.hashtags) || [],
+    });
+  });
+  router.put('/api/admin/hashtags', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const saved = await tenants.updateTenantHashtags(req.tenant.id, req.body && req.body.hashtags);
+      res.json({ ok: true, hashtags: saved });
+    } catch (e) {
+      console.error('[admin] hashtags update failed:', e.message);
+      res.status(500).json({ error: 'Failed to update hashtags' });
+    }
+  });
+
   // Manual trigger for admins — used for verification and on-demand cleanup.
   router.post('/api/admin/hunts/cleanup', requireAdmin, (req, res) => res.json({ ok: true, ...cleanupStaleHunts() }));
 
