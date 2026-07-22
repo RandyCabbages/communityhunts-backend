@@ -113,7 +113,7 @@ test('GET /api/admin/communities returns cross-tenant list with plan + counts (p
 
 // ── Banned-user management ──────────────────────────────────────────
 // A fake bans module + auditLog capturing calls, mounted behind a passing platform-admin gate.
-function banApp({ platformAdmin = true, bansImpl, audit }) {
+function banApp({ platformAdmin = true, bansImpl, audit, recordAlias, recordKnownUser, getPlatformBotToken } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => { req.user = { id: 'admin1', displayName: 'Admin' }; req.tenant = BEAN; next(); });
@@ -127,6 +127,9 @@ function banApp({ platformAdmin = true, bansImpl, audit }) {
     hunts: {}, archive: [], archiveHunt() {}, unarchiveHunt() {}, persistArchive() {},
     emitHubUpdate() {}, publicHuntView: h => h, emitHuntUpdate() {}, io: { emit() {} }, uid: () => 'x', cleanupStaleHunts() {},
     subscriptions: {}, auditLog: audit || { record() {} },
+    recordAlias: recordAlias || (() => {}),
+    recordKnownUser: recordKnownUser || (() => {}),
+    getPlatformBotToken: getPlatformBotToken || (() => null),
   }));
   return app;
 }
@@ -151,6 +154,52 @@ test('POST /api/admin/banned-users bans a user (records banned_by + audit)', asy
   assert.strictEqual(added[0].id, '693694981457838140');
   assert.strictEqual(added[0].opts.bannedBy, 'admin1');
   assert.ok(audit.records.some(r => r.action === 'ban.add'));
+});
+
+test('add-ban records manual aliases and survives a failing Discord fetch', async () => {
+  const recorded = [];
+  const origFetch = global.fetch;
+  // Only the Discord enrich fetch fails; the harness's own localhost fetch must still work.
+  global.fetch = async (url, opts) => {
+    if (String(url).includes('discord.com')) throw new Error('network down');
+    return origFetch(url, opts);
+  };
+  try {
+    const app = banApp({
+      bansImpl: { addBan: async () => {} },
+      recordAlias: (id, alias, source) => recorded.push({ id, alias, source }),
+      getPlatformBotToken: () => 'tok',
+    });
+    const res = await req(app, 'POST', '/api/admin/banned-users',
+      { discordId: '693694981457838140', aliases: ['rap', 'Raph'] });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(
+      recorded.filter(r => r.source === 'manual').map(r => r.alias).sort(),
+      ['Raph', 'rap']);
+  } finally { global.fetch = origFetch; }
+});
+
+test('add-ban enriches aliases from a successful Discord fetch', async () => {
+  const recorded = [];
+  const origFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    if (String(url).includes('discord.com')) {
+      return { ok: true, status: 200,
+        json: async () => ({ id: '693694981457838140', username: 'raph_ttv', global_name: 'Raph' }) };
+    }
+    return origFetch(url, opts);
+  };
+  try {
+    const app = banApp({
+      bansImpl: { addBan: async () => {} },
+      recordAlias: (id, alias, source) => recorded.push({ id, alias, source }),
+      getPlatformBotToken: () => 'tok',
+    });
+    const res = await req(app, 'POST', '/api/admin/banned-users', { discordId: '693694981457838140' });
+    assert.strictEqual(res.status, 200);
+    const discordAliases = recorded.filter(r => r.source === 'discord').map(r => r.alias).sort();
+    assert.deepStrictEqual(discordAliases, ['Raph', 'raph_ttv']);
+  } finally { global.fetch = origFetch; }
 });
 
 test('POST /api/admin/banned-users rejects a bad id and refuses the owner', async () => {

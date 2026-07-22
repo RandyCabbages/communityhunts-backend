@@ -647,6 +647,9 @@ app.use(require('./routes/admin.routes')({
   hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
   emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
   subscriptions, auditLog,
+  getPlatformBotToken: tenants.getPlatformBotToken,
+  recordAlias: settings.recordAlias,
+  recordKnownUser: settings.recordKnownUser,
 }));
 
 // Audit-log read endpoint (routes/audit.routes.js). Owner-only, spans ALL tenants.
