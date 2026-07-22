@@ -11,6 +11,9 @@
 //   GET    /api/admin/overview                           — dashboard counts (admin)
 //   GET    /api/admin/metrics/overview                   — Mission Control aggregates, ?range= ?scope= (admin)
 //   GET    /api/admin/metrics/live                       — Mission Control live tick, ?cursor= ?scope= (admin)
+//   GET    /api/admin/identity/proposals                 — alias-match link proposals (platform admin)
+//   POST   /api/admin/identity/apply                     — apply confirmed links (platform admin)
+//   POST   /api/admin/identity/unlink                    — reverse a link (platform admin)
 //   GET    /api/admin/platform-admins                    — list platform admins (platform admin)
 //   POST   /api/admin/platform-admins                    — add a DB platform admin
 //   DELETE /api/admin/platform-admins/:id                — remove a DB platform admin
@@ -27,6 +30,7 @@ const express = require('express');
 const { buildGotInWorkbook, ymdInTz } = require('../lib/gotin-export');
 const { CURRENCIES, inTenant } = require('../lib/hunts-core');
 const { computeOverviewMetrics, groupHuntsByCurrency } = require('../lib/adminMetrics');
+const { proposeFromAliases } = require('../lib/identityLink');
 
 module.exports = function adminRoutes(deps) {
   const {
@@ -36,7 +40,7 @@ module.exports = function adminRoutes(deps) {
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
     subscriptions, auditLog, getPlatformBotToken, recordAlias, recordKnownUser,
-    activityFeed, presence,
+    activityFeed, presence, findAliasOwners, persistHunts,
   } = deps;
   const router = express.Router();
 
@@ -282,6 +286,91 @@ module.exports = function adminRoutes(deps) {
       online: presence ? presence.countOnline(tenantSlug) : 0,
       hunts: huntRows, feed: events, cursor, generatedAt: Date.now(),
     });
+  });
+
+  // ── Identity linking (Tier 2) ──────────────────────────────────────────────
+  // Platform-wide alias matching is riskier than the hunt-local Tier 1 that runs on save, so it
+  // NEVER applies automatically: this proposes, a human confirms, and every applied link is
+  // audit-logged and reversible via /unlink below. Platform-admin only — this assigns identity,
+  // and identity drives payout attribution.
+  const identityKeyOf = (h) => h.huntId || `${h.user?.id}|${h.startedAt}`;
+  const everyHunt = () => [...Object.values(hunts), ...archive];
+  const huntByIdentityKey = (key) => everyHunt().find(h => identityKeyOf(h) === key) || null;
+
+  router.get('/api/admin/identity/proposals', requireAuth, requirePlatformAdmin, async (req, res) => {
+    const list = everyHunt();
+    // Collect every unlinked name across every hunt, then resolve them all in ONE alias query.
+    const names = new Set();
+    for (const h of list) {
+      for (const e of h.equity || []) if (e && !e.discordId && e.name) names.add(String(e.name).trim());
+      for (const c of h.calls  || []) if (c && !c.callerId && c.user) names.add(String(c.user).trim());
+    }
+    let owners = new Map();
+    try {
+      owners = findAliasOwners ? await findAliasOwners([...names]) : new Map();
+    } catch (e) { console.error('[admin] identity alias lookup failed:', e.message); }
+
+    const out = [];
+    let totalProposals = 0, totalAmbiguous = 0;
+    for (const h of list) {
+      const r = proposeFromAliases(h, owners);
+      if (!r.proposals.length && !r.ambiguous.length) continue;
+      totalProposals += r.proposals.length;
+      totalAmbiguous += r.ambiguous.length;
+      out.push({
+        huntKey: identityKeyOf(h),
+        hunterName: h.user?.displayName || h.user?.id || 'Unknown',
+        startedAt: h.startedAt || null,
+        proposals: r.proposals,
+        ambiguous: r.ambiguous,
+      });
+    }
+    res.json({ hunts: out, totals: { proposals: totalProposals, ambiguous: totalAmbiguous, names: names.size } });
+  });
+
+  router.post('/api/admin/identity/apply', requireAuth, requirePlatformAdmin, (req, res) => {
+    const links = Array.isArray(req.body?.links) ? req.body.links : [];
+    let applied = 0; const skipped = [];
+    for (const l of links) {
+      const h = huntByIdentityKey(l.huntKey);
+      if (!h) { skipped.push({ ...l, why: 'hunt not found' }); continue; }
+      // Re-verify server-side: a client proposal is a HINT, never the authority. State can have
+      // moved since the proposal was generated.
+      const row = l.kind === 'equity'
+        ? (h.equity || []).find(e => e && (e.id === l.id || String(e.name || '').trim() === l.name))
+        : (h.calls  || []).find(c => c && (c.id === l.id || String(c.user || '').trim() === l.name));
+      if (!row) { skipped.push({ ...l, why: 'row not found' }); continue; }
+      if (l.kind === 'equity' ? row.discordId : row.callerId) { skipped.push({ ...l, why: 'already linked' }); continue; }
+      if (!/^\d{17,20}$/.test(String(l.discordId || ''))) { skipped.push({ ...l, why: 'not a real Discord id' }); continue; }
+      if (l.kind === 'equity') row.discordId = String(l.discordId); else row.callerId = String(l.discordId);
+      applied++;
+      auditLog.recordFromReq(req, {
+        category: 'hunt', action: 'identity.link', targetId: String(l.discordId),
+        summary: `Linked ${l.kind} "${l.name}" to ${l.discordId}`,
+        detail: { huntKey: l.huntKey, kind: l.kind, rowId: l.id, name: l.name },
+      });
+    }
+    if (applied) { persistHunts(); persistArchive(); }
+    res.json({ applied, skipped });
+  });
+
+  router.post('/api/admin/identity/unlink', requireAuth, requirePlatformAdmin, (req, res) => {
+    const { huntKey, kind, id } = req.body || {};
+    const h = huntByIdentityKey(huntKey);
+    if (!h) return res.status(404).json({ error: 'Hunt not found' });
+    const row = kind === 'equity'
+      ? (h.equity || []).find(e => e && e.id === id)
+      : (h.calls  || []).find(c => c && c.id === id);
+    if (!row) return res.status(404).json({ error: 'Row not found' });
+    const was = kind === 'equity' ? row.discordId : row.callerId;
+    if (kind === 'equity') delete row.discordId; else delete row.callerId;
+    persistHunts(); persistArchive();
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'identity.unlink', targetId: was ? String(was) : null,
+      summary: `Unlinked ${kind} row in hunt ${huntKey}`,
+      detail: { huntKey, kind, rowId: id, previousId: was || null },
+    });
+    res.json({ ok: true });
   });
 
   // Cross-tenant community directory for the platform overseer grid (platform-admin only).
