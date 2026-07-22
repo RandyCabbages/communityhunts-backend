@@ -12,6 +12,7 @@
 const express = require('express');
 const { sanitizeBonusReplayUrls, bindEquityIdentityByName } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
+const { linkWithinHunt } = require('../lib/identityLink');
 
 module.exports = function callsRoutes(deps) {
   const {
@@ -149,12 +150,22 @@ module.exports = function callsRoutes(deps) {
     if (publicCallsPin !== undefined) hunt.publicCallsPin = publicCallsPin;
     if (currentSlot !== undefined) hunt.currentSlot = currentSlot;
     if (manualOrder !== undefined) hunt.manualOrder = manualOrder;
+    // Tier 1 identity linking — see the twin hook in routes/hunts.routes.js. BOTH save paths
+    // replace the whole arrays, so hooking only one leaves a silent gap for editor/admin edits.
+    const _linked = linkWithinHunt(hunt);
     hunt.updatedAt = new Date().toISOString();
     emitHuntUpdate(req.params.userId); // per-socket (persists + redacts anonymous names)
     emitHubUpdate(req.tenant.id);
     auditLog.recordHuntChange(req, _before,
       { bonuses: hunt.bonuses, equity: hunt.equity, calls: hunt.calls },
       { targetId: req.params.userId, targetName: hunt.user && hunt.user.displayName });
+    if (_linked.links.length) {
+      auditLog.recordFromReq(req, {
+        category: 'hunt', action: 'identity.autolink', targetId: req.params.userId,
+        summary: `${_linked.links.length} row(s) auto-linked to a Discord id`,
+        detail: { links: _linked.links },
+      });
+    }
     res.json({ok:true});
   });
 

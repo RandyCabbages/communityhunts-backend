@@ -667,6 +667,10 @@ app.use(require('./routes/admin.routes')({
   getPlatformBotToken: tenants.getPlatformBotToken,
   recordAlias: settings.recordAlias,
   recordKnownUser: settings.recordKnownUser,
+  // Identity linking (Tier 2 proposals): findAliasOwners resolves display names to account ids
+  // and returns a SET per name, so ambiguity is explicit rather than silently collapsed.
+  findAliasOwners: settings.findAliasOwners,
+  persistHunts,
 }));
 
 // Audit-log read endpoint (routes/audit.routes.js). Owner-only, spans ALL tenants.
