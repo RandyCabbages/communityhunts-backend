@@ -12,6 +12,7 @@
 const express = require('express');
 const { sanitizeBonusReplayUrls, bindEquityIdentityByName } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
+const { sanitizeChases } = require('../lib/chases');
 const { linkWithinHunt } = require('../lib/identityLink');
 
 module.exports = function callsRoutes(deps) {
@@ -136,10 +137,11 @@ module.exports = function callsRoutes(deps) {
     // Snapshot BEFORE any mutation — an editor deleting someone else's bonus is only visible
     // as a diff (the client replaces whole arrays). See lib/auditLog.recordHuntChange.
     const _before = { bonuses: [...(hunt.bonuses || [])], equity: [...(hunt.equity || [])], calls: [...(hunt.calls || [])] };
-    const { bonuses, equity, gifts, payouts, vault, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
+    const { bonuses, equity, gifts, chases, payouts, vault, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
     if (bonuses     !== undefined) hunt.bonuses     = sanitizeBonusReplayUrls(bonuses);
     if (equity      !== undefined) hunt.equity      = equity;
     if (gifts       !== undefined) hunt.gifts       = gifts;
+    if (chases      !== undefined) hunt.chases      = sanitizeChases(chases);
     if (payouts     !== undefined) hunt.payouts     = sanitizePayouts(payouts);
     if (vault       !== undefined) hunt.vault       = vault;
     if (calls       !== undefined) hunt.calls       = calls;

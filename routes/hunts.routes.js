@@ -15,6 +15,7 @@
 const express = require('express');
 const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquityMember } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
+const { sanitizeChases } = require('../lib/chases');
 const { diffOpenedBonuses } = require('../lib/activityFeed');
 const { linkWithinHunt } = require('../lib/identityLink');
 
@@ -315,10 +316,11 @@ module.exports = function huntsRoutes(deps) {
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 20, currency: 'USD', publicCalls: false, publicCallsPin: null
     };
-    const { bonuses, equity, gifts, payouts, vault, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
+    const { bonuses, equity, gifts, chases, payouts, vault, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[req.user.id].bonuses    = sanitizeBonusReplayUrls(bonuses);
     if (equity     !== undefined) hunts[req.user.id].equity     = equity;
     if (gifts      !== undefined) hunts[req.user.id].gifts      = gifts;
+    if (chases     !== undefined) hunts[req.user.id].chases     = sanitizeChases(chases);
     if (payouts    !== undefined) hunts[req.user.id].payouts    = sanitizePayouts(payouts);
     if (vault      !== undefined) hunts[req.user.id].vault      = vault;
     if (calls      !== undefined) hunts[req.user.id].calls      = calls;

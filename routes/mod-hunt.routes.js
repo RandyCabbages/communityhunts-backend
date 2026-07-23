@@ -11,6 +11,7 @@
 const express = require('express');
 const { sanitizeBonusReplayUrls } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
+const { sanitizeChases } = require('../lib/chases');
 
 // Audit summaries name the hunt, not its key: these are SHARED hunts, so `targetId` is the fixed
 // key (`__mod_hunt__:<tenant>`) rather than a user id, and a raw key reads as gibberish in the log.
@@ -65,10 +66,11 @@ module.exports = function modHuntRoutes(deps) {
       ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
       : { bonuses: [], equity: [], calls: [] };
     if (!hunts[key]) hunts[key] = emptyModHunt(req.tenant.id);
-    const { bonuses, equity, gifts, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
+    const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[key].bonuses    = sanitizeBonusReplayUrls(bonuses);
     if (equity     !== undefined) hunts[key].equity     = equity;
     if (gifts      !== undefined) hunts[key].gifts      = gifts;
+    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
     if (vault      !== undefined) hunts[key].vault      = vault;
     if (calls      !== undefined) hunts[key].calls      = calls;
@@ -205,10 +207,11 @@ module.exports = function modHuntRoutes(deps) {
       ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
       : { bonuses: [], equity: [], calls: [] };
     if (!hunts[key]) hunts[key] = emptyAffiliateHunt(req.tenant.id);
-    const { bonuses, equity, gifts, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
+    const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
     if (bonuses    !== undefined) hunts[key].bonuses    = sanitizeBonusReplayUrls(bonuses);
     if (equity     !== undefined) hunts[key].equity     = equity;
     if (gifts      !== undefined) hunts[key].gifts      = gifts;
+    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
     if (vault      !== undefined) hunts[key].vault      = vault;
     if (calls      !== undefined) hunts[key].calls      = calls;
