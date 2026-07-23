@@ -6,8 +6,12 @@ name: Reconcile Rainbet catalog (prune stale)
 # Railway's IP so it never contends with the in-process 10-min live sync.
 on:
   workflow_dispatch: {}
-  schedule:
-    - cron: '0 9 * * *'   # daily ~09:00 UTC; grace period tolerates Actions timing drift
+  # Dispatch-first rollout: run this manually from the Actions tab and spot-check the
+  # "newly marked" list against rainbet.com before arming the daily schedule. Uncomment
+  # the cron below only once a manual run's marked list is verified as genuine delistings
+  # (guards against a systematic games-API/catalog name divergence sweeping a real game).
+  # schedule:
+  #   - cron: '0 9 * * *'   # daily ~09:00 UTC; grace period tolerates Actions timing drift
 
 permissions:
   contents: write

@@ -79,7 +79,12 @@ async function main() {
   const browser = await chromium.launch({ headless: HEADLESS });
   let liveNames, providerCount, gameCount, cfCleared = true;
   try {
-    const ctx = await browser.newContext({ userAgent: 'Mozilla/5.0' });
+    // Mirror scripts/check_new_slots.js exactly — patchright's stealth relies on a
+    // coherent fingerprint; overriding the userAgent with a bare string re-trips
+    // Cloudflare's Managed Challenge and the crawl never clears.
+    const ctx = await browser.newContext({
+      viewport: { width: 1280, height: 900 }, locale: 'en-US', timezoneId: 'America/Chicago',
+    });
     const page = await ctx.newPage();
     if (!(await clearCloudflare(page))) {
       cfCleared = false;
