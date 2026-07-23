@@ -116,19 +116,36 @@ module.exports = function authRoutes(deps) {
   // Synthetic manual: rows are excluded (see lib/userIds.js).
   router.get('/api/known-users', requireAuth, async (req, res) => {
     if (!pgPool) return res.json([]);
+    // `?q=` switches from the bootstrap list to a server-side search. The bare list is capped at
+    // the 500 most recent logins, which is fine as a mount-time seed (it also feeds role-badge
+    // resolution) but silently hides everyone outside that window once a community passes 500
+    // sign-ins — and a host who can't find someone in the dropdown types the name instead, which
+    // is exactly how a row ends up back in the /admin/identity queue. Escape LIKE wildcards so a
+    // literal % or _ in a display name searches as itself.
+    const q = String(req.query.q || '').trim().slice(0, 60);
     try {
       // Real Discord logins only. Synthetic `manual:<name>` rows reach known_users via the
       // startup backfill and are indistinguishable from a login once there — they cluttered the
       // equity dropdown with people who never had an account. Filtering here rather than at the
       // call site keeps every consumer of this endpoint honest. Mirrors lib/userIds.isRealDiscordId;
       // the regex is inlined because this runs in Postgres, not Node.
-      const r = await pgPool.query(
-        `SELECT user_id AS id, display_name AS "displayName", avatar
-         FROM known_users
-         WHERE user_id ~ '^[0-9]{17,20}$'
-         ORDER BY last_seen DESC
-         LIMIT 500`
-      );
+      const r = q
+        ? await pgPool.query(
+            `SELECT user_id AS id, display_name AS "displayName", avatar
+             FROM known_users
+             WHERE user_id ~ '^[0-9]{17,20}$'
+               AND (display_name ILIKE $1 OR username ILIKE $1)
+             ORDER BY last_seen DESC
+             LIMIT 20`,
+            [`%${q.replace(/[\\%_]/g, m => `\\${m}`)}%`]
+          )
+        : await pgPool.query(
+            `SELECT user_id AS id, display_name AS "displayName", avatar
+             FROM known_users
+             WHERE user_id ~ '^[0-9]{17,20}$'
+             ORDER BY last_seen DESC
+             LIMIT 500`
+          );
       res.json(r.rows);
     } catch(e) {
       console.error('[known_users] list failed:', e.message);
