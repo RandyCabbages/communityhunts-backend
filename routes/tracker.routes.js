@@ -51,7 +51,11 @@ module.exports = function trackerRoutes(deps) {
       bonuses: [],
       calls: [],
       invitedEditors: [],
-      equity: [{ id: 'creator_auto', name: req.user.displayName || '', amount: 0, isRollWinner: false }],
+      // discordId: the creator is authenticated here, so this row is a verified identity — without
+      // it the host's own name lands in the /admin/identity review queue (see lib/hunts-core.js
+      // initialEquity). Kept inline rather than calling initialEquity because this seed is
+      // deliberately amount-0 regardless of any balance.
+      equity: [{ id: 'creator_auto', discordId: String(req.user.id), name: req.user.displayName || '', amount: 0, isRollWinner: false }],
       callLimit: 0,
       roundRobin: false,
       currency: req.body.currency || 'USD',
