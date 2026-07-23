@@ -14,15 +14,19 @@ const { sanitizeBonusReplayUrls, bindEquityIdentityByName, preserveRowIdentity }
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { linkWithinHunt } = require('../lib/identityLink');
+const { vetEquityIdentity, vetCallerIdentity } = require('../lib/identityWrites');
 
 module.exports = function callsRoutes(deps) {
   const {
     hunts, io, persistHunts,
     requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged,
     normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
-    auditLog, activityFeed,
+    auditLog, activityFeed, getKnownUser,
   } = deps;
   const router = express.Router();
+
+  // See the twin in routes/hunts.routes.js — an editor's save is vetted the same way an owner's is.
+  const isKnownAccount = getKnownUser ? (id) => getKnownUser(id) : null;
 
   // huntCallRequests[huntOwnerId] = [{id, userId, displayName, avatar, requestedAt}]
   const huntCallRequests = {};
@@ -129,7 +133,7 @@ module.exports = function callsRoutes(deps) {
   });
 
   // ── Edit any hunt (admin/editor) ───────────────────────────────────
-  router.put('/api/hunts/:userId', requireAuth, (req, res) => {
+  router.put('/api/hunts/:userId', requireAuth, async (req, res) => {
     if (!canEditHunt(req, req.params.userId)) return res.status(403).json({error:'Not authorised'});
     const hunt = hunts[req.params.userId];
     if (!hunt) return res.status(404).json({error:'Hunt not found'});
@@ -138,14 +142,18 @@ module.exports = function callsRoutes(deps) {
     // as a diff (the client replaces whole arrays). See lib/auditLog.recordHuntChange.
     const _before = { bonuses: [...(hunt.bonuses || [])], equity: [...(hunt.equity || [])], calls: [...(hunt.calls || [])] };
     const { bonuses, equity, gifts, chases, payouts, vault, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
-    // See routes/hunts.routes.js — an editor's client copy is masked the same way the owner's is.
-    if (bonuses     !== undefined) hunt.bonuses     = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
-    if (equity      !== undefined) hunt.equity      = preserveRowIdentity(_before.equity, equity, 'discordId');
+    // See routes/hunts.routes.js for the vet-then-preserve ordering and why equity goes first.
+    const _idAudit = { accepted: [], rejected: [] };
+    const _vetted = (v) => { _idAudit.accepted.push(...v.accepted); _idAudit.rejected.push(...v.rejected); return v.rows; };
+
+    if (equity      !== undefined) hunt.equity      = preserveRowIdentity(_before.equity, _vetted(await vetEquityIdentity(_before.equity, equity, { isKnownAccount })), 'discordId');
+    const _eq = hunt.equity;
+    if (bonuses     !== undefined) hunt.bonuses     = preserveRowIdentity(_before.bonuses, _vetted(vetCallerIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), _eq)), 'callerId');
     if (gifts       !== undefined) hunt.gifts       = gifts;
     if (chases      !== undefined) hunt.chases      = sanitizeChases(chases);
     if (payouts     !== undefined) hunt.payouts     = sanitizePayouts(payouts);
     if (vault       !== undefined) hunt.vault       = vault;
-    if (calls       !== undefined) hunt.calls       = preserveRowIdentity(_before.calls, calls, 'callerId');
+    if (calls       !== undefined) hunt.calls       = preserveRowIdentity(_before.calls, _vetted(vetCallerIdentity(_before.calls, calls, _eq)), 'callerId');
     if (huntType    !== undefined) hunt.huntType    = huntType;
     if (callLimit   !== undefined) hunt.callLimit   = callLimit;
     if (huntMode    !== undefined) hunt.huntMode    = huntMode;
@@ -170,6 +178,13 @@ module.exports = function callsRoutes(deps) {
         category: 'hunt', action: 'identity.autolink', targetId: req.params.userId,
         summary: `${_linked.links.length} row(s) auto-linked to a Discord id`,
         detail: { links: _linked.links },
+      });
+    }
+    if (_idAudit.accepted.length || _idAudit.rejected.length) {
+      auditLog.recordFromReq(req, {
+        category: 'hunt', action: 'identity.set', targetId: req.params.userId,
+        summary: `${_idAudit.accepted.length} identity write(s) accepted, ${_idAudit.rejected.length} rejected`,
+        detail: _idAudit,
       });
     }
     res.json({ok:true});

@@ -555,6 +555,8 @@ app.use(require('./routes/calls.routes')({
   requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged,
   normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
   auditLog, activityFeed,
+  // Vets client-supplied equity discordIds on the editor save path (lib/identityWrites.js).
+  getKnownUser: settings.getKnownUser,
 }));
 
 // Share-link routes (routes/share.routes.js): token mint + public resolve.
