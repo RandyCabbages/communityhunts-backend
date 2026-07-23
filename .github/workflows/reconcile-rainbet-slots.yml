@@ -1,0 +1,54 @@
+name: Reconcile Rainbet catalog (prune stale)
+
+# Authoritatively enumerates Rainbet's live catalog (games API, per-provider,
+# region-inclusive) and mark-then-sweeps stale entries from rainbet_slots.json,
+# plus emits rainbet_live_names.json (gates the slot.report merge). Runs OFF
+# Railway's IP so it never contends with the in-process 10-min live sync.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 9 * * *'   # daily ~09:00 UTC; grace period tolerates Actions timing drift
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Install xvfb (headed browser needs a virtual display)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Run reconciliation
+        env:
+          SCRAPE_HEADLESS: 'false'
+        run: xvfb-run -a node scripts/reconcile_rainbet.js
+
+      - name: Commit & push if catalog changed
+        run: |
+          if [ -z "$(git status --porcelain rainbet_slots.json rainbet_live_names.json)" ]; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git config user.name "rainbet-slots-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add rainbet_slots.json rainbet_live_names.json
+          git commit -m "auto: reconcile rainbet catalog ($(date -u +%Y-%m-%d))"
+          # The Railway live sync may have pushed a new-releases commit meanwhile.
+          git pull --rebase origin main || { echo "rebase failed"; exit 1; }
+          git push
