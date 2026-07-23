@@ -13,7 +13,7 @@
 // hunts/archive are persistence-owned singletons (by reference). hunt:update via publicHuntView.
 
 const express = require('express');
-const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquityMember, initialEquity } = require('../lib/hunts-core');
+const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquityMember, initialEquity, preserveRowIdentity } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { diffOpenedBonuses } = require('../lib/activityFeed');
@@ -300,13 +300,16 @@ module.exports = function huntsRoutes(deps) {
       huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 20, currency: 'USD', publicCalls: false, publicCallsPin: null
     };
     const { bonuses, equity, gifts, chases, payouts, vault, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
-    if (bonuses    !== undefined) hunts[req.user.id].bonuses    = sanitizeBonusReplayUrls(bonuses);
-    if (equity     !== undefined) hunts[req.user.id].equity     = equity;
+    // preserveRowIdentity: the client's copy came back through publicHuntView, which strips
+    // discordId/callerId — assigning it raw deletes identity the server established. See
+    // lib/hunts-core.js.
+    if (bonuses    !== undefined) hunts[req.user.id].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
+    if (equity     !== undefined) hunts[req.user.id].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
     if (gifts      !== undefined) hunts[req.user.id].gifts      = gifts;
     if (chases     !== undefined) hunts[req.user.id].chases     = sanitizeChases(chases);
     if (payouts    !== undefined) hunts[req.user.id].payouts    = sanitizePayouts(payouts);
     if (vault      !== undefined) hunts[req.user.id].vault      = vault;
-    if (calls      !== undefined) hunts[req.user.id].calls      = calls;
+    if (calls      !== undefined) hunts[req.user.id].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
     if (huntType   !== undefined) {
       if (huntType === 'vip' && !reqIsMod(req))
         return res.status(403).json({error:'Not authorised for VIP hunt'});
