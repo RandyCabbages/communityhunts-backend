@@ -92,6 +92,10 @@ const SLUG_FIXES = {
   // thumb (falls back to slot.report's generic placeholder). Collapse onto the reviewed
   // "mr-nulls-wicked-wares" row, which carries a real Rainbet-CDN thumb. Verified on rainbet.com.
   'pragmatic-play-mr-null-s-wicked-wares': 'pragmatic-play-mr-nulls-wicked-wares',
+  // slot.report constructs "six-six-six"; Rainbet serves this Hacksaw game as one word,
+  // hacksaw-sixsixsix (its CDN thumb is SixSixSix.png). The dashed row only had a slot.report
+  // thumb; collapse onto the reviewed "sixsixsix" row (real Rainbet-CDN thumb). Verified on rainbet.com.
+  'hacksaw-six-six-six': 'hacksaw-sixsixsix',
 };
 
 const RELEVANT_PROVIDERS = new Set([
