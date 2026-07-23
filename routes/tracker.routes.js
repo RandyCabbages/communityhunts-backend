@@ -5,6 +5,7 @@
 const express = require('express');
 const { sanitizeBonusReplayUrls } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
+const { sanitizeChases } = require('../lib/chases');
 
 module.exports = function trackerRoutes(deps) {
   const {
@@ -70,13 +71,14 @@ module.exports = function trackerRoutes(deps) {
     const hunt = hunts[key];
     if (!hunt) return res.status(404).json({ error: 'No active hunt' });
 
-    const allowed = ['bonuses', 'equity', 'gifts', 'payouts', 'vault', 'calls', 'callLimit', 'huntMode', 'lockTop4',
+    const allowed = ['bonuses', 'equity', 'gifts', 'chases', 'payouts', 'vault', 'calls', 'callLimit', 'huntMode', 'lockTop4',
       'roundRobin', 'currentSlot', 'manualOrder', 'huntType', 'currency'];
     for (const f of allowed) {
       if (req.body[f] === undefined) continue;
       let v = req.body[f];
       if (f === 'bonuses') v = sanitizeBonusReplayUrls(v);
       else if (f === 'payouts') v = sanitizePayouts(v);
+      else if (f === 'chases') v = sanitizeChases(v);
       hunt[f] = v;
     }
     touch(hunt);
