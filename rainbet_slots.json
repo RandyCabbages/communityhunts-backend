@@ -46118,5 +46118,15 @@
     "rainbetSlug": "popiplay-dirty-dates",
     "name": "Dirty Dates",
     "thumb": "https://cdn.rainbet.com/slots/Dirty%20Dates.png"
+  },
+  {
+    "rainbetSlug": "play-n-go-ghost-booster",
+    "name": "Ghost Booster",
+    "thumb": "https://cdn.softswiss.net/i/s4/playngo/GhostBooster.webp"
+  },
+  {
+    "rainbetSlug": "play-n-go-phoenix-frenzy-triple-win",
+    "name": "Phoenix Frenzy Triple Win",
+    "thumb": "https://cdn.softswiss.net/i/s4/playngo/PhoenixFrenzyTripleWin.webp"
   }
 ]
