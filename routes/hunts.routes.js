@@ -13,7 +13,7 @@
 // hunts/archive are persistence-owned singletons (by reference). hunt:update via publicHuntView.
 
 const express = require('express');
-const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquityMember } = require('../lib/hunts-core');
+const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquityMember, initialEquity } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { diffOpenedBonuses } = require('../lib/activityFeed');
@@ -133,25 +133,8 @@ module.exports = function huntsRoutes(deps) {
   // ── My hunt ────────────────────────────────────────────────────────
   router.get('/api/my-hunt', requireAuth, (req, res) => res.json(hunts[req.user.id] || null));
 
-  // Seed equity when a hunt is created/reset: VIP starts with Bean, solo with
-  // just the runner, community empty.
-  function initialEquity(huntType, user, tenant, balance) {
-    const userName = user?.displayName || user?.username || '';
-    if (huntType === 'vip') {
-      const b = (tenant && tenant.branding) || {};
-      const hostName = b.hostName || 'Bean';
-      const hostId   = (tenant && tenant.hostDiscordId) || null;
-      // Interim id: keep 'bean_auto' for the Bean tenant so the live frontend's crown logic
-      // is unaffected until the frontend keys the crown off discordId/crownDiscordId.
-      const id = (tenant && tenant.slug && tenant.slug !== 'bean') ? `host_auto:${tenant.slug}` : 'bean_auto';
-      return [{ id, discordId: hostId, name: hostName, amount: balance != null ? balance : 1000, isRollWinner: false }];
-    }
-    if (huntType === 'solo') return [{ id:'creator_auto', name: userName, amount: balance != null ? balance : 0, isRollWinner: false }];
-    // community: always seed the host (creator) so the runner is present even without a
-    // starting balance (amount = the balance if given, else 0). Also covers reset, which
-    // calls initialEquity('community', …) with no balance.
-    return [{ id:'creator_auto', name: userName, amount: balance != null ? balance : 0, isRollWinner: false }];
-  }
+  // Equity seeding lives in lib/hunts-core.js (initialEquity) — it is identity-bearing and unit
+  // tested there alongside the identity-link rails it feeds.
 
   router.post('/api/my-hunt/start', requireAuth, (req, res) => {
     const { huntType = 'community', startingBalance, currency, pullPreferredSlots } = req.body;

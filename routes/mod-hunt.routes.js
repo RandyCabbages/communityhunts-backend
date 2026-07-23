@@ -36,6 +36,21 @@ module.exports = function modHuntRoutes(deps) {
     return t?.branding?.hostName || t?.displayName || 'Bean';
   }
 
+  // The host equity row below is written by the server from tenant config, not typed by anyone, so
+  // it carries the tenant's configured host id. Without it the host's display name shows up in the
+  // /admin/identity review queue as if it were an unidentified participant, and Tier 1 has no seed
+  // to link this hunt's typed caller names against. Null for a tenant with no hostDiscordId — the
+  // row then seeds without the field rather than with a junk one.
+  function hostIdFor(tenantId) {
+    const t = tenants.getTenantBySlug(tenantId) || tenants.getTenantBySlug('bean');
+    return t?.hostDiscordId || null;
+  }
+  const hostEquityRow = (tenantId, amount) => {
+    const row = { id: 'bean_auto', name: hostNameFor(tenantId), amount, isRollWinner: false };
+    const id = hostIdFor(tenantId);
+    return id ? { ...row, discordId: String(id) } : row;
+  };
+
   // ── Mod hunt — private solo hunt run jointly by a community's Mods ────
   // Stored under modHuntKey(tenantId) so Bean's OBS overlay link never changes.
   // Never appears on Hub or archive listings.
@@ -45,7 +60,7 @@ module.exports = function modHuntRoutes(deps) {
       huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null,
       tenantId: tenantId || 'bean',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      huntType: 'solo', bonuses: [], equity: [{ id: 'bean_auto', name: hostNameFor(tenantId), amount: 0, isRollWinner: false }],
+      huntType: 'solo', bonuses: [], equity: [hostEquityRow(tenantId, 0)],
       calls: [], invitedEditors: [], callLimit: 0, huntMode: 'hunting',
       roundRobin: false, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null,
     };
@@ -185,9 +200,7 @@ module.exports = function modHuntRoutes(deps) {
       tenantId: tenantId || 'bean',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       huntType: 'vip', bonuses: [],
-      equity: [
-        { id: 'bean_auto', name: hostNameFor(tenantId), amount: 1000, isRollWinner: false },
-      ],
+      equity: [hostEquityRow(tenantId, 1000)],
       calls: [], invitedEditors: [], callLimit: 10, huntMode: 'hunting',
       roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null,
     };
