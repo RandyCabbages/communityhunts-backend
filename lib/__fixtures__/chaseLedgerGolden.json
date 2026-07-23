@@ -42,6 +42,26 @@
         "plNet": { "alice": -162.5, "bob": 22.5, "carol": -80 },
         "totalPaid": 780
       }
+    },
+    {
+      "name": "equal split ignores stake, sitter still protected",
+      "input": {
+        "equity": [
+          { "id": "alice", "name": "Alice", "amount": 500 },
+          { "id": "bob", "name": "Bob", "amount": 300 },
+          { "id": "carol", "name": "Carol", "amount": 200 }
+        ],
+        "gifts": [],
+        "chases": [
+          { "id": "r1", "createdAt": 1, "endBalance": 500, "split": "equal", "participants": [{ "id": "alice", "deposit": 0 }, { "id": "carol", "deposit": 0 }] }
+        ],
+        "totalWon": 400
+      },
+      "expect": {
+        "finalPayout": { "alice": 250, "bob": 120, "carol": 250 },
+        "plNet": { "alice": -250, "bob": -180, "carol": 50 },
+        "totalPaid": 620
+      }
     }
   ]
 }
