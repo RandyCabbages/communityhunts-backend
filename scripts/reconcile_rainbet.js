@@ -77,17 +77,23 @@ async function main() {
   const { chromium } = require('patchright');
 
   const browser = await chromium.launch({ headless: HEADLESS });
-  let liveNames, providerCount, gameCount;
+  let liveNames, providerCount, gameCount, cfCleared = true;
   try {
     const ctx = await browser.newContext({ userAgent: 'Mozilla/5.0' });
     const page = await ctx.newPage();
     if (!(await clearCloudflare(page))) {
-      console.error('[reconcile] Cloudflare did not clear — aborting, no write');
-      process.exit(1);
+      cfCleared = false;
+    } else {
+      ({ liveNames, providerCount, gameCount } = await enumerateLiveNames(page));
     }
-    ({ liveNames, providerCount, gameCount } = await enumerateLiveNames(page));
   } finally {
+    // Close the browser on every path. Do NOT process.exit inside the try —
+    // that skips this finally and leaks the headed Chromium; abort after close.
     await browser.close().catch(() => {});
+  }
+  if (!cfCleared) {
+    console.error('[reconcile] Cloudflare did not clear — aborting, no write');
+    process.exit(1);
   }
 
   const entries = JSON.parse(fs.readFileSync(SLOTS_FILE, 'utf8'));
