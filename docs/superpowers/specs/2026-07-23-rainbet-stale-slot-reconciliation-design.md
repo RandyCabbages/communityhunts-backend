@@ -19,6 +19,25 @@ We want a periodic reconciliation that authoritatively enumerates what Rainbet *
 carries* and prunes what's gone — **without ever deleting a real game** because a single scrape
 was rate-limited, region-filtered, or half-broken.
 
+## The two picker feeds (why file-only pruning is not enough)
+
+`lib/slots.js rebuildSearchPool` builds the autocomplete pool from **two** feeds:
+
+1. **File entries** (`RAINBET_SLOTS` from `rainbet_slots.json`) — authoritative, pruned by this job.
+2. **slot.report merge** — gap-fills with slot.report games not in the file, gated only by
+   "has a trusted thumb" (`if (!thumb) continue`, `lib/slots.js:363`).
+
+slot.report's catalog is **much broader than Rainbet's** (it lists games from many casinos), so
+feed 2 injects games Rainbet never carried — e.g. "Power of Ninja" (Pragmatic Play): confirmed
+absent from Rainbet via their own games API (`search=ninja` returns six ninja slots, none of them
+Power of Ninja; provider `pragmatic-play` has 618 slots, this isn't one). Its slot.report thumb
+(`pragmaticplay.com/...Power-of-Ninja...png`) now 307-redirects to HTML, so it renders as a black
+/ broken tile. **Pruning only the file would never remove it — it isn't in the file.**
+
+So this job must ALSO constrain feed 2. Since the job already computes Rainbet's authoritative
+live-name-set, it **commits that set as an artifact** (`rainbet_live_names.json`) and the merge
+gates on it (see "Component: merge gating" below). This closes the ghost path at its real source.
+
 ## Non-goals
 
 - Not changing the every-10-min live add-only sync (`lib/rainbetSlotSync.js` /
@@ -38,7 +57,10 @@ once a day. The script:
    `missingSince` stamp; entries present get it cleared; entries stamped **older than 3 days**
    are removed.
 3. Two hard safety gates abort the run (write nothing) if the crawl looks broken.
-4. Commits the changed file (rebase-retry on push contention with the live sync).
+4. Writes the live-name-set as a committed artifact (`rainbet_live_names.json`) that gates the
+   backend's slot.report merge feed — so ghosts that live in the merge (not the file) are also
+   suppressed.
+5. Commits the changed files (rebase-retry on push contention with the live sync).
 
 ### Why Actions, not in-process on Railway
 
@@ -136,6 +158,36 @@ chromium` + `apt-get install xvfb`), differing in:
   forward (the live Railway sync may have pushed a new-releases commit in between). Same race the
   local-dev workaround already handles. Commit message: `auto: reconcile rainbet catalog (sweep N stale)`.
 
+## Component: `rainbet_live_names.json` artifact + merge gating
+
+The reconciliation script writes, alongside the pruned catalog, a small committed artifact:
+
+```json
+{ "generatedAt": "2026-07-23T09:00:00Z", "names": ["gatesofolympus", "sixsixsix", ...] }
+```
+
+`names` is the sorted set of `nameKey`-normalized live Rainbet game names from the crawl. It is
+only written when both safety gates pass (never an empty/partial set).
+
+`lib/slots.js` loads it at startup and on change (it deploys with the backend). In
+`rebuildSearchPool` **step 2 only**, add one guard right after the name is computed:
+
+```js
+if (liveNames.size && !liveNames.has(nameKey(name))) continue; // not a real Rainbet game
+```
+
+- **Fail-open:** if the artifact is missing or empty (`liveNames.size === 0`), the guard is a
+  no-op — behavior is exactly as today. The gate can only ever *tighten* when we have a trusted
+  set, never hide games because the file failed to load.
+- **Step 1 (file feed) is NOT gated** — the job already pruned the file, and gating it too would
+  double-jeopardy a real game on one bad crawl. The artifact only disciplines the unverified
+  slot.report merge.
+- **Latency:** a brand-new Rainbet release that's in slot.report but not yet in the file *or* in
+  today's live-name snapshot is briefly not merged — it appears within a day (next snapshot) or
+  sooner via the 10-min file sync. Acceptable, self-healing.
+- Use the same `nameKey` (strip-all-spaces/punct) on both sides so spacing/punctuation never
+  causes a false miss.
+
 ## Data flow
 
 ```
@@ -149,7 +201,9 @@ chromium` + `apt-get install xvfb`), differing in:
         → clear stamps for live games
         → stamp newly-absent games (missingSince = today)
         → sweep games stamped > 3 days ago
-  → if changed: write file → git pull --rebase → commit → push
+  → if changed: write rainbet_slots.json + rainbet_live_names.json
+       → git pull --rebase → commit → push
+  → (backend loads rainbet_live_names.json → gates slot.report merge feed)
 ```
 
 ## Error handling
@@ -175,6 +229,9 @@ chromium` + `apt-get install xvfb`), differing in:
     `nameKey`, kept (guards the slug-mismatch false-positive).
 - **Gates:** unit-test that `reconcile`/driver refuses to write when the live set is empty / below
   floor (simulate by passing a tiny liveNameSet + assert no sweep, or a separate gate function).
+- **Merge gating (pure):** unit-test `rebuildSearchPool`'s step-2 guard — a slot.report game NOT
+  in `liveNames` is dropped; one that IS in `liveNames` is kept; an empty `liveNames` set gates
+  nothing (fail-open, current behavior). Use the existing pool-build test harness if present.
 - **Integration (crawl/CF):** not unit-tested; validated manually via `--dry-run` locally before
   enabling the schedule, and by the first few real Actions runs (dry-run mode first, then arm).
 
