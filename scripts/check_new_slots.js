@@ -19,6 +19,27 @@ const SLOTS_URL = 'https://rainbet.com/casino/slots';
 const SLOTS_FILE = path.join(process.cwd(), 'rainbet_slots.json');
 const MAX_RETRIES = 3;
 
+// Ghost guard (2026-07-22): confirm a candidate's thumbnail actually resolves before
+// writing it to the file. This stops dead SoftSwiss *guesses* (and thumbless rows) for
+// games Rainbet doesn't carry from entering the catalog — those rendered as missing-thumb
+// "ghost" tiles in the slot picker. Real Rainbet games (Strategy 1/3 carry live CDN
+// thumbs; Strategy 2 reviewed thumbs) pass; a guess that happens to be live also passes
+// and is kept. Rainbet's own CDN 401s to a bare request but renders in-app, so a 401 is
+// trusted rather than dropped.
+async function thumbResolves(url) {
+  if (!url || !url.trim()) return false;
+  try {
+    const res = await fetch(url, { headers: { Referer: 'https://communityhunts.gg', 'User-Agent': 'Mozilla/5.0' } });
+    if (res.status === 401) return true;
+    if (!res.ok) return false;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < 800) return false;
+    // slot.report's generic placeholder (1000x563, ~7790 bytes) is not a real thumb
+    if (/slot\.report\/images\/slots\//.test(url) && buf.length === 7790) return false;
+    return true;
+  } catch { return false; }
+}
+
 // Cloudflare's Managed Challenge on rainbet.com no longer clears for headless
 // Chromium (even patched via patchright) — it hangs on "Checking your browser…"
 // → "Just a moment…" forever. A HEADED browser clears it in ~5s. Default stays
@@ -549,21 +570,46 @@ async function runCheck() {
   // rate limit and drops messages (including the summary line below).
   const LOG_SAMPLE = 20;
   let addedCount = 0, upgradedCount = 0;
+
+  // Ghost guard (2026-07-22): pre-verify every candidate thumbnail that could be written
+  // (a new slot, or a thumb upgrade of an existing null-thumb row). Only slots whose thumb
+  // actually resolves are added/upgraded — dead SoftSwiss guesses / thumbless slot.report
+  // rows for games Rainbet doesn't carry are skipped, so the picker stops showing
+  // missing-thumb "ghost" tiles. Bounded to candidates (usually few per cycle).
+  const toVerify = new Set();
+  for (const g of candidates) {
+    const ex = existingBySlug.get(g.rainbetSlug.toLowerCase());
+    if (ex) { if (g.thumb && !ex.thumb) toVerify.add(g.thumb); }
+    else if (g.thumb) toVerify.add(g.thumb);
+  }
+  const thumbOk = new Map();
+  if (toVerify.size) {
+    const urls = [...toVerify]; let vi = 0;
+    await Promise.all(Array.from({ length: 20 }, async () => {
+      while (vi < urls.length) { const u = urls[vi++]; thumbOk.set(u, await thumbResolves(u)); }
+    }));
+    const live = [...thumbOk.values()].filter(Boolean).length;
+    console.log(`[check] verified ${urls.length} candidate thumbnail(s) — ${live} live, ${urls.length - live} dead/skipped`);
+  }
+  const thumbLive = t => !!t && thumbOk.get(t) === true;
+
   for (const g of candidates) {
     const key = g.rainbetSlug.toLowerCase();
     const existingEntry = existingBySlug.get(key);
     if (existingEntry) {
-      // Was a null-thumb placeholder — upgrade it in place now that a thumb exists.
-      if (g.thumb && !existingEntry.thumb) {
+      // Was a null-thumb placeholder — upgrade it in place now that a verified thumb exists.
+      if (g.thumb && !existingEntry.thumb && thumbLive(g.thumb)) {
         existingEntry.thumb = g.thumb;
         upgradedCount++;
         if (upgradedCount <= LOG_SAMPLE) console.log(`  ↑ upgraded thumbnail: ${g.name}  [${g.rainbetSlug}]`);
       }
     } else {
+      // Only add a genuinely-new slot if its thumbnail resolves (no ghost rows).
+      if (!thumbLive(g.thumb)) continue;
       kept.push(g);
       existingBySlug.set(key, g);
       addedCount++;
-      if (addedCount <= LOG_SAMPLE) console.log(`  + ${g.name}  [${g.rainbetSlug}]${g.thumb ? '' : ' (no thumb yet)'}`);
+      if (addedCount <= LOG_SAMPLE) console.log(`  + ${g.name}  [${g.rainbetSlug}]`);
     }
   }
   if (addedCount > LOG_SAMPLE) console.log(`  … and ${addedCount - LOG_SAMPLE} more added`);
