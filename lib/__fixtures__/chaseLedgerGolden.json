@@ -1,0 +1,47 @@
+{
+  "cases": [
+    {
+      "name": "two rounds with deposit, sitter protected",
+      "input": {
+        "equity": [
+          { "id": "alice", "name": "Alice", "amount": 500 },
+          { "id": "bob", "name": "Bob", "amount": 300 },
+          { "id": "carol", "name": "Carol", "amount": 200 }
+        ],
+        "gifts": [],
+        "chases": [
+          { "id": "r1", "createdAt": 1, "endBalance": 700, "participants": [{ "id": "alice", "deposit": 0 }, { "id": "bob", "deposit": 0 }] },
+          { "id": "r2", "createdAt": 2, "endBalance": 500, "participants": [{ "id": "alice", "deposit": 100 }, { "id": "bob", "deposit": 0 }] }
+        ],
+        "totalWon": 400
+      },
+      "expect": {
+        "finalPayout": { "alice": 335.94, "bob": 164.06, "carol": 80 },
+        "plNet": { "alice": -264.06, "bob": -135.94, "carol": -120 },
+        "totalPaid": 580
+      }
+    },
+    {
+      "name": "give-back after a winning chase (payout gift on post-chase numbers)",
+      "input": {
+        "equity": [
+          { "id": "alice", "name": "Alice", "amount": 500 },
+          { "id": "bob", "name": "Bob", "amount": 300 },
+          { "id": "carol", "name": "Carol", "amount": 200 }
+        ],
+        "gifts": [
+          { "id": "g1", "type": "payout", "amount": 100, "funderId": "alice", "split": "proportional", "excludeIds": [], "createdAt": 3 }
+        ],
+        "chases": [
+          { "id": "r1", "createdAt": 1, "endBalance": 700, "participants": [{ "id": "alice", "deposit": 0 }, { "id": "bob", "deposit": 0 }] }
+        ],
+        "totalWon": 400
+      },
+      "expect": {
+        "finalPayout": { "alice": 337.5, "bob": 322.5, "carol": 120 },
+        "plNet": { "alice": -162.5, "bob": 22.5, "carol": -80 },
+        "totalPaid": 780
+      }
+    }
+  ]
+}
