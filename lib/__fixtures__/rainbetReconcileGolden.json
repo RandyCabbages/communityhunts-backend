@@ -1,0 +1,60 @@
+{
+  "cases": [
+    {
+      "name": "live game with old stamp is cleared and kept",
+      "graceDays": 3,
+      "now": "2026-07-23T12:00:00Z",
+      "liveNames": ["sixsixsix"],
+      "entries": [{ "name": "SixSixSix", "rainbetSlug": "hacksaw-sixsixsix", "thumb": "t", "missingSince": "2026-07-01" }],
+      "expect": { "keptNames": ["SixSixSix"], "missingSinceByName": { "SixSixSix": null }, "marked": 0, "cleared": 1, "swept": 0 }
+    },
+    {
+      "name": "live game without stamp is unchanged",
+      "graceDays": 3,
+      "now": "2026-07-23T12:00:00Z",
+      "liveNames": ["gatesofolympus"],
+      "entries": [{ "name": "Gates of Olympus", "rainbetSlug": "pragmatic-play-gates-of-olympus", "thumb": "t" }],
+      "expect": { "keptNames": ["Gates of Olympus"], "missingSinceByName": { "Gates of Olympus": null }, "marked": 0, "cleared": 0, "swept": 0 }
+    },
+    {
+      "name": "newly-absent game is stamped now and kept",
+      "graceDays": 3,
+      "now": "2026-07-23T12:00:00Z",
+      "liveNames": ["gatesofolympus"],
+      "entries": [{ "name": "Payday", "rainbetSlug": "nolimit-payday", "thumb": "t" }],
+      "expect": { "keptNames": ["Payday"], "missingSinceByName": { "Payday": "2026-07-23" }, "marked": 1, "cleared": 0, "swept": 0 }
+    },
+    {
+      "name": "absent stamped 2 days ago is kept (within grace)",
+      "graceDays": 3,
+      "now": "2026-07-23T12:00:00Z",
+      "liveNames": ["gatesofolympus"],
+      "entries": [{ "name": "Payday", "rainbetSlug": "nolimit-payday", "thumb": "t", "missingSince": "2026-07-21" }],
+      "expect": { "keptNames": ["Payday"], "missingSinceByName": { "Payday": "2026-07-21" }, "marked": 0, "cleared": 0, "swept": 0 }
+    },
+    {
+      "name": "absent stamped 4 days ago is swept",
+      "graceDays": 3,
+      "now": "2026-07-23T12:00:00Z",
+      "liveNames": ["gatesofolympus"],
+      "entries": [{ "name": "Payday", "rainbetSlug": "nolimit-payday", "thumb": "t", "missingSince": "2026-07-19" }],
+      "expect": { "keptNames": [], "missingSinceByName": {}, "marked": 0, "cleared": 0, "swept": 1 }
+    },
+    {
+      "name": "absent stamped exactly graceDays ago is kept (strictly older-than)",
+      "graceDays": 3,
+      "now": "2026-07-23T00:00:00Z",
+      "liveNames": ["gatesofolympus"],
+      "entries": [{ "name": "Payday", "rainbetSlug": "nolimit-payday", "thumb": "t", "missingSince": "2026-07-20" }],
+      "expect": { "keptNames": ["Payday"], "missingSinceByName": { "Payday": "2026-07-20" }, "marked": 0, "cleared": 0, "swept": 0 }
+    },
+    {
+      "name": "name differing only by spacing/punctuation matches via nameKey",
+      "graceDays": 3,
+      "now": "2026-07-23T12:00:00Z",
+      "liveNames": ["phoenixduelreels"],
+      "entries": [{ "name": "Phoenix Duel Reels", "rainbetSlug": "hacksaw-phoenix-duelreels", "thumb": "t", "missingSince": "2026-07-01" }],
+      "expect": { "keptNames": ["Phoenix Duel Reels"], "missingSinceByName": { "Phoenix Duel Reels": null }, "marked": 0, "cleared": 1, "swept": 0 }
+    }
+  ]
+}
