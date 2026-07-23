@@ -31,36 +31,60 @@ No build step — pure Node.js. Runs on port `3001` or `process.env.PORT`.
 
 ## Deploy Workflow
 
+**Never commit to `main`.** Branch and open a PR, even for a one-line change. Two people push
+to this remote in tandem and `main` auto-deploys to production on merge, so a direct push is
+both a merge-race risk and an untested deploy.
+
 ```bash
-git pull origin main       # always pull first — Railway may be ahead of local
-git add server.js
+git fetch origin
+git pull --ff-only                       # branch off fresh main, never a stale local one
+git checkout -b fix/some-slug
+git add routes/foo.routes.js lib/foo.js  # explicit paths only — never `git add -A`
 git commit -m "message"
-git push origin main       # Railway auto-deploys (~1-3 min)
+git push -u origin fix/some-slug         # then open the PR
 ```
 
-**Warning:** Each deploy restarts the server, clearing all in-memory sessions (everyone gets logged out). This is expected behavior.
+Railway auto-deploys `main` on merge (~1–3 min). Merge races have dropped commits here before —
+verify the merge-base after every merge.
 
 ```bash
-git revert <hash>          # safe way to undo a pushed commit — never force-push
+git revert <hash>          # safe way to undo a merged commit — never force-push
 ```
+
+**A deploy does NOT log users out.** It restarts the server and clears in-memory sessions, but
+the `Authorization: Bearer` fallback (`lib/auth.js`, HMAC-signed with `SESSION_SECRET`) silently
+re-authenticates on the next request, so users stay signed in across restarts. Only **rotating
+`SESSION_SECRET`** invalidates every token and actually logs everyone out.
 
 ## Project Structure
 
-`server.js` holds Express routes + Socket.IO handlers + auth. Two seams were extracted into
-`lib/` (2026-06-18) to prepare for multi-tenancy:
+**`server.js` no longer holds the routes.** The 2026 de-slop turned it into a composition root:
+it wires config, Passport, Postgres, and dependency-injected routers, then starts the server.
+Behavior lives in `routes/` and `lib/`.
 
-```
-server.js            ← routes, Socket.IO, auth, Passport (the bulk of the backend)
-lib/persistence.js   ← hunt/archive state + Postgres hunts_kv persistence
-lib/integrations.js  ← per-tenant Twitch live status, leaderboard proxy, Discord import/parse
-lib/tenants.js       ← tenants + tenant_roles (config + admin/VIP), Bean seed, role helpers
-scripts/stamp-bean-tenant.js ← one-shot: stamp tenantId:'bean' on existing hunts (idempotent)
+```text
+server.js              ← composition root: config, Passport, DI wiring, startup
+routes/*.routes.js     ← 24 thin routers; each exports a factory taking injected deps
+lib/*.js               ← 50 domain modules (hunts-core, auth, tenants, persistence, features, …)
+sockets/index.js       ← Socket.IO handlers
+scripts/               ← one-shot maintenance (backfills, exports, reconciliation)
 package.json
-.env                 ← secrets (never commit)
-.env.example         ← config template
-hunts_data.json      ← persistent hunt storage (auto-generated, don't commit)
-slots_cache.json     ← slot thumbnails cache (auto-generated, 24hr refresh)
+.env                   ← secrets (never commit)
+.env.example           ← config template
+hunts_data.json        ← persistent hunt storage (auto-generated, don't commit)
+slots_cache.json       ← slot thumbnails cache (auto-generated, 24hr refresh)
+rainbet_slots.json     ← auto-generated AND auto-committed by lib/rainbetSlotSync.js
 ```
+
+Unit tests sit beside their module as `*.test.js` (`node:test`).
+
+```bash
+node --test lib/*.test.js   # correct
+node --test lib/            # BROKEN on Node 24 — reports a bogus `test at lib:1:1` failure
+```
+
+Route suites that call `app.listen` hang; run lib suites rather than the whole tree. Piping the
+output masks the exit code — check it directly.
 
 **Shared-state rule:** `hunts` and `archive` are mutable singletons **owned by `lib/persistence.js`**.
 `server.js` imports them by reference (`const { hunts, archive } = require('./lib/persistence')`).
