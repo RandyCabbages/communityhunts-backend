@@ -18,6 +18,7 @@ const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { diffOpenedBonuses } = require('../lib/activityFeed');
 const { linkWithinHunt } = require('../lib/identityLink');
+const { vetEquityIdentity, vetCallerIdentity } = require('../lib/identityWrites');
 
 module.exports = function huntsRoutes(deps) {
   const {
@@ -29,6 +30,11 @@ module.exports = function huntsRoutes(deps) {
     findAliasOwners, activityFeed,
   } = deps;
   const router = express.Router();
+
+  // Proof that a client-supplied discordId belongs to a real person: a known_users hit means they
+  // actually signed in with it. Absent (no pgPool in tests) → no identity write is accepted, which
+  // is the safe direction. See lib/identityWrites.js.
+  const isKnownAccount = getKnownUser ? (id) => getKnownUser(id) : null;
 
   // Ban check for a runner's equity list. Given a set of Discord IDs (the members in the hunt
   // the runner is editing), return only the banned ones + reason, so the frontend can warn the
@@ -286,7 +292,7 @@ module.exports = function huntsRoutes(deps) {
     res.json({ok:true});
   });
 
-  router.put('/api/my-hunt', requireAuth, (req, res) => {
+  router.put('/api/my-hunt', requireAuth, async (req, res) => {
     if (rejectBadHuntInput(req, res)) return;
     // Snapshot BEFORE any mutation — the client replaces whole arrays, so a bonus deletion is
     // only visible as a diff (see lib/auditLog.recordHuntChange).
@@ -300,16 +306,25 @@ module.exports = function huntsRoutes(deps) {
       huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 20, currency: 'USD', publicCalls: false, publicCallsPin: null
     };
     const { bonuses, equity, gifts, chases, payouts, vault, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
-    // preserveRowIdentity: the client's copy came back through publicHuntView, which strips
-    // discordId/callerId — assigning it raw deletes identity the server established. See
-    // lib/hunts-core.js.
-    if (bonuses    !== undefined) hunts[req.user.id].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
-    if (equity     !== undefined) hunts[req.user.id].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
+    // Identity handling, in this order for a reason:
+    //   vet*        — a client may name anyone, but may not INVENT a Discord identity for them
+    //                 (lib/identityWrites.js). A rejected value is stripped, never overwritten.
+    //   preserve*   — the client's copy came back through publicHuntView, which strips
+    //                 discordId/callerId, so assigning it raw deletes identity the server
+    //                 established (lib/hunts-core.js).
+    // Equity is vetted FIRST so callerIds are corroborated against the surviving equity, never
+    // against an id that was itself just rejected.
+    const _idAudit = { accepted: [], rejected: [] };
+    const _vetted = (v) => { _idAudit.accepted.push(...v.accepted); _idAudit.rejected.push(...v.rejected); return v.rows; };
+
+    if (equity     !== undefined) hunts[req.user.id].equity     = preserveRowIdentity(_before.equity, _vetted(await vetEquityIdentity(_before.equity, equity, { isKnownAccount })), 'discordId');
+    const _eq = hunts[req.user.id].equity;
+    if (bonuses    !== undefined) hunts[req.user.id].bonuses    = preserveRowIdentity(_before.bonuses, _vetted(vetCallerIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), _eq)), 'callerId');
     if (gifts      !== undefined) hunts[req.user.id].gifts      = gifts;
     if (chases     !== undefined) hunts[req.user.id].chases     = sanitizeChases(chases);
     if (payouts    !== undefined) hunts[req.user.id].payouts    = sanitizePayouts(payouts);
     if (vault      !== undefined) hunts[req.user.id].vault      = vault;
-    if (calls      !== undefined) hunts[req.user.id].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
+    if (calls      !== undefined) hunts[req.user.id].calls      = preserveRowIdentity(_before.calls, _vetted(vetCallerIdentity(_before.calls, calls, _eq)), 'callerId');
     if (huntType   !== undefined) {
       if (huntType === 'vip' && !reqIsMod(req))
         return res.status(403).json({error:'Not authorised for VIP hunt'});
@@ -341,6 +356,16 @@ module.exports = function huntsRoutes(deps) {
         category: 'hunt', action: 'identity.autolink', targetId: req.user.id,
         summary: `${_linked.links.length} row(s) auto-linked to a Discord id`,
         detail: { links: _linked.links },
+      });
+    }
+    // Identity assigned by a client is audited both ways: accepted writes because they decide
+    // whose stats a hunt lands in, rejected ones because a burst of them is what an attempt to
+    // fabricate identity looks like.
+    if (_idAudit.accepted.length || _idAudit.rejected.length) {
+      auditLog.recordFromReq(req, {
+        category: 'hunt', action: 'identity.set', targetId: req.user.id,
+        summary: `${_idAudit.accepted.length} identity write(s) accepted, ${_idAudit.rejected.length} rejected`,
+        detail: _idAudit,
       });
     }
     // Admin Mission Control live feed. Reuses the _before snapshot the audit log already took,
