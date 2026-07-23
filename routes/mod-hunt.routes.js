@@ -9,7 +9,7 @@
 // Behavior unchanged from the inline routes; every hunt:update goes through publicHuntView.
 
 const express = require('express');
-const { sanitizeBonusReplayUrls } = require('../lib/hunts-core');
+const { sanitizeBonusReplayUrls, preserveRowIdentity } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 
@@ -82,13 +82,14 @@ module.exports = function modHuntRoutes(deps) {
       : { bonuses: [], equity: [], calls: [] };
     if (!hunts[key]) hunts[key] = emptyModHunt(req.tenant.id);
     const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
-    if (bonuses    !== undefined) hunts[key].bonuses    = sanitizeBonusReplayUrls(bonuses);
-    if (equity     !== undefined) hunts[key].equity     = equity;
+    // See routes/hunts.routes.js — masked client copies must not clear known identities.
+    if (bonuses    !== undefined) hunts[key].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
+    if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
     if (gifts      !== undefined) hunts[key].gifts      = gifts;
     if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
     if (vault      !== undefined) hunts[key].vault      = vault;
-    if (calls      !== undefined) hunts[key].calls      = calls;
+    if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
     if (huntMode   !== undefined) hunts[key].huntMode   = huntMode;
     if (roundRobin !== undefined) hunts[key].roundRobin = roundRobin;
@@ -221,13 +222,14 @@ module.exports = function modHuntRoutes(deps) {
       : { bonuses: [], equity: [], calls: [] };
     if (!hunts[key]) hunts[key] = emptyAffiliateHunt(req.tenant.id);
     const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
-    if (bonuses    !== undefined) hunts[key].bonuses    = sanitizeBonusReplayUrls(bonuses);
-    if (equity     !== undefined) hunts[key].equity     = equity;
+    // See routes/hunts.routes.js — masked client copies must not clear known identities.
+    if (bonuses    !== undefined) hunts[key].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
+    if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
     if (gifts      !== undefined) hunts[key].gifts      = gifts;
     if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
     if (vault      !== undefined) hunts[key].vault      = vault;
-    if (calls      !== undefined) hunts[key].calls      = calls;
+    if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
     if (huntMode   !== undefined) hunts[key].huntMode   = huntMode;
     if (roundRobin !== undefined) hunts[key].roundRobin = roundRobin;

@@ -10,7 +10,7 @@
 // huntCallRequests is process-local pending-request state, owned here.
 
 const express = require('express');
-const { sanitizeBonusReplayUrls, bindEquityIdentityByName } = require('../lib/hunts-core');
+const { sanitizeBonusReplayUrls, bindEquityIdentityByName, preserveRowIdentity } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { linkWithinHunt } = require('../lib/identityLink');
@@ -138,13 +138,14 @@ module.exports = function callsRoutes(deps) {
     // as a diff (the client replaces whole arrays). See lib/auditLog.recordHuntChange.
     const _before = { bonuses: [...(hunt.bonuses || [])], equity: [...(hunt.equity || [])], calls: [...(hunt.calls || [])] };
     const { bonuses, equity, gifts, chases, payouts, vault, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
-    if (bonuses     !== undefined) hunt.bonuses     = sanitizeBonusReplayUrls(bonuses);
-    if (equity      !== undefined) hunt.equity      = equity;
+    // See routes/hunts.routes.js — an editor's client copy is masked the same way the owner's is.
+    if (bonuses     !== undefined) hunt.bonuses     = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
+    if (equity      !== undefined) hunt.equity      = preserveRowIdentity(_before.equity, equity, 'discordId');
     if (gifts       !== undefined) hunt.gifts       = gifts;
     if (chases      !== undefined) hunt.chases      = sanitizeChases(chases);
     if (payouts     !== undefined) hunt.payouts     = sanitizePayouts(payouts);
     if (vault       !== undefined) hunt.vault       = vault;
-    if (calls       !== undefined) hunt.calls       = calls;
+    if (calls       !== undefined) hunt.calls       = preserveRowIdentity(_before.calls, calls, 'callerId');
     if (huntType    !== undefined) hunt.huntType    = huntType;
     if (callLimit   !== undefined) hunt.callLimit   = callLimit;
     if (huntMode    !== undefined) hunt.huntMode    = huntMode;
