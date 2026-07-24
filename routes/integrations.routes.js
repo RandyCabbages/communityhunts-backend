@@ -11,7 +11,7 @@
 const express = require('express');
 
 module.exports = function integrationsRoutes(deps) {
-  const { integrations, tenants, memberships, hunts, normalizeSlot, requireAuth, supporters, getKnownUser, getSettings } = deps;
+  const { integrations, tenants, memberships, hunts, requireAuth, supporters, getKnownUser, getSettings } = deps;
   const router = express.Router();
 
   // Lightweight per-caller throttle for the upstream-proxy endpoints (security audit 2026-07-18 #7):
@@ -121,17 +121,6 @@ module.exports = function integrationsRoutes(deps) {
       const stale = integrations.getLeaderboardCache(req.tenant.slug);
       if (stale) return res.json(stale);
       res.status(502).json({ error: 'leaderboard unavailable' });
-    }
-  });
-
-  // Import slot calls from last 20 mins — only from equity members of the user's hunt.
-  router.get('/api/discord/import-calls', requireAuth, throttle(20, 60_000), async (req, res) => {
-    try {
-      const hunt = hunts[req.user.id];
-      if (!hunt) return res.status(404).json({ error: 'No active hunt' });
-      res.json(await integrations.importCalls(hunt, normalizeSlot, req.tenant));
-    } catch(e) {
-      res.status(500).json({ error: e.message });
     }
   });
 
