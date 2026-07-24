@@ -426,10 +426,7 @@ module.exports = function modHuntRoutes(deps) {
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       title: sanitizeTitle(title) || defaultHuntTitle(hostNameFor(tenantId), 'vip', Date.now()),
       huntType: 'vip', bonuses: [],
-      equity: [
-        hostEquityRow(tenantId, 1000),
-        ...Array.from({ length: 19 }, (_, i) => ({ id: `roll_${i + 1}`, name: '', amount: 100, isRollWinner: true })),
-      ],
+      equity: [hostEquityRow(tenantId, 1000)],
       calls: [], invitedEditors: [], callLimit: 10, huntMode: 'hunting',
       roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null,
     };
