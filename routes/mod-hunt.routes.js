@@ -97,7 +97,7 @@ module.exports = function modHuntRoutes(deps) {
       ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
       : { bonuses: [], equity: [], calls: [] };
     if (!hunts[key]) hunts[key] = emptyModHunt(req.tenant.id);
-    const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder, title } = req.body;
+    const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder, title, endingBalance } = req.body;
     // See routes/hunts.routes.js — masked client copies must not clear known identities.
     if (bonuses    !== undefined) hunts[key].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
     if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
@@ -114,6 +114,9 @@ module.exports = function modHuntRoutes(deps) {
     if (currentSlot !== undefined) hunts[key].currentSlot = currentSlot;
     if (manualOrder !== undefined) hunts[key].manualOrder = manualOrder;
     if (title      !== undefined) hunts[key].title      = sanitizeTitle(title);
+    // Ending Balance (mod hunt only): once set, the frontend uses it as the authoritative total
+    // winnings. null clears it back to the summed-bonus-wins behavior.
+    if (endingBalance !== undefined) hunts[key].endingBalance = endingBalance;
     hunts[key].huntType = 'solo';
     touch(key);
     persistHunts();
