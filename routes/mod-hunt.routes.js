@@ -114,8 +114,8 @@ module.exports = function modHuntRoutes(deps) {
     if (currentSlot !== undefined) hunts[key].currentSlot = currentSlot;
     if (manualOrder !== undefined) hunts[key].manualOrder = manualOrder;
     if (title      !== undefined) hunts[key].title      = sanitizeTitle(title);
-    // Ending Balance (mod hunt only): once set, the frontend uses it as the authoritative total
-    // winnings. null clears it back to the summed-bonus-wins behavior.
+    // Ending Balance (tenant hunt page only): once set, the frontend uses it as the authoritative
+    // total winnings. null clears it back to the summed-bonus-wins behavior.
     if (endingBalance !== undefined) hunts[key].endingBalance = endingBalance;
     hunts[key].huntType = 'solo';
     touch(key);
