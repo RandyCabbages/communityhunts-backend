@@ -482,7 +482,10 @@ const rateLimitLib = require('./lib/rateLimit');
 app.use(require('./routes/public.routes')({
   requireApiKey: apiKeys.requireApiKey,
   requireApiFeature: apiKeys.requireApiFeature,
+  requireApiScope: apiKeys.requireApiScope,
   rateLimit: rateLimitLib.rateLimit,
+  writeRateLimit: rateLimitLib.writeRateLimit,
+  ipFloor: rateLimitLib.ipFloor,
   serializers,
   getHuntStats: huntsCore.getHuntStats,
   hunts, archive, tenantOf: huntsCore.tenantOf,
@@ -490,6 +493,9 @@ app.use(require('./routes/public.routes')({
   huntCompleted: huntsCore.huntCompleted,
   getGotInLog: huntsCore.getGotInLog,
   collectBangers: require('./lib/bangers').collectBangers,
+  archiveHunt: persistence.archiveHunt,
+  auditLog,
+  isKnownAccount: (id) => settings.getKnownUser(id),
 }));
 
 // Global curated slot lists — public read, owner-only writes.
