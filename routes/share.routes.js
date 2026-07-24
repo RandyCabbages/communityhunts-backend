@@ -5,7 +5,7 @@ const express = require('express');
 // map (shareTokens), NOT on the hunt object, so it survives reset/start/end — the link is a
 // durable handle for "this streamer's hunt" rather than one ephemeral hunt instance.
 module.exports = (deps) => {
-  const { requireAuth, canEditHunt, hunts, archive, publicHuntView, uid,
+  const { requireAuth, canEditHunt, isEquityMember, hunts, archive, publicHuntView, uid,
           shareTokens, tokenForOwner, persistShareTokens } = deps;
   const router = express.Router();
 
@@ -51,7 +51,16 @@ module.exports = (deps) => {
     if (!hunt) hunt = archive.find(h => h && h.shareToken === token) || null;
 
     if (!hunt) return res.status(404).json({ error: 'Not found' });
-    res.json({ hunt: publicHuntView(hunt), frozen: !!hunt.archivedAt, ownerId: hunt.user?.id || null });
+    // Per-viewer submit right, computed from the SAME rule POST /api/hunts/:userId/calls enforces
+    // (canEdit OR equity member) — identical to GET /api/hunts/:userId (routes/hunts.routes.js).
+    // The share page can't infer this: publicHuntView strips equity discordIds and
+    // callsPermissions, so a client-side check falls back to a spoofable name match. req.user is
+    // present here for a logged-in viewer (bearerFallback runs globally); anonymous → false.
+    const ownerId = hunt.user?.id || null;
+    const canAddCalls = req.user && ownerId
+      ? (canEditHunt(req, ownerId) || isEquityMember(req.user, ownerId))
+      : false;
+    res.json({ hunt: { ...publicHuntView(hunt), canAddCalls }, frozen: !!hunt.archivedAt, ownerId });
   });
 
   return router;

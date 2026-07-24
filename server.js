@@ -565,7 +565,7 @@ app.use(require('./routes/calls.routes')({
 
 // Share-link routes (routes/share.routes.js): token mint + public resolve.
 app.use(require('./routes/share.routes')({
-  requireAuth, canEditHunt, hunts, archive, publicHuntView, uid,
+  requireAuth, canEditHunt, isEquityMember, hunts, archive, publicHuntView, uid,
   shareTokens, tokenForOwner, persistShareTokens,
 }));
 
