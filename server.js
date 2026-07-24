@@ -488,8 +488,6 @@ app.use(require('./routes/public.routes')({
   hunts, archive, tenantOf: huntsCore.tenantOf,
   huntHasContent: huntsCore.huntHasContent,
   huntCompleted: huntsCore.huntCompleted,
-  modHuntKey: huntsCore.modHuntKey,
-  affiliateHuntKey: huntsCore.affiliateHuntKey,
   getGotInLog: huntsCore.getGotInLog,
   collectBangers: require('./lib/bangers').collectBangers,
 }));
