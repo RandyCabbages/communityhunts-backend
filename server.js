@@ -434,7 +434,7 @@ app.use(require('./routes/hunts.routes')({
 
 // Mod hunt + Affiliate hunt — two fixed-key shared hunts (routes/mod-hunt.routes.js).
 app.use(require('./routes/mod-hunt.routes')({
-  hunts, archive, io, persistHunts, archiveHunt,
+  hunts, archive, io, persistHunts, archiveHunt, unarchiveHunt,
   requireMod, modHuntKey, affiliateHuntKey, tenants,
   uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput, auditLog,
   getSettings: settings.getSettings, saveSettings: settings.saveSettings,

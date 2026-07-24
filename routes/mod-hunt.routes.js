@@ -12,6 +12,7 @@ const express = require('express');
 const { sanitizeBonusReplayUrls, preserveRowIdentity } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
+const { defaultHuntTitle, sanitizeTitle } = require('../lib/huntTitle');
 
 // Audit summaries name the hunt, not its key: these are SHARED hunts, so `targetId` is the fixed
 // key (`__mod_hunt__:<tenant>`) rather than a user id, and a raw key reads as gibberish in the log.
@@ -20,7 +21,7 @@ const AFFILIATE_HUNT_LABEL = "the Affiliate Hunt";
 
 module.exports = function modHuntRoutes(deps) {
   const {
-    hunts, archive, io, persistHunts, archiveHunt,
+    hunts, archive, io, persistHunts, archiveHunt, unarchiveHunt,
     requireMod, modHuntKey, affiliateHuntKey, tenants,
     uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput,
     auditLog, getSettings, saveSettings, persistOverlayConfig,
@@ -68,12 +69,13 @@ module.exports = function modHuntRoutes(deps) {
   // ── Mod hunt — private solo hunt run jointly by a community's Mods ────
   // Stored under modHuntKey(tenantId) so Bean's OBS overlay link never changes.
   // Never appears on Hub or archive listings.
-  function emptyModHunt(tenantId) {
+  function emptyModHunt(tenantId, title) {
     return {
       user: { id: modHuntKey(tenantId), displayName: hostNameFor(tenantId), avatar: null },
       huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null,
       tenantId: tenantId || 'bean',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      title: sanitizeTitle(title) || defaultHuntTitle(hostNameFor(tenantId), 'mod', Date.now()),
       huntType: 'solo', bonuses: [], equity: [hostEquityRow(tenantId, 0)],
       calls: [], invitedEditors: [], callLimit: 0, huntMode: 'hunting',
       roundRobin: false, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null,
@@ -95,7 +97,7 @@ module.exports = function modHuntRoutes(deps) {
       ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
       : { bonuses: [], equity: [], calls: [] };
     if (!hunts[key]) hunts[key] = emptyModHunt(req.tenant.id);
-    const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
+    const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder, title } = req.body;
     // See routes/hunts.routes.js — masked client copies must not clear known identities.
     if (bonuses    !== undefined) hunts[key].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
     if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
@@ -111,6 +113,7 @@ module.exports = function modHuntRoutes(deps) {
     if (currency   !== undefined) hunts[key].currency   = currency;
     if (currentSlot !== undefined) hunts[key].currentSlot = currentSlot;
     if (manualOrder !== undefined) hunts[key].manualOrder = manualOrder;
+    if (title      !== undefined) hunts[key].title      = sanitizeTitle(title);
     hunts[key].huntType = 'solo';
     touch(key);
     persistHunts();
@@ -153,6 +156,7 @@ module.exports = function modHuntRoutes(deps) {
       h.isLive = false;
       h.updatedAt = new Date().toISOString();
       if (!h.archivedAt) h.archivedAt = new Date().toISOString();
+      archiveHunt(h); // log it to /history now (idempotent by huntId; no-op if 0 bonuses)
       persistHunts();
       emitHuntUpdate(key);
     }
@@ -167,8 +171,36 @@ module.exports = function modHuntRoutes(deps) {
     h.updatedAt = new Date().toISOString();
     h.archivedAt = null;
     if (!h.startedAt) h.startedAt = new Date().toISOString();
+    unarchiveHunt(h); // live again → must not also sit in /history
     persistHunts();
     emitHuntUpdate(key);
+    res.json({ ok: true });
+  });
+
+  // Reopen a SPECIFIC past hunt from history: swap it into the active slot and make it live.
+  // Whatever is currently active is archived first (idempotent; empty skipped) so nothing is lost,
+  // then the selected snapshot is removed from history (unarchive) and becomes the active hunt.
+  router.post('/api/mod-hunt/reopen-archived', requireMod, (req, res) => {
+    const key = modHuntKey(req.tenant.id);
+    const huntId = req.body && req.body.huntId;
+    if (!huntId) return res.status(400).json({ error: 'huntId required' });
+    const snap = archive.find(h => h && h.user?.id === key && h.huntId === huntId);
+    if (!snap) return res.status(404).json({ error: 'Archived hunt not found' });
+
+    const cur = hunts[key];
+    if (cur && Array.isArray(cur.bonuses) && cur.bonuses.length > 0) {
+      if (!cur.archivedAt) cur.archivedAt = new Date().toISOString();
+      archiveHunt(cur); // save the currently-active hunt to history first
+    }
+    unarchiveHunt(snap); // remove the chosen one from history…
+    hunts[key] = { ...snap, isLive: true, archivedAt: null, updatedAt: new Date().toISOString() }; // …and make it active+live
+    persistHunts();
+    emitHuntUpdate(key);
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'hunt.reopen_archived', targetId: key,
+      summary: `${(req.user && req.user.displayName) || 'a mod'} reopened ${MOD_HUNT_LABEL} "${snap.title || snap.huntId}"`,
+      detail: { huntId: snap.huntId, title: snap.title || null },
+    });
     res.json({ ok: true });
   });
 
@@ -184,7 +216,7 @@ module.exports = function modHuntRoutes(deps) {
       summary: `${(req.user && req.user.displayName) || 'a mod'} reset ${MOD_HUNT_LABEL}`,
       detail: old ? { before: { bonuses: old.bonuses || [], equity: old.equity || [], calls: old.calls || [] } } : null,
     });
-    hunts[key] = emptyModHunt(req.tenant.id);
+    hunts[key] = emptyModHunt(req.tenant.id, req.body && req.body.title);
     persistHunts();
     emitHuntUpdate(key);
     res.json({ ok: true });
@@ -194,6 +226,8 @@ module.exports = function modHuntRoutes(deps) {
     const key = modHuntKey(req.tenant.id);
     const modArchived = archive.filter(h => h.user?.id === key);
     res.json(modArchived.map(h => ({
+      huntId: h.huntId,
+      title: h.title || null,
       archivedAt: h.archivedAt,
       bonuses: h.bonuses || [],
       equity: h.equity || [],
@@ -208,12 +242,13 @@ module.exports = function modHuntRoutes(deps) {
   });
 
   // ── Affiliate hunt — VIP-style hunt run jointly by a community's Mods ──
-  function emptyAffiliateHunt(tenantId) {
+  function emptyAffiliateHunt(tenantId, title) {
     return {
       user: { id: affiliateHuntKey(tenantId), displayName: hostNameFor(tenantId), avatar: null },
       huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null,
       tenantId: tenantId || 'bean',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      title: sanitizeTitle(title) || defaultHuntTitle(hostNameFor(tenantId), 'affiliate', Date.now()),
       huntType: 'vip', bonuses: [],
       equity: [hostEquityRow(tenantId, 1000)],
       calls: [], invitedEditors: [], callLimit: 10, huntMode: 'hunting',
@@ -235,7 +270,7 @@ module.exports = function modHuntRoutes(deps) {
       ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
       : { bonuses: [], equity: [], calls: [] };
     if (!hunts[key]) hunts[key] = emptyAffiliateHunt(req.tenant.id);
-    const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder } = req.body;
+    const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder, title } = req.body;
     // See routes/hunts.routes.js — masked client copies must not clear known identities.
     if (bonuses    !== undefined) hunts[key].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
     if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
@@ -251,6 +286,7 @@ module.exports = function modHuntRoutes(deps) {
     if (currency   !== undefined) hunts[key].currency   = currency;
     if (currentSlot !== undefined) hunts[key].currentSlot = currentSlot;
     if (manualOrder !== undefined) hunts[key].manualOrder = manualOrder;
+    if (title      !== undefined) hunts[key].title      = sanitizeTitle(title);
     hunts[key].huntType = 'vip';
     touch(key);
     persistHunts();
@@ -293,6 +329,7 @@ module.exports = function modHuntRoutes(deps) {
       h.isLive = false;
       h.updatedAt = new Date().toISOString();
       if (!h.archivedAt) h.archivedAt = new Date().toISOString();
+      archiveHunt(h); // log it to /history now (idempotent by huntId; no-op if 0 bonuses)
       persistHunts();
       emitHuntUpdate(key);
     }
@@ -307,8 +344,34 @@ module.exports = function modHuntRoutes(deps) {
     h.updatedAt = new Date().toISOString();
     h.archivedAt = null;
     if (!h.startedAt) h.startedAt = new Date().toISOString();
+    unarchiveHunt(h); // live again → must not also sit in /history
     persistHunts();
     emitHuntUpdate(key);
+    res.json({ ok: true });
+  });
+
+  // Reopen a specific past affiliate hunt from history (see the mod-hunt twin above for the shape).
+  router.post('/api/affiliate-hunt/reopen-archived', requireMod, (req, res) => {
+    const key = affiliateHuntKey(req.tenant.id);
+    const huntId = req.body && req.body.huntId;
+    if (!huntId) return res.status(400).json({ error: 'huntId required' });
+    const snap = archive.find(h => h && h.user?.id === key && h.huntId === huntId);
+    if (!snap) return res.status(404).json({ error: 'Archived hunt not found' });
+
+    const cur = hunts[key];
+    if (cur && Array.isArray(cur.bonuses) && cur.bonuses.length > 0) {
+      if (!cur.archivedAt) cur.archivedAt = new Date().toISOString();
+      archiveHunt(cur);
+    }
+    unarchiveHunt(snap);
+    hunts[key] = { ...snap, isLive: true, archivedAt: null, updatedAt: new Date().toISOString() };
+    persistHunts();
+    emitHuntUpdate(key);
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'hunt.reopen_archived', targetId: key,
+      summary: `${(req.user && req.user.displayName) || 'a mod'} reopened ${AFFILIATE_HUNT_LABEL} "${snap.title || snap.huntId}"`,
+      detail: { huntId: snap.huntId, title: snap.title || null },
+    });
     res.json({ ok: true });
   });
 
@@ -324,7 +387,7 @@ module.exports = function modHuntRoutes(deps) {
       summary: `${(req.user && req.user.displayName) || 'a mod'} reset ${AFFILIATE_HUNT_LABEL}`,
       detail: old ? { before: { bonuses: old.bonuses || [], equity: old.equity || [], calls: old.calls || [] } } : null,
     });
-    hunts[key] = emptyAffiliateHunt(req.tenant.id);
+    hunts[key] = emptyAffiliateHunt(req.tenant.id, req.body && req.body.title);
     persistHunts();
     emitHuntUpdate(key);
     res.json({ ok: true });
@@ -334,6 +397,8 @@ module.exports = function modHuntRoutes(deps) {
     const key = affiliateHuntKey(req.tenant.id);
     const affArchived = archive.filter(h => h.user?.id === key);
     res.json(affArchived.map(h => ({
+      huntId: h.huntId,
+      title: h.title || null,
       archivedAt: h.archivedAt,
       bonuses: h.bonuses || [],
       equity: h.equity || [],
