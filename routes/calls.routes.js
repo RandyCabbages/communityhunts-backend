@@ -151,7 +151,7 @@ module.exports = function callsRoutes(deps) {
     if (bonuses     !== undefined) hunt.bonuses     = preserveRowIdentity(_before.bonuses, _vetted(vetCallerIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), _eq)), 'callerId');
     if (gifts       !== undefined) hunt.gifts       = gifts;
     if (payouts     !== undefined) hunt.payouts     = sanitizePayouts(payouts);
-    if (chases      !== undefined) hunt.chases      = sanitizeChases(chases, hunt.payouts || {});
+    if (chases      !== undefined) hunt.chases      = sanitizeChases(chases);
     if (vault       !== undefined) hunt.vault       = vault;
     if (calls       !== undefined) hunt.calls       = preserveRowIdentity(_before.calls, _vetted(vetCallerIdentity(_before.calls, calls, _eq)), 'callerId');
     if (huntType    !== undefined) hunt.huntType    = huntType;

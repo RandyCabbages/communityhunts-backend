@@ -180,7 +180,7 @@ module.exports = function modHuntRoutes(deps) {
     if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
     if (gifts      !== undefined) hunts[key].gifts      = gifts;
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
-    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases, hunts[key].payouts || {});
+    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (vault      !== undefined) hunts[key].vault      = vault;
     if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
@@ -356,7 +356,7 @@ module.exports = function modHuntRoutes(deps) {
     if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
     if (gifts      !== undefined) hunts[key].gifts      = gifts;
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
-    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases, hunts[key].payouts || {});
+    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (vault      !== undefined) hunts[key].vault      = vault;
     if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
@@ -527,7 +527,7 @@ module.exports = function modHuntRoutes(deps) {
     if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
     if (gifts      !== undefined) hunts[key].gifts      = gifts;
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
-    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases, hunts[key].payouts || {});
+    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (vault      !== undefined) hunts[key].vault      = vault;
     if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;

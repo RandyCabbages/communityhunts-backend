@@ -82,9 +82,9 @@ module.exports = function trackerRoutes(deps) {
       let v = req.body[f];
       if (f === 'bonuses') v = sanitizeBonusReplayUrls(v);
       else if (f === 'payouts') v = sanitizePayouts(v);
-      // Paid-out members can't be chasers. `chases` sorts before `payouts` in `allowed`, so read
-      // the effective payouts directly: the incoming set if present, else what's already stored.
-      else if (f === 'chases') v = sanitizeChases(v, req.body.payouts !== undefined ? sanitizePayouts(req.body.payouts) : (hunt.payouts || {}));
+      // Recorded chase rounds are settled history — sanitize shape only; never drop a participant
+      // because they were later marked paid (that re-splits the round and moves everyone's payout).
+      else if (f === 'chases') v = sanitizeChases(v);
       hunt[f] = v;
     }
     touch(hunt);
