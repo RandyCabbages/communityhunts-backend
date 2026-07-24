@@ -127,9 +127,11 @@ module.exports = function integrationsRoutes(deps) {
   // Parse winners from Discord — ?type=affiliate uses the affiliate channel; default is VIP.
   router.get('/api/discord/parse-winners', requireAuth, throttle(20, 60_000), async (req, res) => {
     try {
-      const type = req.query.type === 'affiliate' ? 'affiliate' : 'vip';
+      const type = ['affiliate', 'toplb'].includes(req.query.type) ? req.query.type : 'vip';
       const t = req.tenant;
-      const ch = type === 'affiliate' ? t?.discordAffiliateWinnersChannelId : t?.discordVipWinnersChannelId;
+      const ch = type === 'affiliate' ? t?.discordAffiliateWinnersChannelId
+               : type === 'toplb'     ? t?.discordTopLbWinnersChannelId
+               : t?.discordVipWinnersChannelId;
       // Never log any slice of the bot token (CWE-532, security audit 2026-07-18 #5) — boolean only.
       console.log(`[parse-winners] tenant=${t?.id} type=${type} channel=${ch} hasToken=${!!t?.discordBotToken}`);
       res.json(await integrations.parseWinners(req.tenant, type));
