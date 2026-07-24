@@ -18,11 +18,12 @@ const { defaultHuntTitle, sanitizeTitle } = require('../lib/huntTitle');
 // key (`__mod_hunt__:<tenant>`) rather than a user id, and a raw key reads as gibberish in the log.
 const MOD_HUNT_LABEL = "the Tenant Hunt"; // audit-log label (route/key names stay mod-hunt for wire compat)
 const AFFILIATE_HUNT_LABEL = "the Affiliate Hunt";
+const VIP_HUNT_LABEL = "the VIP Hunt";
 
 module.exports = function modHuntRoutes(deps) {
   const {
     hunts, archive, io, persistHunts, archiveHunt, unarchiveHunt,
-    requireMod, modHuntKey, affiliateHuntKey, tenants,
+    requireMod, modHuntKey, affiliateHuntKey, vipHuntKey, tenants,
     uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput,
     auditLog, getSettings, saveSettings, persistOverlayConfig,
   } = deps;
@@ -41,6 +42,7 @@ module.exports = function modHuntRoutes(deps) {
   };
   router.put('/api/mod-hunt/overlay-config', requireMod, overlayConfigRoute(modHuntKey));
   router.put('/api/affiliate-hunt/overlay-config', requireMod, overlayConfigRoute(affiliateHuntKey));
+  router.put('/api/vip-hunt/overlay-config', requireMod, overlayConfigRoute(vipHuntKey));
 
   // Resolve the display name shown in Bean's-Hunt/Affiliate-Hunt equity from the tenant's own
   // branding, instead of hardcoding 'Bean'. Bean's tenant has branding.hostName === 'Bean', so
@@ -400,6 +402,180 @@ module.exports = function modHuntRoutes(deps) {
     const key = affiliateHuntKey(req.tenant.id);
     const affArchived = archive.filter(h => h.user?.id === key);
     res.json(affArchived.map(h => ({
+      huntId: h.huntId,
+      title: h.title || null,
+      archivedAt: h.archivedAt,
+      bonuses: h.bonuses || [],
+      equity: h.equity || [],
+      huntMode: h.huntMode,
+      lockTop4: h.lockTop4 ?? false,
+      startedAt: h.startedAt,
+      createdAt: h.createdAt,
+      totalWon: (h.bonuses || []).reduce((s, b) => s + (b.win || 0), 0),
+      totalBet: (h.bonuses || []).reduce((s, b) => s + (b.bet || 0), 0),
+      bonusCount: (h.bonuses || []).length,
+    })));
+  });
+
+  // ── VIP hunt — VIP-style hunt run jointly by a community's Mods ──
+  function emptyVipHunt(tenantId, title) {
+    return {
+      user: { id: vipHuntKey(tenantId), displayName: hostNameFor(tenantId), avatar: null },
+      huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null,
+      tenantId: tenantId || 'bean',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      title: sanitizeTitle(title) || defaultHuntTitle(hostNameFor(tenantId), 'vip', Date.now()),
+      huntType: 'vip', bonuses: [],
+      equity: [
+        hostEquityRow(tenantId, 1000),
+        ...Array.from({ length: 19 }, (_, i) => ({ id: `roll_${i + 1}`, name: '', amount: 100, isRollWinner: true })),
+      ],
+      calls: [], invitedEditors: [], callLimit: 10, huntMode: 'hunting',
+      roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null,
+    };
+  }
+
+  router.get('/api/vip-hunt', requireMod, (req, res) => {
+    const key = vipHuntKey(req.tenant.id);
+    res.json(hunts[key] || null);
+  });
+
+  router.put('/api/vip-hunt', requireMod, (req, res) => {
+    if (rejectBadHuntInput(req, res)) return;
+    const key = vipHuntKey(req.tenant.id);
+    // Snapshot BEFORE any mutation — shared hunt, many mod editors (see the mod-hunt PUT above).
+    const _h = hunts[key];
+    const _before = _h
+      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
+      : { bonuses: [], equity: [], calls: [] };
+    if (!hunts[key]) hunts[key] = emptyVipHunt(req.tenant.id);
+    const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder, title } = req.body;
+    // See routes/hunts.routes.js — masked client copies must not clear known identities.
+    if (bonuses    !== undefined) hunts[key].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
+    if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
+    if (gifts      !== undefined) hunts[key].gifts      = gifts;
+    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
+    if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
+    if (vault      !== undefined) hunts[key].vault      = vault;
+    if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
+    if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
+    if (huntMode   !== undefined) hunts[key].huntMode   = huntMode;
+    if (roundRobin !== undefined) hunts[key].roundRobin = roundRobin;
+    if (lockTop4   !== undefined) hunts[key].lockTop4   = lockTop4;
+    if (currency   !== undefined) hunts[key].currency   = currency;
+    if (currentSlot !== undefined) hunts[key].currentSlot = currentSlot;
+    if (manualOrder !== undefined) hunts[key].manualOrder = manualOrder;
+    if (title      !== undefined) hunts[key].title      = sanitizeTitle(title);
+    hunts[key].huntType = 'vip';
+    touch(key);
+    persistHunts();
+    emitHuntUpdate(key);
+    auditLog.recordHuntChange(req, _before,
+      { bonuses: hunts[key].bonuses, equity: hunts[key].equity, calls: hunts[key].calls },
+      { targetId: key, huntLabel: VIP_HUNT_LABEL });
+    res.json({ ok: true });
+  });
+
+  router.post('/api/vip-hunt/golive', requireMod, (req, res) => {
+    const key = vipHuntKey(req.tenant.id);
+    if (!hunts[key]) hunts[key] = emptyVipHunt(req.tenant.id);
+    hunts[key].isLive     = true;
+    hunts[key].startedAt  = new Date().toISOString();
+    hunts[key].updatedAt  = new Date().toISOString();
+    hunts[key].archivedAt = null;
+    persistHunts();
+    emitHuntUpdate(key);
+    res.json({ ok: true });
+  });
+
+  // Stop broadcasting without ending/archiving — host can go live again. (See /end for the lock path.)
+  router.post('/api/vip-hunt/offline', requireMod, (req, res) => {
+    const key = vipHuntKey(req.tenant.id);
+    const h = hunts[key];
+    if (h) {
+      h.isLive = false;
+      h.updatedAt = new Date().toISOString();
+      persistHunts();
+      emitHuntUpdate(key);
+    }
+    res.json({ ok: true });
+  });
+
+  router.post('/api/vip-hunt/end', requireMod, (req, res) => {
+    const key = vipHuntKey(req.tenant.id);
+    const h = hunts[key];
+    if (h) {
+      h.isLive = false;
+      h.updatedAt = new Date().toISOString();
+      if (!h.archivedAt) h.archivedAt = new Date().toISOString();
+      archiveHunt(h); // log it to /history now (idempotent by huntId; no-op if 0 bonuses)
+      persistHunts();
+      emitHuntUpdate(key);
+    }
+    res.json({ ok: true });
+  });
+
+  router.post('/api/vip-hunt/reopen', requireMod, (req, res) => {
+    const key = vipHuntKey(req.tenant.id);
+    const h = hunts[key];
+    if (!h) return res.status(404).json({ error: 'No vip hunt' });
+    h.isLive = true;
+    h.updatedAt = new Date().toISOString();
+    h.archivedAt = null;
+    if (!h.startedAt) h.startedAt = new Date().toISOString();
+    unarchiveHunt(h); // live again → must not also sit in /history
+    persistHunts();
+    emitHuntUpdate(key);
+    res.json({ ok: true });
+  });
+
+  // Reopen a specific past vip hunt from history (see the mod-hunt twin above for the shape).
+  router.post('/api/vip-hunt/reopen-archived', requireMod, (req, res) => {
+    const key = vipHuntKey(req.tenant.id);
+    const huntId = req.body && req.body.huntId;
+    if (!huntId) return res.status(400).json({ error: 'huntId required' });
+    const snap = archive.find(h => h && h.user?.id === key && h.huntId === huntId);
+    if (!snap) return res.status(404).json({ error: 'Archived hunt not found' });
+
+    const cur = hunts[key];
+    if (cur && Array.isArray(cur.bonuses) && cur.bonuses.length > 0) {
+      if (!cur.archivedAt) cur.archivedAt = new Date().toISOString();
+      archiveHunt(cur);
+    }
+    unarchiveHunt(snap);
+    hunts[key] = { ...snap, isLive: true, archivedAt: null, updatedAt: new Date().toISOString() };
+    persistHunts();
+    emitHuntUpdate(key);
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'hunt.reopen_archived', targetId: key,
+      summary: `${(req.user && req.user.displayName) || 'a mod'} reopened ${VIP_HUNT_LABEL} "${snap.title || snap.huntId}"`,
+      detail: { huntId: snap.huntId, title: snap.title || null },
+    });
+    res.json({ ok: true });
+  });
+
+  router.post('/api/vip-hunt/reset', requireMod, (req, res) => {
+    const key = vipHuntKey(req.tenant.id);
+    const old = hunts[key];
+    if (old && Array.isArray(old.bonuses) && old.bonuses.length > 0) {
+      if (!old.archivedAt) old.archivedAt = new Date().toISOString();
+      archiveHunt(old);
+    }
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'hunt.reset', targetId: key,
+      summary: `${(req.user && req.user.displayName) || 'a mod'} reset ${VIP_HUNT_LABEL}`,
+      detail: old ? { before: { bonuses: old.bonuses || [], equity: old.equity || [], calls: old.calls || [] } } : null,
+    });
+    hunts[key] = emptyVipHunt(req.tenant.id, req.body && req.body.title);
+    persistHunts();
+    emitHuntUpdate(key);
+    res.json({ ok: true });
+  });
+
+  router.get('/api/vip-hunt/history', requireMod, (req, res) => {
+    const key = vipHuntKey(req.tenant.id);
+    const vipArchived = archive.filter(h => h.user?.id === key);
+    res.json(vipArchived.map(h => ({
       huntId: h.huntId,
       title: h.title || null,
       archivedAt: h.archivedAt,
