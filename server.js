@@ -275,7 +275,12 @@ const makeStatsStore = require('./lib/statsStore');
 const fxRates = makeFxRates({ pgPool });
 const statsStore = makeStatsStore({ pgPool, fxRates });
 
+// One-time tenant-hunt OBS rebrand migration (__mod_hunt__ → __tenant_hunt__). Runs after hunts
+// are loaded (initPersistence) so it can re-key live state; the settings copy self-ensures its
+// table, so ordering vs initSettings is irrelevant. Idempotent — a no-op once migrated.
+const { migrateSharedHuntKeys } = require('./lib/migrateSharedHuntKeys');
 persistence.initPersistence({ pgPool, normalizeSlot, statsStore })
+  .then(() => migrateSharedHuntKeys({ hunts, pgPool, persistHunts }))
   .then(() => statsStore.ensureTables())
   .then(() => settings.startupBackfill())
   .then(() => settings.loadAnonymousUsers())   // hydrate the anonymous-user set for name redaction
@@ -582,7 +587,7 @@ app.use(require('./routes/share.routes')({
 //   • ended, incomplete, idle ≥ 36h        → delete (+ drop its archive snapshot)
 //   • ended/archived, completed            → keep
 // The 1h dead-reap skips the persistent shared mod/affiliate hunts and per-user paid tracker
-// hunts (tracker:/__mod_hunt__/__affiliate_hunt__/__vip_hunt__ keys) — those keep the 36h grace so a mod
+// hunts (tracker:/__tenant_hunt__/__affiliate_hunt__/__vip_hunt__ keys) — those keep the 36h grace so a mod
 // clearing the board or a subscriber's idle tracker isn't nuked mid-session.
 const STALE_MS = 36 * 60 * 60 * 1000;
 const EMPTY_STALE_MS = 60 * 60 * 1000; // 1h — an empty live regular hunt is reaped this fast

@@ -1,9 +1,11 @@
-// Mod hunt + Affiliate hunt routes. Two shared hunts per community (not per-user), keyed by
+// Tenant hunt + Affiliate hunt routes. Two shared hunts per community (not per-user), keyed by
 // modHuntKey(tenantId)/affiliateHuntKey(tenantId):
-//   __mod_hunt__       — Bean's tenant only (legacy fixed key — OBS overlay link never changes)
-//   __mod_hunt__:<id>  — every other tenant, namespaced so communities' mod hunts don't collide
-// (same pattern for __affiliate_hunt__). All gated by requireMod. Thin router; mounted from the
-// server.js composition root.
+//   __tenant_hunt__       — Bean's tenant only (bare fixed key; the string in Bean's OBS overlay URL)
+//   __tenant_hunt__:<id>  — every other tenant, namespaced so communities' tenant hunts don't collide
+// (same pattern for __affiliate_hunt__). The route PATH stays /api/mod-hunt for wire compat; only
+// the storage key was rebranded from __mod_hunt__ (see lib/hunts-core.js MOD_HUNT_ID + the startup
+// migration in lib/migrateSharedHuntKeys.js). All gated by requireMod. Thin router; mounted from
+// the server.js composition root.
 //
 // hunts/archive are persistence-owned singletons (by reference, never reassigned — only mutated).
 // Behavior unchanged from the inline routes; every hunt:update goes through publicHuntView.
@@ -15,7 +17,7 @@ const { sanitizeChases } = require('../lib/chases');
 const { defaultHuntTitle, sanitizeTitle } = require('../lib/huntTitle');
 
 // Audit summaries name the hunt, not its key: these are SHARED hunts, so `targetId` is the fixed
-// key (`__mod_hunt__:<tenant>`) rather than a user id, and a raw key reads as gibberish in the log.
+// key (`__tenant_hunt__:<tenant>`) rather than a user id, and a raw key reads as gibberish in the log.
 const MOD_HUNT_LABEL = "the Tenant Hunt"; // audit-log label (route/key names stay mod-hunt for wire compat)
 const AFFILIATE_HUNT_LABEL = "the Affiliate Hunt";
 const VIP_HUNT_LABEL = "the VIP Hunt";
