@@ -672,21 +672,27 @@ module.exports = function adminRoutes(deps) {
   });
 
   // ── Bulk hunt backfill (admin importer, spec §3 Track B) ────────────────
-  // Owner-gated bulk import of a community's PRE-PLATFORM hunt history. Two-phase: POST with
-  // commit:false returns a dry-run diff (creates/updates/rejects) and writes NOTHING; the operator
-  // reviews it and re-POSTs commit:true to write. The public write endpoint deliberately refuses
-  // anything older than 48h — this is where old history is allowed, behind a human confirm and the
-  // platform-admin gate. Reuses lib/huntBackfill.planImport, so a backfilled hunt is identical to
-  // an API-pushed one (idempotent huntId, _approxRate:true, fail-closed identity vetting).
-  router.post('/api/admin/import-hunts', requireAuth, requirePlatformAdmin, async (req, res) => {
-    const { slug, commit } = req.body || {};
+  // A COMMUNITY admin imports their own PRE-PLATFORM hunt history (so Bean's own mods/admins run
+  // this, not just the platform owner). Two-phase: POST with commit:false returns a dry-run diff
+  // (creates/updates/rejects) and writes NOTHING; the operator reviews it and re-POSTs commit:true
+  // to write. The public write endpoint deliberately refuses anything older than 48h — this is
+  // where old history is allowed, behind a human confirm and the admin gate. Reuses
+  // lib/huntBackfill.planImport, so a backfilled hunt is identical to an API-pushed one (idempotent
+  // huntId, _approxRate:true, fail-closed identity vetting).
+  //
+  // TENANT ISOLATION: the target is ALWAYS req.tenant (resolved from X-Tenant-Slug by
+  // resolveTenant), NEVER a client-supplied slug — requireAdmin has verified the caller
+  // administers THIS tenant, so a community admin can only ever backfill their own community's
+  // history. A platform owner keeps access here because they are an admin of every tenant.
+  router.post('/api/admin/import-hunts', requireAuth, requireAdmin, async (req, res) => {
+    const { commit } = req.body || {};
     const rows = Array.isArray(req.body?.hunts) ? req.body.hunts : null;
     if (!rows) return res.status(400).json({ error: 'hunts must be an array' });
     if (!rows.length) return res.status(400).json({ error: 'hunts is empty' });
     if (rows.length > 1000) return res.status(400).json({ error: 'Batch too large — max 1000 hunts per import' });
 
-    const target = tenants.getTenantBySlug(String(slug || ''));
-    if (!target) return res.status(404).json({ error: 'Community not found' });
+    const target = req.tenant;
+    if (!target || !target.id) return res.status(400).json({ error: 'No community context' });
 
     // huntId embeds tenantId, so a global huntId set can never cross communities.
     const existingIds = new Set(archive.map(h => h && h.huntId).filter(Boolean));
