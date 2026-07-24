@@ -338,7 +338,7 @@ huntsCore.initHuntsCore({
   shouldMaskIdentity: settings.shouldMaskIdentity,
 });
 const {
-  MOD_HUNT_ID, AFFILIATE_HUNT_ID, modHuntKey, affiliateHuntKey,
+  MOD_HUNT_ID, AFFILIATE_HUNT_ID, VIP_HUNT_ID, modHuntKey, affiliateHuntKey, vipHuntKey,
   huntSummary, huntCompleted, huntHasContent, tenantOf, inTenant,
   getPublicHunts, getArchivedHunts, getAllHunts, getSlotCallCounts, getGotInLog, getHuntsFullExport,
   emitHubUpdate, publicHuntView, emitHuntUpdate,
@@ -435,7 +435,7 @@ app.use(require('./routes/hunts.routes')({
 // Mod hunt + Affiliate hunt — two fixed-key shared hunts (routes/mod-hunt.routes.js).
 app.use(require('./routes/mod-hunt.routes')({
   hunts, archive, io, persistHunts, archiveHunt, unarchiveHunt,
-  requireMod, modHuntKey, affiliateHuntKey, tenants,
+  requireMod, modHuntKey, affiliateHuntKey, vipHuntKey, tenants,
   uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput, auditLog,
   getSettings: settings.getSettings, saveSettings: settings.saveSettings,
   persistOverlayConfig: require('./lib/overlayConfig').persistOverlayConfig,
@@ -582,7 +582,7 @@ app.use(require('./routes/share.routes')({
 //   • ended, incomplete, idle ≥ 36h        → delete (+ drop its archive snapshot)
 //   • ended/archived, completed            → keep
 // The 1h dead-reap skips the persistent shared mod/affiliate hunts and per-user paid tracker
-// hunts (tracker:/__mod_hunt__/__affiliate_hunt__ keys) — those keep the 36h grace so a mod
+// hunts (tracker:/__mod_hunt__/__affiliate_hunt__/__vip_hunt__ keys) — those keep the 36h grace so a mod
 // clearing the board or a subscriber's idle tracker isn't nuked mid-session.
 const STALE_MS = 36 * 60 * 60 * 1000;
 const EMPTY_STALE_MS = 60 * 60 * 1000; // 1h — an empty live regular hunt is reaped this fast
@@ -600,7 +600,7 @@ function cleanupStaleHunts() {
     if (h.isLive) {
       // Dead-reap: an empty regular user hunt idle ≥ 1h → delete outright. Persistent shared
       // (mod/affiliate) and paid tracker hunts are exempt — they fall through to the 36h rules.
-      const persistentKey = id.startsWith('tracker:') || id.startsWith(MOD_HUNT_ID) || id.startsWith(AFFILIATE_HUNT_ID);
+      const persistentKey = id.startsWith('tracker:') || id.startsWith(MOD_HUNT_ID) || id.startsWith(AFFILIATE_HUNT_ID) || id.startsWith(VIP_HUNT_ID);
       if (!persistentKey && !huntHasContent(h) && idleMs(h.updatedAt || h.startedAt) >= EMPTY_STALE_MS) {
         delete hunts[id]; deleted++;
         affectedTenants.add(tenantOf(h)); touchedRooms.push(id); huntsChanged = true;
