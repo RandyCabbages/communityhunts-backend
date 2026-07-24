@@ -16,7 +16,7 @@ const { defaultHuntTitle, sanitizeTitle } = require('../lib/huntTitle');
 
 // Audit summaries name the hunt, not its key: these are SHARED hunts, so `targetId` is the fixed
 // key (`__mod_hunt__:<tenant>`) rather than a user id, and a raw key reads as gibberish in the log.
-const MOD_HUNT_LABEL = "the Mod Hunt";
+const MOD_HUNT_LABEL = "the Tenant Hunt"; // audit-log label (route/key names stay mod-hunt for wire compat)
 const AFFILIATE_HUNT_LABEL = "the Affiliate Hunt";
 
 module.exports = function modHuntRoutes(deps) {
