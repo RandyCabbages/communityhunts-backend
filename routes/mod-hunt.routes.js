@@ -23,9 +23,23 @@ module.exports = function modHuntRoutes(deps) {
     hunts, archive, io, persistHunts, archiveHunt,
     requireMod, modHuntKey, affiliateHuntKey, tenants,
     uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput,
-    auditLog,
+    auditLog, getSettings, saveSettings, persistOverlayConfig,
   } = deps;
   const router = express.Router();
+
+  // Shared-overlay styling. The mod/affiliate hunts are shared, so their OBS overlay config lives
+  // under the hunt KEY (modHuntKey/affiliateHuntKey), read publicly via GET /api/overlay-config/:id.
+  // These requireMod writes let a mod restyle that shared overlay; the emit live-restyles the open
+  // OBS source (its browser source joined room hunt:<key> via watch:hunt), mirroring the personal
+  // overlay path in settings.routes.js. The link never changes — only the stored style does.
+  const overlayConfigRoute = (keyFor) => async (req, res) => {
+    const key = keyFor(req.tenant.id);
+    const cfg = await persistOverlayConfig(getSettings, saveSettings, key, req.body.overlayConfig);
+    if (io) io.to(`hunt:${key}`).emit('overlay-config:update', cfg);
+    res.json({ ok: true });
+  };
+  router.put('/api/mod-hunt/overlay-config', requireMod, overlayConfigRoute(modHuntKey));
+  router.put('/api/affiliate-hunt/overlay-config', requireMod, overlayConfigRoute(affiliateHuntKey));
 
   // Resolve the display name shown in Bean's-Hunt/Affiliate-Hunt equity from the tenant's own
   // branding, instead of hardcoding 'Bean'. Bean's tenant has branding.hostName === 'Bean', so

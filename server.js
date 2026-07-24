@@ -437,6 +437,8 @@ app.use(require('./routes/mod-hunt.routes')({
   hunts, archive, io, persistHunts, archiveHunt,
   requireMod, modHuntKey, affiliateHuntKey, tenants,
   uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput, auditLog,
+  getSettings: settings.getSettings, saveSettings: settings.saveSettings,
+  persistOverlayConfig: require('./lib/overlayConfig').persistOverlayConfig,
 }));
 
 // Tenant-mod management (routes/mods.routes.js). Add/remove by the tenant's own admin (or a
