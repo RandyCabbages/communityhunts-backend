@@ -642,6 +642,34 @@ module.exports = function adminRoutes(deps) {
       res.status(400).json({ error: e.message });
     }
   });
+  // ── Change a community's plan ───────────────────────────────────────
+  // The create endpoint above could SET a plan; nothing could CHANGE one, so every upgrade,
+  // downgrade and comp meant hand-written SQL against production — and since `plan` is derived
+  // into an in-memory cache at boot, a bare UPDATE stayed inert until the next deploy.
+  // updateTenantPlan reloads the cache, so this takes effect immediately.
+  //
+  // Platform-admin only: plan drives feature gating and mod-seat caps, so a community admin
+  // must never be able to upgrade their own tenant. Audited for the same reason.
+  router.put('/api/admin/tenants/:slug/plan', requireAuth, requirePlatformAdmin, async (req, res) => {
+    const slug = req.params.slug;
+    const target = tenants.getTenantBySlug(slug);
+    if (!target) return res.status(404).json({ error: 'Community not found' });
+    const before = target.plan;
+    try {
+      const plan = await tenants.updateTenantPlan(target.id, (req.body || {}).plan);
+      auditLog.recordFromReq(req, {
+        category: 'admin', action: 'tenant.plan',
+        targetId: target.id, targetName: target.displayName,
+        summary: `${target.displayName} moved from ${before} to ${plan}`,
+        detail: { before, after: plan },
+      });
+      res.json({ ok: true, slug, plan });
+    } catch (e) {
+      // updateTenantPlan throws on an unknown plan — that's a caller error, not a server fault.
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   router.delete('/api/admin/tenants/:slug', requireAuth, requirePlatformAdmin, async (req, res) => {
     try {
       await tenants.deleteTenant(req.params.slug);
