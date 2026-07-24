@@ -677,6 +677,9 @@ app.use(require('./routes/admin.routes')({
   // and returns a SET per name, so ambiguity is explicit rather than silently collapsed.
   findAliasOwners: settings.findAliasOwners,
   persistHunts,
+  // Vets client-asserted equity discordIds on backfill import (fail-closed) — same predicate the
+  // public write path uses.
+  isKnownAccount: (id) => settings.getKnownUser(id),
 }));
 
 // Audit-log read endpoint (routes/audit.routes.js). Owner-only, spans ALL tenants.

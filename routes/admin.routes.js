@@ -32,6 +32,7 @@ const { buildGotInWorkbook, ymdInTz } = require('../lib/gotin-export');
 const { CURRENCIES, inTenant } = require('../lib/hunts-core');
 const { computeOverviewMetrics, groupHuntsByCurrency } = require('../lib/adminMetrics');
 const { collectUnlinkedNames, applyNameLinks, unlinkNameLinks } = require('../lib/identityLink');
+const { planImport } = require('../lib/huntBackfill');
 
 module.exports = function adminRoutes(deps) {
   const {
@@ -41,7 +42,7 @@ module.exports = function adminRoutes(deps) {
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
     subscriptions, auditLog, getPlatformBotToken, recordAlias, recordKnownUser,
-    activityFeed, presence, findAliasOwners, persistHunts,
+    activityFeed, presence, findAliasOwners, persistHunts, isKnownAccount,
   } = deps;
   const router = express.Router();
 
@@ -668,6 +669,63 @@ module.exports = function adminRoutes(deps) {
       // updateTenantPlan throws on an unknown plan — that's a caller error, not a server fault.
       res.status(400).json({ error: e.message });
     }
+  });
+
+  // ── Bulk hunt backfill (admin importer, spec §3 Track B) ────────────────
+  // Owner-gated bulk import of a community's PRE-PLATFORM hunt history. Two-phase: POST with
+  // commit:false returns a dry-run diff (creates/updates/rejects) and writes NOTHING; the operator
+  // reviews it and re-POSTs commit:true to write. The public write endpoint deliberately refuses
+  // anything older than 48h — this is where old history is allowed, behind a human confirm and the
+  // platform-admin gate. Reuses lib/huntBackfill.planImport, so a backfilled hunt is identical to
+  // an API-pushed one (idempotent huntId, _approxRate:true, fail-closed identity vetting).
+  router.post('/api/admin/import-hunts', requireAuth, requirePlatformAdmin, async (req, res) => {
+    const { slug, commit } = req.body || {};
+    const rows = Array.isArray(req.body?.hunts) ? req.body.hunts : null;
+    if (!rows) return res.status(400).json({ error: 'hunts must be an array' });
+    if (!rows.length) return res.status(400).json({ error: 'hunts is empty' });
+    if (rows.length > 1000) return res.status(400).json({ error: 'Batch too large — max 1000 hunts per import' });
+
+    const target = tenants.getTenantBySlug(String(slug || ''));
+    if (!target) return res.status(404).json({ error: 'Community not found' });
+
+    // huntId embeds tenantId, so a global huntId set can never cross communities.
+    const existingIds = new Set(archive.map(h => h && h.huntId).filter(Boolean));
+
+    let plan;
+    try {
+      plan = await planImport(rows, {
+        tenantId: target.id, hostDiscordId: target.hostDiscordId,
+        now: Date.now(), existingIds, isKnownAccount,
+      });
+    } catch (e) {
+      console.error('[admin] import-hunts plan failed:', e.message);
+      return res.status(500).json({ error: 'Failed to plan import' });
+    }
+
+    const totals = { creates: plan.creates.length, updates: plan.updates.length, rejects: plan.rejects.length };
+    const base = { slug: target.slug, community: target.displayName,
+      creates: plan.creates, updates: plan.updates, rejects: plan.rejects, totals };
+
+    if (!commit) return res.json({ dryRun: true, ...base });
+
+    for (const hunt of plan.hunts) archiveHunt(hunt); // archiveHunt persists + records stats itself
+    emitHubUpdate(target.id);                          // refresh the community's Archived tab
+
+    // ONE batch audit row — a per-hunt row would flood the log. externalIds in `detail` make it
+    // inspectable/reversible.
+    auditLog.recordFromReq(req, {
+      category: 'admin', action: 'hunt.backfill',
+      targetId: target.id, targetName: target.displayName,
+      summary: `Imported ${totals.creates} + updated ${totals.updates} hunt(s) into ${target.displayName} (${totals.rejects} rejected)`,
+      detail: {
+        slug: target.slug,
+        created: plan.creates.map(c => c.externalId),
+        updated: plan.updates.map(u => u.externalId),
+        rejected: plan.rejects.map(r => ({ index: r.index, externalId: r.externalId, code: r.code })),
+      },
+    });
+
+    res.json({ committed: true, ...base });
   });
 
   router.delete('/api/admin/tenants/:slug', requireAuth, requirePlatformAdmin, async (req, res) => {
