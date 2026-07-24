@@ -179,8 +179,8 @@ module.exports = function modHuntRoutes(deps) {
     if (bonuses    !== undefined) hunts[key].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
     if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
     if (gifts      !== undefined) hunts[key].gifts      = gifts;
-    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
+    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases, hunts[key].payouts || {});
     if (vault      !== undefined) hunts[key].vault      = vault;
     if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
@@ -355,8 +355,8 @@ module.exports = function modHuntRoutes(deps) {
     if (bonuses    !== undefined) hunts[key].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
     if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
     if (gifts      !== undefined) hunts[key].gifts      = gifts;
-    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
+    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases, hunts[key].payouts || {});
     if (vault      !== undefined) hunts[key].vault      = vault;
     if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
@@ -526,8 +526,8 @@ module.exports = function modHuntRoutes(deps) {
     if (bonuses    !== undefined) hunts[key].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
     if (equity     !== undefined) hunts[key].equity     = preserveRowIdentity(_before.equity, equity, 'discordId');
     if (gifts      !== undefined) hunts[key].gifts      = gifts;
-    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
+    if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases, hunts[key].payouts || {});
     if (vault      !== undefined) hunts[key].vault      = vault;
     if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;

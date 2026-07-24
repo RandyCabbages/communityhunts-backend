@@ -321,8 +321,8 @@ module.exports = function huntsRoutes(deps) {
     const _eq = hunts[req.user.id].equity;
     if (bonuses    !== undefined) hunts[req.user.id].bonuses    = preserveRowIdentity(_before.bonuses, _vetted(vetCallerIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), _eq)), 'callerId');
     if (gifts      !== undefined) hunts[req.user.id].gifts      = gifts;
-    if (chases     !== undefined) hunts[req.user.id].chases     = sanitizeChases(chases);
     if (payouts    !== undefined) hunts[req.user.id].payouts    = sanitizePayouts(payouts);
+    if (chases     !== undefined) hunts[req.user.id].chases     = sanitizeChases(chases, hunts[req.user.id].payouts || {});
     if (vault      !== undefined) hunts[req.user.id].vault      = vault;
     if (calls      !== undefined) hunts[req.user.id].calls      = preserveRowIdentity(_before.calls, _vetted(vetCallerIdentity(_before.calls, calls, _eq)), 'callerId');
     if (huntType   !== undefined) {
