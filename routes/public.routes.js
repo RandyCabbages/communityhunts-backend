@@ -15,7 +15,7 @@ module.exports = function publicRoutes(deps) {
   const {
     requireApiKey, requireApiFeature, rateLimit, serializers,
     getHuntStats, hunts, archive, tenantOf,
-    huntHasContent, huntCompleted, modHuntKey, affiliateHuntKey,
+    huntHasContent, huntCompleted,
     getGotInLog, collectBangers,
   } = deps;
   const router = express.Router();
@@ -45,14 +45,20 @@ module.exports = function publicRoutes(deps) {
       return res.status(400).json({ error: { code: 'invalid_status', message: 'status must be one of: live, archived, all' } });
     }
     let list = [];
-    // Mirrors lib/hunts-core.js getPublicHunts/getArchivedHunts eligibility predicates EXACTLY,
-    // applied to the raw hunt objects (not huntSummary — serializers.publicHunt needs the full
-    // hunt). Keep this in sync with hunts-core.js by hand; do not call getPublicHunts/
+    // Mirrors lib/hunts-core.js getPublicHunts/getArchivedHunts, applied to the raw hunt objects
+    // (not huntSummary — serializers.publicHunt needs the full hunt), with ONE deliberate
+    // difference: the hub filter also excludes the shared Mod/Affiliate hunts, and this does not.
+    //
+    // Those two are hidden from the PUBLIC hub because it's an open web page. The API is not:
+    // requireApiKey derives the tenant from the key and overwrites req.tenant, so a key can only
+    // ever reach its own community's hunts. A host asking their own API for their own affiliate
+    // hunt is exactly the intended use — that was the streaming team's ask.
+    //
+    // Keep the rest in sync with hunts-core.js by hand; do not call getPublicHunts/
     // getArchivedHunts directly here.
     if (status === 'live' || status === 'all') {
       list = list.concat(Object.values(hunts).filter(h =>
-        h.isLive && huntHasContent(h) && !huntCompleted(h) && tenantOf(h) === tid &&
-        h.user?.id !== modHuntKey(tid) && h.user?.id !== affiliateHuntKey(tid)));
+        h.isLive && huntHasContent(h) && !huntCompleted(h) && tenantOf(h) === tid));
     }
     if (status === 'archived' || status === 'all') {
       list = list.concat(archive.filter(h => tenantOf(h) === tid && huntCompleted(h)));
