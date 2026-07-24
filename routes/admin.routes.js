@@ -29,7 +29,12 @@
 
 const express = require('express');
 const { buildGotInWorkbook, ymdInTz } = require('../lib/gotin-export');
-const { CURRENCIES, inTenant } = require('../lib/hunts-core');
+const { CURRENCIES, inTenant, MOD_HUNT_ID, AFFILIATE_HUNT_ID, VIP_HUNT_ID } = require('../lib/hunts-core');
+// The mod/affiliate/vip hunts are persistent fixed-key shared hunts — always `isLive`, and they
+// stay live (empty) even after a reset. They have their own hub panels, so they must NOT clutter
+// the admin "live hunts" panel (a per-tenant key looks like `__mod_hunt__:<tenant>`, hence prefix).
+const isSharedHuntKey = (id) => typeof id === 'string' &&
+  (id.startsWith(MOD_HUNT_ID) || id.startsWith(AFFILIATE_HUNT_ID) || id.startsWith(VIP_HUNT_ID));
 const { computeOverviewMetrics, groupHuntsByCurrency } = require('../lib/adminMetrics');
 const { collectUnlinkedNames, applyNameLinks, unlinkNameLinks } = require('../lib/identityLink');
 const { planImport } = require('../lib/huntBackfill');
@@ -166,9 +171,10 @@ module.exports = function adminRoutes(deps) {
   // tenantHuntsUnion in lib/hunts-core.js (current ∪ archived, deduped by huntId), which is not
   // exported.
   //
-  // Deviation from getHuntStats: the mod/affiliate fixed-key hunts are NOT excluded here. This is
-  // an operator console answering "what is happening right now" — hiding the community's own mod
-  // hunt from its admin would be a bug, not a feature.
+  // The mod/affiliate/vip fixed-key hunts are NOT excluded here — the metrics aggregations still
+  // count the community's own shared hunts. The "live hunts" panel (GET /api/admin/metrics/live)
+  // filters them out via isSharedHuntKey, since they're always-live and persist (empty) after a
+  // reset, so they'd otherwise clutter the "what's running now" list.
   function rawHuntsForTenant(tenantId) {
     const current = Object.values(hunts).filter(h => inTenant(h, tenantId));
     const seen = new Set(current.map(h => h.huntId).filter(Boolean));
@@ -258,7 +264,7 @@ module.exports = function adminRoutes(deps) {
     // Presence filters on the socket's handshake slug; platform scope counts every tenant.
     const tenantSlug = scope === 'platform' ? null : (req.tenant?.slug || null);
 
-    const live = huntsForScope(req, scope).filter(h => h.isLive && !h.archivedAt);
+    const live = huntsForScope(req, scope).filter(h => h.isLive && !h.archivedAt && !isSharedHuntKey(h.user?.id));
     const huntRows = live.map(h => {
       const bonuses = h.bonuses || [];
       const total = bonuses.length;
