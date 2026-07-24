@@ -12,6 +12,7 @@
 
 const express = require('express');
 const { sanitizeBonusReplayUrls, preserveRowIdentity } = require('../lib/hunts-core');
+const huntRevert = require('../lib/huntRevert');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { defaultHuntTitle, sanitizeTitle } = require('../lib/huntTitle');
@@ -45,6 +46,78 @@ module.exports = function modHuntRoutes(deps) {
   router.put('/api/mod-hunt/overlay-config', requireMod, overlayConfigRoute(modHuntKey));
   router.put('/api/affiliate-hunt/overlay-config', requireMod, overlayConfigRoute(affiliateHuntKey));
   router.put('/api/vip-hunt/overlay-config', requireMod, overlayConfigRoute(vipHuntKey));
+
+  // ── Activity panel: per-hunt audit view + revert (see docs/.../shared-hunt-activity-revert) ──
+  // Tenant-safe view of an audit row for the mod-facing panel: strip `ip` (mods must never see it —
+  // the owner /admin/audit endpoint is the only place that exposes it). Keep `detail` (the panel
+  // reads detail.removed / detail.members to describe + revert the change).
+  const activityRow = ({ ip, ...rest }) => rest;
+
+  // Recent hunt-activity for ONE shared hunt. Key is derived from req.tenant server-side, so a mod
+  // only ever sees their own tenant's hunt (no client-supplied target).
+  const activityRoute = (keyFor) => async (req, res) => {
+    try {
+      const key = keyFor(req.tenant.id);
+      const out = await auditLog.query({
+        targetId: key, category: 'hunt',
+        limit: req.query.limit || 50, cursor: req.query.cursor || null,
+      });
+      res.json({ rows: (out.rows || []).map(activityRow), nextCursor: out.nextCursor || null });
+    } catch (e) {
+      console.error('[hunt-activity] query failed:', e.message);
+      res.status(500).json({ error: 'Activity query failed' });
+    }
+  };
+  router.get('/api/mod-hunt/activity', requireMod, activityRoute(modHuntKey));
+  router.get('/api/affiliate-hunt/activity', requireMod, activityRoute(affiliateHuntKey));
+  router.get('/api/vip-hunt/activity', requireMod, activityRoute(vipHuntKey));
+
+  // Apply a { bonuses?, equity?, calls? } patch to the shared hunt through the SAME write path a
+  // normal PUT uses, then audit it (so the revert is itself a reversible row). Label per hunt kind.
+  function applyRevert(req, key, patch, label) {
+    const h = hunts[key];
+    if (!h) return false;
+    const before = { bonuses: [...(h.bonuses || [])], equity: [...(h.equity || [])], calls: [...(h.calls || [])] };
+    if (patch.bonuses !== undefined) h.bonuses = preserveRowIdentity(before.bonuses, sanitizeBonusReplayUrls(patch.bonuses), 'callerId');
+    if (patch.equity  !== undefined) h.equity  = preserveRowIdentity(before.equity, patch.equity, 'discordId');
+    if (patch.calls   !== undefined) h.calls   = preserveRowIdentity(before.calls, patch.calls, 'callerId');
+    touch(key);
+    persistHunts();
+    emitHuntUpdate(key);
+    auditLog.recordHuntChange(req, before,
+      { bonuses: h.bonuses, equity: h.equity, calls: h.calls },
+      { targetId: key, huntLabel: label });
+    return true;
+  }
+
+  const undoRoute = (keyFor, label) => async (req, res) => {
+    const key = keyFor(req.tenant.id);
+    const row = await auditLog.getById(req.params.id);
+    if (!huntRevert.isRevertableRow(row, key)) return res.status(404).json({ error: 'Activity not found' });
+    let patch;
+    try { patch = huntRevert.scopedUndoPatch(hunts[key] || {}, row); }
+    catch { return res.status(400).json({ error: 'Nothing to undo for this action' }); }
+    if (!applyRevert(req, key, patch, label)) return res.status(404).json({ error: 'No hunt' });
+    res.json({ ok: true });
+  };
+
+  const restoreRoute = (keyFor, label) => async (req, res) => {
+    const key = keyFor(req.tenant.id);
+    const row = await auditLog.getById(req.params.id);
+    if (!huntRevert.isRevertableRow(row, key)) return res.status(404).json({ error: 'Activity not found' });
+    let patch;
+    try { patch = huntRevert.fullRestorePatch(row); }
+    catch { return res.status(400).json({ error: 'No snapshot to restore' }); }
+    if (!applyRevert(req, key, patch, label)) return res.status(404).json({ error: 'No hunt' });
+    res.json({ ok: true });
+  };
+
+  router.post('/api/mod-hunt/activity/:id/undo', requireMod, undoRoute(modHuntKey, MOD_HUNT_LABEL));
+  router.post('/api/affiliate-hunt/activity/:id/undo', requireMod, undoRoute(affiliateHuntKey, AFFILIATE_HUNT_LABEL));
+  router.post('/api/vip-hunt/activity/:id/undo', requireMod, undoRoute(vipHuntKey, VIP_HUNT_LABEL));
+  router.post('/api/mod-hunt/activity/:id/restore', requireMod, restoreRoute(modHuntKey, MOD_HUNT_LABEL));
+  router.post('/api/affiliate-hunt/activity/:id/restore', requireMod, restoreRoute(affiliateHuntKey, AFFILIATE_HUNT_LABEL));
+  router.post('/api/vip-hunt/activity/:id/restore', requireMod, restoreRoute(vipHuntKey, VIP_HUNT_LABEL));
 
   // Resolve the display name shown in Bean's-Hunt/Affiliate-Hunt equity from the tenant's own
   // branding, instead of hardcoding 'Bean'. Bean's tenant has branding.hostName === 'Bean', so
