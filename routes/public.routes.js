@@ -3,6 +3,9 @@
 // the tenant from the KEY and overrides req.tenant, so tenant never comes from a header here.
 
 const express = require('express');
+// Anonymous-host masking, required by collectBangers. Required directly rather than injected,
+// matching routes/misc.routes.js — the twin call site for the same rail.
+const { shouldMaskIdentity } = require('../lib/settings');
 
 function paginate(req) {
   let limit = parseInt(req.query.limit, 10); if (!Number.isFinite(limit) || limit <= 0) limit = 25;
@@ -31,6 +34,11 @@ module.exports = function publicRoutes(deps) {
     // middleware now skips /api/public/* entirely (server.js), but strip defensively in case
     // something upstream ever sets it again.
     res.removeHeader('Access-Control-Allow-Credentials');
+    // Every response here varies by the KEY, and the key is the Authorization header — so the
+    // URL alone is NOT a safe cache key. Without this, a shared cache (a CDN or gateway in front
+    // of the service, a customer's reverse proxy) can store one community's /stats or /bangers
+    // and serve it to another community's request. Set once here so no future route can forget.
+    res.set('Vary', 'Authorization');
     if (req.method === 'OPTIONS') return res.status(204).end();
     next();
   });
@@ -74,12 +82,15 @@ module.exports = function publicRoutes(deps) {
     const tid = req.apiTenantId, id = req.params.id;
     const found = [...Object.values(hunts), ...archive].find(h => h.huntId === id && tenantOf(h) === tid);
     if (!found) return res.status(404).json({ error: { code: 'not_found', message: 'Hunt not found' } });
+    // Explicit, not absent: with no directive a shared cache may heuristically cache a 200 GET,
+    // and this body is per-tenant. A live hunt also changes constantly.
+    res.set('Cache-Control', 'no-store');
     res.json({ data: serializers.publicHunt(found) });
   });
 
   router.get('/api/public/v1/stats', requireApiFeature('developer_api'), (req, res) => {
     const stats = getHuntStats(req.apiTenantId);
-    res.set('Cache-Control', 'public, max-age=60');
+    res.set('Cache-Control', 'private, max-age=60'); // private: per-tenant, never shared-cacheable
     res.json({ data: serializers.publicStats(stats) });
   });
 
@@ -94,13 +105,21 @@ module.exports = function publicRoutes(deps) {
   });
 
   router.get('/api/public/v1/bangers', requireApiFeature('developer_api_premium'), (req, res) => {
-    const list = collectBangers(hunts, archive, req.apiTenantId).map(serializers.publicBanger);
-    res.set('Cache-Control', 'public, max-age=60');
+    // isAnon is REQUIRED here — without it a host who opted into anonymous mode is returned by
+    // real name to every holder of this community's API key, while the public hub masks them.
+    const list = collectBangers(hunts, archive, req.apiTenantId, { isAnon: shouldMaskIdentity })
+      .map(serializers.publicBanger);
+    res.set('Cache-Control', 'private, max-age=60'); // private: per-tenant, never shared-cacheable
     res.json({ data: list, pagination: { limit: list.length, offset: 0, total: list.length } });
   });
 
   // Public-scoped error envelope (the global handler returns a bare string — wrong shape).
-  router.use((err, req, res, next) => {
+  // MUST stay path-scoped. Unscoped, this caught errors from every router mounted BEFORE this
+  // one in server.js (auth, hunts, mod-hunt, mods, announcements, ledger): Express propagates
+  // errors forward through the stack, so those routes returned the public API's error shape and
+  // their stack traces were swallowed — the global handler at the bottom of server.js, which is
+  // what logs `err.stack`, never ran.
+  router.use('/api/public/v1', (err, req, res, next) => {
     console.error('[public-api] error:', err && err.message);
     res.status(500).json({ error: { code: 'server_error', message: 'Internal error' } });
   });
