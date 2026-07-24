@@ -28,9 +28,12 @@ module.exports = function apiKeysRoutes(deps) {
 
   router.post('/api/admin/api-key', requireAuth, requireOwnerOrPlatform, (req, res) => {
     if (!qualifies(req)) return res.status(403).json({ error: 'Upgrade to Pro to use the Developer API' });
-    const { rawKey, prefix } = apiKeys.generateKey(req.tenant.slug, req.user.id);
+    // Write is opt-in PER KEY. Omitting `scopes` yields a read-only key, so the safe key is what
+    // you get by default and the powerful one has to be asked for. normalizeScopes drops anything
+    // that isn't a real scope, so a junk body can't widen the grant.
+    const { rawKey, prefix, scopes } = apiKeys.generateKey(req.tenant.slug, req.user.id, req.body && req.body.scopes);
     res.set('Cache-Control', 'no-store');
-    res.json({ rawKey, prefix }); // rawKey shown exactly once
+    res.json({ rawKey, prefix, scopes }); // rawKey shown exactly once
   });
 
   router.delete('/api/admin/api-key', requireAuth, requireOwnerOrPlatform, (req, res) => {
