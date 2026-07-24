@@ -6,6 +6,8 @@ const express = require('express');
 // Anonymous-host masking, required by collectBangers. Required directly rather than injected,
 // matching routes/misc.routes.js — the twin call site for the same rail.
 const { shouldMaskIdentity } = require('../lib/settings');
+const { validateImport, buildImportedHunt } = require('../lib/huntImport');
+const { vetEquityIdentity } = require('../lib/identityWrites');
 
 function paginate(req) {
   let limit = parseInt(req.query.limit, 10); if (!Number.isFinite(limit) || limit <= 0) limit = 25;
@@ -16,10 +18,11 @@ function paginate(req) {
 
 module.exports = function publicRoutes(deps) {
   const {
-    requireApiKey, requireApiFeature, rateLimit, serializers,
-    getHuntStats, hunts, archive, tenantOf,
+    requireApiKey, requireApiFeature, requireApiScope, rateLimit, writeRateLimit, ipFloor,
+    serializers, getHuntStats, hunts, archive, tenantOf,
     huntHasContent, huntCompleted,
     getGotInLog, collectBangers,
+    archiveHunt, auditLog, isKnownAccount,
   } = deps;
   const router = express.Router();
 
@@ -28,7 +31,7 @@ module.exports = function publicRoutes(deps) {
   // request in the app and clobber the global cors() headers on unrelated routes.
   router.use('/api/public/v1', (req, res, next) => {
     res.set('Access-Control-Allow-Origin', '*');
-    res.set('Access-Control-Allow-Methods', 'GET,OPTIONS');
+    res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
     res.set('Access-Control-Allow-Headers', 'Authorization,Content-Type');
     // ACAO:* + ACAC:true is an invalid combination (browsers reject it). The global CORS
     // middleware now skips /api/public/* entirely (server.js), but strip defensively in case
@@ -44,7 +47,9 @@ module.exports = function publicRoutes(deps) {
   });
 
   // Every route: key → rate limit → (tier) → handler.
-  router.use('/api/public/v1', requireApiKey, rateLimit);
+  // ipFloor runs BEFORE requireApiKey deliberately: rateLimit keys off the tenant resolved from
+  // the key, so without this a request carrying an invalid key is metered by nothing at all.
+  router.use('/api/public/v1', ipFloor, requireApiKey, rateLimit);
 
   router.get('/api/public/v1/hunts', requireApiFeature('developer_api'), (req, res) => {
     const tid = req.apiTenantId;
@@ -87,6 +92,55 @@ module.exports = function publicRoutes(deps) {
     res.set('Cache-Control', 'no-store');
     res.json({ data: serializers.publicHunt(found) });
   });
+
+  // Write a completed hunt. FOUR independent gates, all of which must pass:
+  //   plan (developer_api) → key scope (write) → write rate bucket → payload validation.
+  // Plan and scope are deliberately separate questions: one is what the community bought, the
+  // other is what THIS key was trusted with.
+  router.post('/api/public/v1/hunts',
+    requireApiFeature('developer_api'), requireApiScope('write'), writeRateLimit,
+    async (req, res, next) => {
+      try {
+        const tid = req.apiTenantId;
+        const parsed = validateImport(req.body, { now: Date.now() });
+        if (!parsed.ok) return res.status(400).json({ error: { code: parsed.code, message: parsed.message } });
+
+        const hunt = buildImportedHunt(parsed.value, {
+          tenantId: tid,
+          hostDiscordId: req.apiTenant && req.apiTenant.hostDiscordId,
+        });
+
+        // Client-asserted discordIds are vetted against real accounts and STRIPPED when they
+        // fail. An API key is a less trusted caller than a logged-in host, so this is not
+        // optional — skipping it would reopen, from a machine endpoint at volume, exactly the
+        // hole backend PR #88 closed. vetEquityIdentity already fails CLOSED when the
+        // isKnownAccount predicate is missing, so a wiring mistake rejects rather than admits.
+        const vetted = await vetEquityIdentity([], hunt.equity, { isKnownAccount });
+        hunt.equity = vetted.rows;
+
+        // Read before writing: archiveHunt upserts, so this is what distinguishes 201 from 200.
+        const existing = archive.some(h => h.huntId === hunt.huntId);
+        archiveHunt(hunt);
+
+        auditLog.record({
+          category: 'api', action: existing ? 'hunt.import.update' : 'hunt.import.create',
+          actorId: `apikey:${tid}`, actorName: 'Developer API', tenantId: tid,
+          targetId: hunt.huntId,
+          summary: `${existing ? 'Updated' : 'Imported'} hunt ${parsed.value.externalId} (${hunt.bonuses.length} bonuses)`,
+          detail: { externalId: parsed.value.externalId, huntType: parsed.value.huntType,
+                    rejectedIdentities: vetted.rejected.length },
+          ip: req.ip,
+        });
+
+        res.set('Cache-Control', 'no-store');
+        res.status(existing ? 200 : 201).json({
+          data: serializers.publicHunt(hunt),
+          // Surfaced, not silent: a row whose discordId was refused will not roll up into
+          // payouts or caller leaderboards, and the caller needs to know that happened.
+          rejectedIdentities: vetted.rejected.length,
+        });
+      } catch (e) { next(e); }
+    });
 
   router.get('/api/public/v1/stats', requireApiFeature('developer_api'), (req, res) => {
     const stats = getHuntStats(req.apiTenantId);
