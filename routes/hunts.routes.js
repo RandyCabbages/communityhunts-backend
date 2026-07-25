@@ -17,7 +17,8 @@ const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquit
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { diffOpenedBonuses } = require('../lib/activityFeed');
-const { linkWithinHunt } = require('../lib/identityLink');
+const { linkWithinHunt, linkFromConfirmed } = require('../lib/identityLink');
+const confirmedAliases = require('../lib/confirmedAliases');
 const { vetEquityIdentity, vetCallerIdentity } = require('../lib/identityWrites');
 
 module.exports = function huntsRoutes(deps) {
@@ -339,6 +340,10 @@ module.exports = function huntsRoutes(deps) {
     if (publicCallsPin !== undefined) hunts[req.user.id].publicCallsPin = publicCallsPin;
     if (currentSlot !== undefined) hunts[req.user.id].currentSlot = currentSlot;
     if (manualOrder !== undefined) hunts[req.user.id].manualOrder = manualOrder;
+    // Tier 1.5 FIRST: replay decisions a platform admin already confirmed (lib/confirmedAliases.js
+    // — in-memory, no query on this 500ms-hot path). It seeds equity ids, which is what gives the
+    // Tier 1 pass below something to resolve this hunt's typed caller names against.
+    const _confirmed = linkFromConfirmed(hunts[req.user.id], confirmedAliases.resolve);
     // Tier 1 identity linking: fill blank callerIds from THIS hunt's already-linked equity rows.
     // Unique matches only, blanks only — see lib/identityLink.js. Runs before persist so the
     // stored hunt and the audit snapshot below agree.
@@ -351,11 +356,12 @@ module.exports = function huntsRoutes(deps) {
       _before,
       { bonuses: hunts[req.user.id].bonuses, equity: hunts[req.user.id].equity, calls: hunts[req.user.id].calls },
       { targetId: req.user.id, targetName: req.user.displayName });
-    if (_linked.links.length) {
+    const _autolinks = [..._confirmed.links, ..._linked.links];
+    if (_autolinks.length) {
       auditLog.recordFromReq(req, {
         category: 'hunt', action: 'identity.autolink', targetId: req.user.id,
-        summary: `${_linked.links.length} row(s) auto-linked to a Discord id`,
-        detail: { links: _linked.links },
+        summary: `${_autolinks.length} row(s) auto-linked to a Discord id`,
+        detail: { links: _autolinks, fromConfirmed: _confirmed.links.length },
       });
     }
     // Identity assigned by a client is audited both ways: accepted writes because they decide

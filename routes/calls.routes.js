@@ -13,7 +13,8 @@ const express = require('express');
 const { sanitizeBonusReplayUrls, bindEquityIdentityByName, preserveRowIdentity } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
-const { linkWithinHunt } = require('../lib/identityLink');
+const { linkWithinHunt, linkFromConfirmed } = require('../lib/identityLink');
+const confirmedAliases = require('../lib/confirmedAliases');
 const { vetEquityIdentity, vetCallerIdentity } = require('../lib/identityWrites');
 
 module.exports = function callsRoutes(deps) {
@@ -164,8 +165,9 @@ module.exports = function callsRoutes(deps) {
     if (publicCallsPin !== undefined) hunt.publicCallsPin = publicCallsPin;
     if (currentSlot !== undefined) hunt.currentSlot = currentSlot;
     if (manualOrder !== undefined) hunt.manualOrder = manualOrder;
-    // Tier 1 identity linking — see the twin hook in routes/hunts.routes.js. BOTH save paths
+    // Tier 1.5 then Tier 1 — see the twin hook in routes/hunts.routes.js. BOTH save paths
     // replace the whole arrays, so hooking only one leaves a silent gap for editor/admin edits.
+    const _confirmed = linkFromConfirmed(hunt, confirmedAliases.resolve);
     const _linked = linkWithinHunt(hunt);
     hunt.updatedAt = new Date().toISOString();
     emitHuntUpdate(req.params.userId); // per-socket (persists + redacts anonymous names)
@@ -173,11 +175,12 @@ module.exports = function callsRoutes(deps) {
     auditLog.recordHuntChange(req, _before,
       { bonuses: hunt.bonuses, equity: hunt.equity, calls: hunt.calls },
       { targetId: req.params.userId, targetName: hunt.user && hunt.user.displayName });
-    if (_linked.links.length) {
+    const _autolinks = [..._confirmed.links, ..._linked.links];
+    if (_autolinks.length) {
       auditLog.recordFromReq(req, {
         category: 'hunt', action: 'identity.autolink', targetId: req.params.userId,
-        summary: `${_linked.links.length} row(s) auto-linked to a Discord id`,
-        detail: { links: _linked.links },
+        summary: `${_autolinks.length} row(s) auto-linked to a Discord id`,
+        detail: { links: _autolinks, fromConfirmed: _confirmed.links.length },
       });
     }
     if (_idAudit.accepted.length || _idAudit.rejected.length) {

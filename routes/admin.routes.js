@@ -37,6 +37,7 @@ const isSharedHuntKey = (id) => typeof id === 'string' &&
   (id.startsWith(MOD_HUNT_ID) || id.startsWith(AFFILIATE_HUNT_ID) || id.startsWith(VIP_HUNT_ID));
 const { computeOverviewMetrics, groupHuntsByCurrency } = require('../lib/adminMetrics');
 const { collectUnlinkedNames, applyNameLinks, unlinkNameLinks } = require('../lib/identityLink');
+const confirmedAliases = require('../lib/confirmedAliases');
 const { planImport } = require('../lib/huntBackfill');
 
 module.exports = function adminRoutes(deps) {
@@ -47,7 +48,8 @@ module.exports = function adminRoutes(deps) {
     hunts, archive, archiveHunt, unarchiveHunt, persistArchive,
     emitHubUpdate, publicHuntView, emitHuntUpdate, io, uid, cleanupStaleHunts,
     subscriptions, auditLog, getPlatformBotToken, recordAlias, recordKnownUser,
-    activityFeed, presence, findAliasOwners, persistHunts, isKnownAccount,
+    activityFeed, presence, findAliasOwners, findAliasOwnersLoose, deleteAlias,
+    persistHunts, isKnownAccount,
   } = deps;
   const router = express.Router();
 
@@ -312,9 +314,13 @@ module.exports = function adminRoutes(deps) {
     const list = everyHunt();
     const unlinked = collectUnlinkedNames(list);   // [{ name, rows, hunts }] sorted by rows desc
 
+    // Whitespace-INSENSITIVE lookup on purpose: `unlinked` is grouped with identityLink's
+    // normName (all whitespace stripped), so matching against alias_norm (whitespace merely
+    // collapsed) reported anyone whose typed name spaced differently as "No matching account".
     let owners = new Map();
     try {
-      owners = findAliasOwners ? await findAliasOwners(unlinked.map(u => u.name)) : new Map();
+      const lookup = findAliasOwnersLoose || findAliasOwners;
+      owners = lookup ? await lookup(unlinked.map(u => u.name)) : new Map();
     } catch (e) { console.error('[admin] identity alias lookup failed:', e.message); }
 
     const names = [], ambiguous = [], unmatched = [];
@@ -356,6 +362,15 @@ module.exports = function adminRoutes(deps) {
     const { applied, byName } = applyNameLinks(everyHunt(), nameToId);
     if (applied) { persistHunts(); persistArchive(); }
 
+    // REMEMBER the decision, don't just patch today's rows. Without this the operator is re-asked
+    // about the same person the next time any host types that name, and the queue never drains.
+    // Recorded even when `applied` is 0: confirming someone who has no rows yet is still a real
+    // decision, and it is the one that stops them ever entering the queue.
+    for (const [name, discordId] of nameToId) {
+      if (recordAlias) recordAlias(discordId, name, confirmedAliases.ADMIN_LINK_SOURCE);
+      confirmedAliases.remember(name, discordId);   // live immediately, no reload
+    }
+
     // ONE audit row for the batch — 10k rows would flood the log and bury everything else. The
     // per-name breakdown in `detail` is what makes it reversible/inspectable.
     auditLog.recordFromReq(req, {
@@ -369,13 +384,20 @@ module.exports = function adminRoutes(deps) {
 
   // Undo an /apply for ONE name, at the same granularity it was applied. Body: { name, discordId }.
   // Without this a 10,000-row apply is irreversible in practice and the "reversible" rail is a lie.
-  router.post('/api/admin/identity/unlink-name', requireAuth, requirePlatformAdmin, (req, res) => {
+  router.post('/api/admin/identity/unlink-name', requireAuth, requirePlatformAdmin, async (req, res) => {
     const { name, discordId } = req.body || {};
     if (!name || !/^\d{17,20}$/.test(String(discordId || ''))) {
       return res.status(400).json({ error: 'name and a real discordId are required' });
     }
     const { cleared } = unlinkNameLinks(everyHunt(), name, discordId);
     if (cleared) { persistHunts(); persistArchive(); }
+
+    // Forget the decision as well as the rows. The apply above writes an `admin-link` alias that
+    // replays onto every future save, so clearing rows alone would leave the undo cosmetic — the
+    // next save would put the same id straight back.
+    confirmedAliases.forget(name, discordId);
+    if (deleteAlias) await deleteAlias(discordId, name);
+
     auditLog.recordFromReq(req, {
       category: 'hunt', action: 'identity.unlink', targetId: String(discordId),
       summary: `Unlinked ${cleared} row(s) for "${name}"`,

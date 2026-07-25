@@ -274,6 +274,15 @@ const settings = require('./lib/settings');
 settings.initSettings({ pgPool, hunts });
 const { recordKnownUser } = settings;  // called from the auth callback / Bearer middleware
 
+// Admin-confirmed name→account decisions, held in memory so the hunt save path can replay them
+// without a query (see lib/confirmedAliases.js). Loaded once at startup and kept current by the
+// Tier 2 apply/unlink routes; the hourly refresh is only a safety net against drift.
+const confirmedAliases = require('./lib/confirmedAliases');
+confirmedAliases.initConfirmedAliases(pgPool)
+  .then(n => console.log(`[confirmed_aliases] ${n} confirmed name(s) loaded`))
+  .catch(e => console.error('[confirmed_aliases] initial load failed:', e.message));
+setInterval(() => confirmedAliases.refresh(), 60 * 60 * 1000);
+
 // All-time stats: fxRates (currency conversion) + statsStore (durable per-hunt history + per-user
 // rollup, additive to the 100-cap archive). Constructed synchronously; tables are created as part
 // of the init promise chain below (this scope is CommonJS top-level, no top-level await).
@@ -697,7 +706,12 @@ app.use(require('./routes/admin.routes')({
   recordKnownUser: settings.recordKnownUser,
   // Identity linking (Tier 2 proposals): findAliasOwners resolves display names to account ids
   // and returns a SET per name, so ambiguity is explicit rather than silently collapsed.
+  // The Loose variant is the one the proposals endpoint uses — it matches the way the review
+  // queue groups names (whitespace stripped, not merely collapsed).
   findAliasOwners: settings.findAliasOwners,
+  findAliasOwnersLoose: settings.findAliasOwnersLoose,
+  // Unlinking a name must delete the `admin-link` alias too, or the decision replays on next save.
+  deleteAlias: settings.deleteAlias,
   persistHunts,
   // Vets client-asserted equity discordIds on backfill import (fail-closed) — same predicate the
   // public write path uses.
