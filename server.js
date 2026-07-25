@@ -556,6 +556,15 @@ app.use(require('./routes/cardRequests.routes')({
   channelId: (process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || '').trim(),
 }));
 
+// Read requester REPLIES to those DMs (lib/dmPoller.js). The backend holds no Discord gateway,
+// so replies are polled off each open request's DM channel and folded into its dmLog, with a
+// ping to the same shop-requests channel. Same bot, same channel id — no new env var.
+require('./lib/dmPoller').startDmPolling({
+  cardRequests,
+  getPlatformBotToken: tenants.getPlatformBotToken,
+  channelId: (process.env.DISCORD_SHOP_REQUESTS_CHANNEL_ID || '').trim(),
+});
+
 // Supporter applications ("Support Us" apply flow) — signed-in submit, owner-only review. Posts to
 // the same shop-requests channel as Shop Requests; granting adds the user to the supporters table.
 const supporterApplications = require('./lib/supporterApplications');
