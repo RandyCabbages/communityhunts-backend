@@ -14,6 +14,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { canonKey } = require('../lib/slotSlugCanon');
 
 const SLOTS_URL = 'https://rainbet.com/casino/slots';
 const SLOTS_FILE = path.join(process.cwd(), 'rainbet_slots.json');
@@ -539,7 +540,9 @@ async function runCheck() {
   // slot before a real image is available, and no HEAD-check gate is needed either:
   // a guessed thumb that turns out dead just degrades to that same fallback tile.
   const existingBySlug = new Map(existing.map(s => [(s.rainbetSlug || '').toLowerCase(), s]));
-  const seenSlugs = new Set(existing.filter(s => s.thumb).map(s => (s.rainbetSlug || '').toLowerCase()));
+  // canonKey, not the literal slug — otherwise slot.report's provider-alias,
+  // apostrophe and word-join variants each re-enter the file as a duplicate row.
+  const seenSlugs = new Set(existing.filter(s => s.thumb).map(s => canonKey(s.rainbetSlug || '')));
 
   // Detect slots removed from Rainbet — only trust this when Strategy 3 actually ran
   // (see isFullCatalog above); slot.report's curated-provider reconstruction alone
@@ -562,7 +565,7 @@ async function runCheck() {
 
   const candidates = [];
   for (const g of games) {
-    if (seenSlugs.has(g.rainbetSlug.toLowerCase())) continue;
+    if (seenSlugs.has(canonKey(g.rainbetSlug))) continue;
 
     // Re-encode the path portion for safety
     if (g.thumb) {
