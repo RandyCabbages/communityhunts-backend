@@ -22,10 +22,16 @@ module.exports = function authRoutes(deps) {
   } = deps;
   const router = express.Router();
 
-  // Membership == role. Keep community_members in sync with the user's current role for the
-  // tenant they're authenticating through: join if they qualify, evict if we KNOW they don't,
-  // and do nothing when their guild roles are undetermined (a transient Discord lookup failure
-  // must not churn the table). Replaces the old "auto-join everyone" behavior.
+  // Keep the ROLE-derived half of community_members in sync with the user's current role for the
+  // tenant they're authenticating through: join if they qualify, evict if we KNOW they don't, and
+  // do nothing when their guild roles are undetermined (a transient Discord lookup failure must
+  // not churn the table). Replaces the old "auto-join everyone" behavior.
+  //
+  // Both writes are source-scoped to 'role', and that is load-bearing. Membership is no longer
+  // role-only: a user can press Join in Settings, which writes source='self'. This function runs
+  // on EVERY login, so an unscoped evict here wiped every deliberate join at the user's next
+  // sign-in — the Join button did nothing that lasted (2026-07-25). A 'role' join likewise cannot
+  // downgrade a 'self' row (DO NOTHING on conflict), or the next role lapse would evict it.
   function reconcileMembership(req) {
     const u = req.user;
     if (!u || !req.tenant || !req.tenant.id) return;
@@ -34,9 +40,9 @@ module.exports = function authRoutes(deps) {
       reqIsAdmin(req) || reqIsVipHost(req) || reqIsMod(req) ||
       !!u.isAffiliate || !!u.isDiscordVip || !!u.isDiscordMod;
     if (qualifies) {
-      memberships.joinCommunity(u.id, req.tenant.id).catch(() => {});
+      memberships.joinCommunity(u.id, req.tenant.id, 'role').catch(() => {});
     } else if (determined) {
-      memberships.leaveCommunity(u.id, req.tenant.id).catch(() => {});
+      memberships.leaveCommunity(u.id, req.tenant.id, { onlySource: 'role' }).catch(() => {});
     }
     // undetermined & not otherwise-qualified → no-op
   }

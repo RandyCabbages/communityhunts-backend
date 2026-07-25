@@ -372,6 +372,9 @@ module.exports = function settingsRoutes(deps) {
         isVipHost:      reqIsVipHost ? reqIsVipHost(asTarget) : false,
         isCommunityMod: reqIsMod ? reqIsMod(asTarget) : false,
         isDiscordVip:   !!guildRoles?.isDiscordVip,
+        // This route already does the live { detailed: true } lookup, so it reads the flag
+        // directly rather than re-deriving guild presence from notGuildMember.
+        isGuildMember:  !!guildRoles?.isGuildMember,
       });
 
       // Redact an anonymous user's rainbet/twitch handles unless the caller is a platform admin or

@@ -72,6 +72,10 @@ function rolesFromMemberRoles(memberRoles, tenant) {
   if (affId) flags.isAffiliate  = memberRoles.includes(affId);
   if (vipId) flags.isDiscordVip = memberRoles.includes(vipId);
   if (modId) flags.isDiscordMod = memberRoles.includes(modId);
+  // Reaching here at all means Discord returned a member object, so the user IS in the guild —
+  // independent of holding any configured role, and set even when the tenant configures none.
+  // This is what verifies a self-join for the Partner extension perk (lib/features.js).
+  flags.isGuildMember = true;
   return flags;
 }
 
@@ -123,7 +127,10 @@ async function refreshGuildRoles(discordUserId, tenant, opts = {}) {
     const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/members/${discordUserId}`, {
       headers: { Authorization: `Bot ${botToken}` }
     });
-    if (res.status === 404 && opts.detailed) return { notGuildMember: true };
+    // 404 = a DETERMINATE "not in this guild", unlike the null returns below which mean
+    // "couldn't ask". isGuildMember:false makes that determinate answer readable by callers
+    // that only look at the flag.
+    if (res.status === 404 && opts.detailed) return { notGuildMember: true, isGuildMember: false };
     if (!res.ok) return null;
     const member = await res.json();
     const memberRoles = member.roles || [];
@@ -369,9 +376,12 @@ async function reqHasFullExtension(req) {
   if (reqIsVipHost(req) || reqIsMod(req) || !!req.user.isDiscordVip) return true;
   // tenantId as well as tenantPlan: the Partner perk requires membership of THAT tenant, and
   // req.tenant is only ever "the community this request is scoped to". See computeFullExtension.
+  // isGuildMember comes from the cached session/token flag (guildFlags) — this runs on every
+  // extension load, so it must not add a live Discord call.
   return (await features.fullExtensionFor(req.user.id, {
-    tenantPlan: req.tenant?.plan,
-    tenantId:   req.tenant?.id,
+    tenantPlan:    req.tenant?.plan,
+    tenantId:      req.tenant?.id,
+    isGuildMember: !!req.user.isGuildMember,
   })).access;
 }
 
