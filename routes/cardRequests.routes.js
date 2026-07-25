@@ -260,7 +260,16 @@ module.exports = function cardRequestsRoutes(deps) {
         return res.json({ ok: false, error, request: updated || r });
       }
 
-      const updated = cardRequests.recordDm(r.id, { template, ok: true, message, by });
+      const sent = await msgResp.json().catch(() => null);
+      const sentId = sent && sent.id ? String(sent.id) : null;
+
+      // Persist the DM channel so lib/dmPoller.js can read replies off it. The watermark is
+      // seeded from this send ONLY when unset — advancing it on every send would skip a reply
+      // that arrived between the last poll and this send. After the first send the poller owns it.
+      const seedWatermark = !r.dmWatermark && sentId ? sentId : undefined;
+      cardRequests.setDmChannel(r.id, { channelId: String(dm.id), watermark: seedWatermark });
+
+      const updated = cardRequests.recordDm(r.id, { template, ok: true, message, by, messageId: sentId });
       console.log(`[cardreq] DM sent to ${r.userId} for request ${r.id}`);
       return res.json({ ok: true, request: updated || r });
     } catch (e) {
