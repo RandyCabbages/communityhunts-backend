@@ -14,7 +14,7 @@ const ITEM_TIERS = {
   card_flockleader:'free', card_orange:'free', card_cook:'free', card_beezle:'free', card_handpickedbytim:'free', card_god:'free',
   card_ashbringer:'free', card_russaldo:'free', card_folo:'free', card_waterbuffalo:'free',
   card_mcflurry:'free', card_tonners:'free', card_itzdec:'free',
-  card_briteasyellow:'free', card_mih:'free', card_missingiscool:'free',
+  card_briteasyellow:'free', card_mih:'free', card_missingiscool:'free', card_msmoonlight:'free',
   card_emerald:'basic', card_copper:'basic', card_ocean:'basic',
   card_neon:'pro', card_arctic:'pro', card_toxic:'pro',
   card_holo:'ultimate', card_obsidian:'ultimate', card_celestial:'ultimate',
@@ -93,6 +93,7 @@ const EXCLUSIVE_ITEMS = {
   card_briteasyellow: '401482523089043466', // Briteasyellow
   card_mih:           '197365493516992512', // Mih
   card_missingiscool: '158594379773247489', // Missingiscool
+  card_msmoonlight:   '232648350778916864', // Ms Moonlight
 };
 
 const TIER_RANK = { free: 0, basic: 1, pro: 2, ultimate: 3, admin: 99 };
