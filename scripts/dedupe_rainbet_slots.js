@@ -17,6 +17,10 @@ const { splitSlug, PROVIDER_ALIASES } = require('../lib/slotSlugCanon');
 
 const SLOTS_FILE = path.join(process.cwd(), 'rainbet_slots.json');
 const PLAN_FILE = path.join(process.cwd(), 'dedupe_plan.json');
+// The crawl is slow and rate-limited, so its result is cached to disk. --use-cache
+// re-runs the resolution logic against it without hitting Rainbet again, which is
+// what makes reviewing successive dry runs practical. Neither file is committed.
+const LIVE_CACHE = path.join(process.cwd(), 'dedupe_live_cache.json');
 const PROVIDERS_URL = 'https://services.rainbet.com/v1/public/providers/list?country=US';
 const GAMES_URL = 'https://services.rainbet.com/v1/public/games/list';
 const HEADLESS = process.env.SCRAPE_HEADLESS !== 'false';
@@ -54,9 +58,17 @@ async function main() {
   }
   console.log(`[dedupe] ${collisionGroups.length} collision groups across ${needed.size} studios`);
 
+  let liveByNameKey = new Map();
+
+  if (process.argv.includes('--use-cache')) {
+    if (!fs.existsSync(LIVE_CACHE)) throw new Error(`--use-cache but ${LIVE_CACHE} is missing`);
+    liveByNameKey = new Map(JSON.parse(fs.readFileSync(LIVE_CACHE, 'utf8')));
+    console.log(`[dedupe] using cached crawl: ${liveByNameKey.size} live names`);
+    return finish(entries, liveByNameKey, dryRun);
+  }
+
   const { chromium } = require('patchright');
   const browser = await chromium.launch({ headless: HEADLESS });
-  const liveByNameKey = new Map();
   try {
     const ctx = await browser.newContext({
       viewport: { width: 1280, height: 900 }, locale: 'en-US', timezoneId: 'America/Chicago',
@@ -70,7 +82,15 @@ async function main() {
     }
     if (!cleared) throw new Error('Cloudflare did not clear');
 
-    const provRes = await apiGet(page, PROVIDERS_URL);
+    let provRes = await apiGet(page, PROVIDERS_URL);
+    // The providers call is the first thing to get rate-limited after a prior crawl.
+    let pGuard = 0;
+    while (provRes.status === 429 && pGuard++ < 5) {
+      console.log('  providers 429 — backing off 90s');
+      await sleep(90000);
+      provRes = await apiGet(page, PROVIDERS_URL);
+    }
+    console.log(`[dedupe] providers/list → HTTP ${provRes.status}`);
     const all = ((provRes.body && (provRes.body.providers || provRes.body)) || []).map(p => p.url).filter(Boolean);
     const norm = s => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
     const targets = all.filter(p => [...needed].some(w => norm(p) === norm(w)
@@ -109,6 +129,12 @@ async function main() {
     await browser.close().catch(() => {});
   }
 
+  fs.writeFileSync(LIVE_CACHE, JSON.stringify([...liveByNameKey], null, 2));
+  console.log(`[dedupe] crawl cached to ${LIVE_CACHE} (${liveByNameKey.size} live names)`);
+  return finish(entries, liveByNameKey, dryRun);
+}
+
+function finish(entries, liveByNameKey, dryRun) {
   const r = planDedupe(entries, liveByNameKey);
   console.log(`[dedupe] keep=${r.keep.length} drop=${r.drop.length} kept-distinct=${r.distinctKept}`);
 
