@@ -61,6 +61,13 @@ function fakeCardRequests(initial) {
       r.discordChannelId = channelId;
       return r;
     },
+    setDmChannel: (id, { channelId, watermark } = {}) => {
+      const r = list.find(x => x.id === id);
+      if (!r) return null;
+      if (channelId) r.dmChannelId = String(channelId);
+      if (watermark) r.dmWatermark = String(watermark);
+      return r;
+    },
     recordDm: (id, entry) => {
       const r = list.find(x => x.id === id);
       if (!r) return null;
@@ -312,4 +319,19 @@ test('the doorbell embed names who filed it', async () => {
   const filedBy = fields.find(f => f.name === 'Filed by');
   assert.ok(filedBy, 'Filed by field present');
   assert.match(filedBy.value, /Cabbage/);
+});
+
+test('a successful DM stores the channel and seeds the watermark only on the first send', async () => {
+  const app = appWith({ requests: [{ ...REQ }] });
+  await postDm(app, 'cr_1', { message: 'need more info please', template: 'need_info' });
+
+  const stored = app._cardRequests._list[0];
+  assert.strictEqual(stored.dmChannelId, 'dm-1', 'channel persisted for the poller');
+  assert.strictEqual(stored.dmWatermark, 'm-1', 'cursor seeded from our own send');
+  assert.strictEqual(stored.dmLog[0].messageId, 'm-1', 'send id recorded on the entry');
+
+  // A second send must NOT advance the cursor: a reply that arrived between the last poll and
+  // this send would be skipped. Only the poller advances it after the first send.
+  await postDm(app, 'cr_1', { message: 'following up', template: 'need_info' });
+  assert.strictEqual(stored.dmWatermark, 'm-1', 'unchanged by the second send');
 });
