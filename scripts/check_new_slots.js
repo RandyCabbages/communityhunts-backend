@@ -96,6 +96,15 @@ const SLUG_FIXES = {
   // hacksaw-sixsixsix (its CDN thumb is SixSixSix.png). The dashed row only had a slot.report
   // thumb; collapse onto the reviewed "sixsixsix" row (real Rainbet-CDN thumb). Verified on rainbet.com.
   'hacksaw-six-six-six': 'hacksaw-sixsixsix',
+  // slot.report renders an apostrophe as its own "-s-" segment; Rainbet keeps the clean
+  // form. Each dashed slug was a duplicate row pointing at the (now dead) DigitalOcean
+  // Spaces CDN. Collapse onto the real Rainbet slug. Verified via the games API.
+  'pragmatic-play-magician-s-secrets': 'pragmatic-play-magicians-secrets',
+  'pragmatic-play-caishen-s-gold': 'pragmatic-play-caishens-gold',
+  'pragmatic-play-lobster-bob-s-crazy-crab-shack': 'pragmatic-play-lobster-bobs-crazy-crab-shack',
+  // slot.report appends the full subtitle; Rainbet serves these shorter. Verified via the games API.
+  'pragmatic-play-little-gem-hold-and-spin': 'pragmatic-play-little-gem',
+  'pragmatic-play-the-dragon-tiger': 'pragmatic-play-dragon-tiger',
 };
 
 const RELEVANT_PROVIDERS = new Set([
