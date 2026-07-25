@@ -307,14 +307,16 @@ const featureGrants = require('./lib/featureGrants');
 featureGrants.initFeatureGrants({ pgPool }).catch(e => console.error('[grants] init error:', e.message));
 const stripeLib = require('./lib/stripe');
 stripeLib.initStripe({ pgPool, subscriptions }).catch(e => console.error('[stripe] init error:', e.message));
-const features = require('./lib/features');
-features.initFeatures({ subscriptions, featureGrants });
-
 // Community memberships (which communities a user belongs to). Membership is reconciled from
 // the user's role at auth time (see reconcileMembership in auth.routes).
 const memberships = require('./lib/memberships');
 memberships.initMemberships({ pgPool })
   .catch(e => console.error('[memberships] init error:', e.message));
+
+// Ordered after memberships on purpose: features gates the Partner-plan extension perk on actual
+// membership, so it needs that collaborator.
+const features = require('./lib/features');
+features.initFeatures({ subscriptions, featureGrants, memberships });
 
 // Inject auth deps now that every collaborator exists. The gate functions were already
 // re-bound above; they only run at request time, so wiring their deps here is in time.
@@ -365,8 +367,11 @@ async function reqHasFullExtension(req) {
   // code short-circuited the same way; dropping it would add a per-load query for every VIP.
   // Only the boolean is needed here, so the unreported sources cost nothing.
   if (reqIsVipHost(req) || reqIsMod(req) || !!req.user.isDiscordVip) return true;
+  // tenantId as well as tenantPlan: the Partner perk requires membership of THAT tenant, and
+  // req.tenant is only ever "the community this request is scoped to". See computeFullExtension.
   return (await features.fullExtensionFor(req.user.id, {
     tenantPlan: req.tenant?.plan,
+    tenantId:   req.tenant?.id,
   })).access;
 }
 

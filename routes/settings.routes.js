@@ -368,6 +368,7 @@ module.exports = function settingsRoutes(deps) {
       const guildConfigured = !!(tenant?.discordGuildId && tenant?.discordBotToken);
       const fullExtension = await fullExtensionFor(userId, {
         tenantPlan:     tenant?.plan,
+        tenantId:       tenant?.id,
         isVipHost:      reqIsVipHost ? reqIsVipHost(asTarget) : false,
         isCommunityMod: reqIsMod ? reqIsMod(asTarget) : false,
         isDiscordVip:   !!guildRoles?.isDiscordVip,
