@@ -49,11 +49,11 @@ not exist until the backend is live.
 
 Three new fields on a request object. All additive; rows without them stay valid.
 
-| Field | Meaning |
-| --- | --- |
-| `dmChannelId` | The DM channel with the requester. Stored once, on first send. |
+| Field         | Meaning                                                                  |
+| ------------- | ------------------------------------------------------------------------ |
+| `dmChannelId` | The DM channel with the requester. Stored once, on first send.           |
 | `dmWatermark` | Newest Discord message id already processed. Drives the `after=` cursor. |
-| `lastReplyAt` | ISO timestamp of the newest inbound message. |
+| `lastReplyAt` | ISO timestamp of the newest inbound message.                             |
 
 `MAX_DM_LOG` goes **10 → 40**, since the log now carries both directions of a conversation
 rather than just outbound attempts.
@@ -181,14 +181,14 @@ inline in the thread, and answers with another templated DM.
 
 ## Error handling
 
-| Case | Result |
-| --- | --- |
-| No bot token configured | Poller tick is a no-op; logged once per tick, nothing written |
-| Request has no `dmChannelId` and channel-open fails | Skipped this tick, retried next |
-| `GET messages` non-2xx | Logged, request skipped, watermark **not** advanced |
-| Notification post fails | Replies are still recorded; only the ping is lost (logged) |
-| Same message seen twice | `recordReply` dedupes on `messageId`, no double-append |
-| Requester blocks the bot / leaves | Channel read 403s → skipped; existing history intact |
+| Case                                                | Result                                                        |
+| --------------------------------------------------- | ------------------------------------------------------------- |
+| No bot token configured                             | Poller tick is a no-op; logged once per tick, nothing written |
+| Request has no `dmChannelId` and channel-open fails | Skipped this tick, retried next                               |
+| `GET messages` non-2xx                              | Logged, request skipped, watermark **not** advanced           |
+| Notification post fails                             | Replies are still recorded; only the ping is lost (logged)    |
+| Same message seen twice                             | `recordReply` dedupes on `messageId`, no double-append        |
+| Requester blocks the bot / leaves                   | Channel read 403s → skipped; existing history intact          |
 
 In every case `status` / `adminNotes` / `updatedAt` are untouched, matching the existing
 bookkeeping-helper contract.
