@@ -199,6 +199,8 @@ app.use(express.json({ limit: '256kb' }));
 
 // Postgres pool — shared by session store and user_settings
 const { Pool } = require('pg');
+const { makePoolConfig } = require('./lib/pgConfig');
+const { installGracefulShutdown } = require('./lib/shutdown');
 let pgPool = null;
 if (process.env.DATABASE_URL) {
   // Railway's managed Postgres requires TLS, so SSL is the default. But this was hardcoded ON,
@@ -207,10 +209,18 @@ if (process.env.DATABASE_URL) {
   // ever run against a real database: it was not possible to stand one up locally.
   // Opt out with sslmode=disable, or automatically for a loopback host. Production URLs are
   // neither, so prod behaviour is unchanged.
-  const dbUrl = process.env.DATABASE_URL;
-  const noSsl = /[?&]sslmode=disable\b/.test(dbUrl) || /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(dbUrl);
-  pgPool = new Pool({ connectionString: dbUrl, ssl: noSsl ? false : { rejectUnauthorized: false } });
-  console.log(`[pg] Pool created (ssl=${noSsl ? 'off — local' : 'on'})`);
+  // Options (SSL choice, limits, timeouts) live in lib/pgConfig.js so they can be tested.
+  const poolCfg = makePoolConfig(process.env.DATABASE_URL);
+  pgPool = new Pool(poolCfg);
+  // WITHOUT this, an idle-client failure is FATAL. pg-pool re-emits it as an 'error' event on the
+  // pool (pg-pool/index.js), and EventEmitter throws when 'error' has no listener — which is
+  // exactly the "10x uncaughtException: Connection terminated unexpectedly" seen when Postgres was
+  // killed mid-load. The FATAL-GUARD handlers below do catch those, but relying on
+  // uncaughtException to absorb a routine, expected event (a database restart) leaves the process
+  // in a formally undefined state and buries a real signal. pg discards and replaces the dead
+  // client on its own; this just stops it being fatal.
+  pgPool.on('error', (err) => console.error('[pg] idle client error:', err && err.message));
+  console.log(`[pg] Pool created (ssl=${poolCfg.ssl ? 'on' : 'off — local'}, max=${poolCfg.max})`);
 } else {
   console.log('[pg] No DATABASE_URL — sessions and settings will be in-memory only (will reset on redeploy)');
 }
@@ -864,6 +874,18 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('[FATAL-GUARD] uncaughtException — server kept alive:\n',
     err && err.stack ? err.stack : err);
+});
+
+// Railway sends SIGTERM before replacing the container. Without a handler the process was killed
+// outright, cutting in-flight persistHunts() writes mid-flight — visible in the Postgres log as a
+// burst of "unexpected eof"/"connection reset by peer" at EVERY deploy. Drain instead: stop
+// accepting new work, flush hunts/archive to the durable store, then close the pool. Bounded by a
+// hard timeout so a stuck flush can never wedge a deploy. See lib/shutdown.js.
+installGracefulShutdown({
+  server,
+  pgPool,
+  flush: async () => { persistHunts(); persistArchive(); },
+  log: (m) => console.log(m),
 });
 
 server.listen(PORT, () => console.log(`✅ Server on port ${PORT}`));

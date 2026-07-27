@@ -14,7 +14,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { canonKey } = require('../lib/slotSlugCanon');
+const { canonKey, splitSlug } = require('../lib/slotSlugCanon');
+const { removalAllowed } = require('../lib/rainbetReconcile');
 
 const SLOTS_URL = 'https://rainbet.com/casino/slots';
 const SLOTS_FILE = path.join(process.cwd(), 'rainbet_slots.json');
@@ -556,11 +557,36 @@ async function runCheck() {
   // Detect slots removed from Rainbet — only trust this when Strategy 3 actually ran
   // (see isFullCatalog above); slot.report's curated-provider reconstruction alone
   // would otherwise flag thousands of still-live slots as "removed".
-  const liveSlugs = new Set(games.map(g => g.rainbetSlug.toLowerCase()));
+  // Compare by canonKey, NOT the literal slug — the same rule the add path already uses. Rainbet
+  // serves some titles as playn-go-… and others as play-n-go-… (461 vs 9 rows in the catalog
+  // today), so a literal match flags whichever spelling the DOM did not serve as "removed" even
+  // though the game is canonically present.
+  const liveKeys = new Set(games.map(g => canonKey(g.rainbetSlug)));
   const removed = isFullCatalog
-    ? existing.filter(s => !liveSlugs.has((s.rainbetSlug || '').toLowerCase()))
+    ? existing.filter(s => !liveKeys.has(canonKey(s.rainbetSlug || '')))
     : [];
-  if (removed.length > 0 && removed.length < existing.length * 0.5) {
+
+  // This script runs unattended every 10 minutes and AUTO-COMMITS to main, so removal goes through
+  // the same class of gates the human-run reconcile script uses (lib/rainbetReconcile.removalAllowed):
+  // provider count and catalog floor catch a partial/blocked crawl, and an absolute cap stops one
+  // bad run deleting a large slice of the catalog. Set RAINBET_ALLOW_MASS_REMOVAL=1 for a genuine
+  // mass delisting — that lifts the size cap only, never the crawl-health gates.
+  const providerCount = new Set(
+    games.map(g => splitSlug(g.rainbetSlug).providerToken).filter(Boolean)
+  ).size;
+  const gate = removalAllowed({
+    isFullCatalog,
+    removedCount: removed.length,
+    existingCount: existing.length,
+    providerCount,
+    liveCount: liveKeys.size,
+    override: process.env.RAINBET_ALLOW_MASS_REMOVAL === '1',
+  });
+  if (removed.length > 0 && !gate.ok) {
+    console.error(`[check] REFUSING to remove ${removed.length} slot(s) — ${gate.reason}`);
+    console.error('[check] keeping the catalog as-is; nothing will be deleted or committed this run');
+  }
+  if (gate.ok) {
     console.log(`[check] ${removed.length} slot(s) no longer on Rainbet — removing`);
     for (const r of removed.slice(0, 20)) console.log(`  - ${r.name}`);
     if (removed.length > 20) console.log(`  … and ${removed.length - 20} more`);
@@ -568,8 +594,8 @@ async function runCheck() {
 
   // Build new file: keep existing entries that are still live (preserves manual edits),
   // then append genuinely new slots.
-  const kept = removed.length > 0 && removed.length < existing.length * 0.5
-    ? existing.filter(s => liveSlugs.has((s.rainbetSlug || '').toLowerCase()))
+  const kept = gate.ok
+    ? existing.filter(s => liveKeys.has(canonKey(s.rainbetSlug || '')))
     : existing;
 
   const candidates = [];
