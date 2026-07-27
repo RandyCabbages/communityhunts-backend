@@ -5,9 +5,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch -r dotenv/config server.js",
-    "test": "node --test lib/*.test.js routes/*.test.js",
+    "test": "node --test lib/*.test.js routes/*.test.js sockets/*.test.js",
     "test:lib": "node --test lib/*.test.js",
     "test:routes": "node --test routes/*.test.js",
+    "test:sockets": "node --test sockets/*.test.js",
     "postinstall": "patchright install --with-deps chromium || true"
   },
   "engines": {

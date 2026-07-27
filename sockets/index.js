@@ -58,26 +58,56 @@ module.exports = function registerSockets(io, deps) {
       socket.emit('overdrop:sync', overdrop.getState(slug));
     });
 
+    // Rooms this socket is actually counted in. Without it, a client emitting watch:hunt N times
+    // incremented viewers N times AND registered N disconnect listeners (they were nested in this
+    // handler), from an UNAUTHENTICATED socket: forged viewer counts on the hub plus unbounded
+    // listener growth. Membership is now a set, so watch:hunt is idempotent per socket.
+    const watched = new Set();
+
+    // One disconnect handler for the socket, not one per watch:hunt call.
+    socket.on('disconnect', () => {
+      for (const id of watched) {
+        viewers[id] = Math.max(0, (viewers[id] || 1) - 1);
+        emitHubUpdate(tenantOf(hunts[id] || {}));
+      }
+      watched.clear();
+      delete socketUsers[socket.id];
+    });
+
     socket.on('watch:hunt', userId => {
-      socket.join(`hunt:${userId}`);
-      socketUsers[socket.id] = { watchingHuntId: userId };
-      viewers[userId] = (viewers[userId]||0) + 1;
-      const h = hunts[userId];
+      const id = String(userId || '');
+      if (!id) return;
+      const h = hunts[id];
+      // Tenant guard — parity with GET /api/hunts/:userId (routes/hunts.routes.js), which got this
+      // in the 2026-07-18 security audit (#4) precisely because serving a hunt outside the caller's
+      // tenant leaks non-anonymous equity names, bonuses, calls and the existence of in-setup /
+      // offline hunts to anyone who knows a Discord id. That fix closed the REST path and missed
+      // this one, so the same data stayed reachable over Socket.IO — and joining the room also
+      // subscribes to every future hunt:update for it. Fail the same way REST does: silently.
+      if (h && tenantOf(h) !== slug) return;
+
+      socket.join(`hunt:${id}`);
+      socketUsers[socket.id] = { watchingHuntId: id };
+      if (!watched.has(id)) {           // count each socket once per hunt
+        watched.add(id);
+        viewers[id] = (viewers[id] || 0) + 1;
+      }
       // Serialize for THIS viewer. socket.data.userId comes from the verified handshake token
       // (io.use above), or null for anonymous sockets → the privacy-safe masked view.
       if (h) socket.emit('hunt:update', publicHuntView(h, socket.data && socket.data.userId));
       emitHubUpdate(tenantOf(h || {}));
-      socket.on('disconnect', () => {
-        viewers[userId] = Math.max(0,(viewers[userId]||1)-1);
-        delete socketUsers[socket.id];
-        emitHubUpdate(tenantOf(hunts[userId] || {}));
-      });
     });
 
     socket.on('leave:hunt', userId => {
-      socket.leave(`hunt:${userId}`);
-      if (viewers[userId]) viewers[userId] = Math.max(0, viewers[userId] - 1);
-      emitHubUpdate(tenantOf(hunts[userId] || {}));
+      const id = String(userId || '');
+      socket.leave(`hunt:${id}`);
+      // Only decrement if THIS socket was actually counted, and drop it from the set so the
+      // disconnect handler above doesn't decrement a second time. Previously leave:hunt could be
+      // spammed to drive another hunt's viewer count to zero.
+      if (watched.delete(id)) {
+        viewers[id] = Math.max(0, (viewers[id] || 1) - 1);
+      }
+      emitHubUpdate(tenantOf(hunts[id] || {}));
     });
 
     // NOTE: there is no client 'identify' event any more — it let a socket claim any user id and
