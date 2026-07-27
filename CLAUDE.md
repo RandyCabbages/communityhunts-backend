@@ -297,6 +297,14 @@ overdrop:enabled        → master switch changed ({ enabled })
 - Survives Railway restarts
 - `fs` and `path` requires must stay at the top of `server.js` (before any usage)
 
+**The clobber guard FAILS CLOSED — don't make it permissive again.** `pgWritesBlocked` is set
+`true` the moment `initPersistence` receives a pool, and cleared only when the boot read
+SUCCEEDS. It is not enough to block writes after a read *fails*: `server.js` cannot await
+`initPersistence` (CommonJS top level), so `server.listen()` starts serving while `hunts` is still
+`{}`. A request landing in that window upserted `{}` over the row holding every live hunt — the
+same incident the guard was written for, before it was armed (measured: 2.63s per boot, ~11
+deploys/day). Pinned by the boot-window case in `lib/persistence.clobber.test.js`.
+
 ## Environment Variables
 
 ```
