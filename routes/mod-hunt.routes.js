@@ -171,8 +171,8 @@ module.exports = function modHuntRoutes(deps) {
     // this?" has no obvious owner to ask — attribution matters more here than on a personal hunt.
     const _h = hunts[key];
     const _before = _h
-      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
-      : { bonuses: [], equity: [], calls: [] };
+      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])], vault: [...(_h.vault || [])] }
+      : { bonuses: [], equity: [], calls: [], vault: [] };
     if (!hunts[key]) hunts[key] = emptyModHunt(req.tenant.id);
     const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder, title, endingBalance } = req.body;
     // See routes/hunts.routes.js — masked client copies must not clear known identities.
@@ -199,7 +199,7 @@ module.exports = function modHuntRoutes(deps) {
     persistHunts();
     emitHuntUpdate(key);
     auditLog.recordHuntChange(req, _before,
-      { bonuses: hunts[key].bonuses, equity: hunts[key].equity, calls: hunts[key].calls },
+      { bonuses: hunts[key].bonuses, equity: hunts[key].equity, calls: hunts[key].calls, vault: hunts[key].vault },
       { targetId: key, huntLabel: MOD_HUNT_LABEL });
     res.json({ ok: true });
   });
@@ -347,8 +347,8 @@ module.exports = function modHuntRoutes(deps) {
     // Snapshot BEFORE any mutation — shared hunt, many mod editors (see the mod-hunt PUT above).
     const _h = hunts[key];
     const _before = _h
-      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
-      : { bonuses: [], equity: [], calls: [] };
+      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])], vault: [...(_h.vault || [])] }
+      : { bonuses: [], equity: [], calls: [], vault: [] };
     if (!hunts[key]) hunts[key] = emptyAffiliateHunt(req.tenant.id);
     const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder, title } = req.body;
     // See routes/hunts.routes.js — masked client copies must not clear known identities.
@@ -372,7 +372,7 @@ module.exports = function modHuntRoutes(deps) {
     persistHunts();
     emitHuntUpdate(key);
     auditLog.recordHuntChange(req, _before,
-      { bonuses: hunts[key].bonuses, equity: hunts[key].equity, calls: hunts[key].calls },
+      { bonuses: hunts[key].bonuses, equity: hunts[key].equity, calls: hunts[key].calls, vault: hunts[key].vault },
       { targetId: key, huntLabel: AFFILIATE_HUNT_LABEL });
     res.json({ ok: true });
   });
@@ -518,8 +518,8 @@ module.exports = function modHuntRoutes(deps) {
     // Snapshot BEFORE any mutation — shared hunt, many mod editors (see the mod-hunt PUT above).
     const _h = hunts[key];
     const _before = _h
-      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
-      : { bonuses: [], equity: [], calls: [] };
+      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])], vault: [...(_h.vault || [])] }
+      : { bonuses: [], equity: [], calls: [], vault: [] };
     if (!hunts[key]) hunts[key] = emptyVipHunt(req.tenant.id);
     const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder, title } = req.body;
     // See routes/hunts.routes.js — masked client copies must not clear known identities.
@@ -543,7 +543,7 @@ module.exports = function modHuntRoutes(deps) {
     persistHunts();
     emitHuntUpdate(key);
     auditLog.recordHuntChange(req, _before,
-      { bonuses: hunts[key].bonuses, equity: hunts[key].equity, calls: hunts[key].calls },
+      { bonuses: hunts[key].bonuses, equity: hunts[key].equity, calls: hunts[key].calls, vault: hunts[key].vault },
       { targetId: key, huntLabel: VIP_HUNT_LABEL });
     res.json({ ok: true });
   });
