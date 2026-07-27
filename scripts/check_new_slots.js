@@ -512,12 +512,21 @@ async function runCheck() {
   // Merge new releases into the games list (new releases take priority —
   // they have exact Rainbet slugs and CDN thumbs straight from the site)
   if (newReleases.length > 0) {
-    const gameSlugs = new Set((games || []).map(g => g.rainbetSlug.toLowerCase()));
+    // Key by canonKey, NOT the literal slug. Rainbet serves some titles as playn-go-… and
+    // others as play-n-go-… with no derivable rule, so a literal comparison treats the two
+    // spellings of one game as different rows. That is exactly what happened: this merge
+    // re-added a duplicate for every Play'n GO title already in the catalog — 294 of them in
+    // one run — which is why the catalog kept needing scripts/dedupe_rainbet_slots.js.
+    // The slot.report merge below already keys on canonKey; this path was the one that didn't,
+    // despite lib/slotSlugCanon.js existing for precisely this ("so the slot.report merge
+    // can't re-add a variant of a row the catalog already has").
+    const gameSlugs = new Set((games || []).map(g => canonKey(g.rainbetSlug || '')));
     let merged = 0;
     for (const nr of newReleases) {
-      if (!gameSlugs.has(nr.rainbetSlug.toLowerCase())) {
+      const k = canonKey(nr.rainbetSlug || '');
+      if (!gameSlugs.has(k)) {
         (games || (games = [])).push(nr);
-        gameSlugs.add(nr.rainbetSlug.toLowerCase());
+        gameSlugs.add(k);
         merged++;
       }
     }
