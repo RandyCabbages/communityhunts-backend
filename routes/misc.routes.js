@@ -28,7 +28,7 @@ const SUGGESTION_TYPES = new Set(['Feature Request']);
 const ticketHits = new Map(); // per-IP ticket timestamps for rate limiting
 
 module.exports = function miscRoutes(deps) {
-  const { hunts, archive, tickets, getPlatformBotToken, statsStore, isPrivileged } = deps;
+  const { hunts, archive, tickets, getPlatformBotToken, statsStore, isPrivileged, persistence } = deps;
   const router = express.Router();
 
   // Selection (300x floor, dedupe, recency sort, 2-per-user cap, 24-window) lives in
@@ -162,7 +162,19 @@ module.exports = function miscRoutes(deps) {
     res.json({ ok: true, id: t.id, discord });
   });
 
-  router.get('/api/health', (req, res) => res.json({ok:true}));
+  // `ok` stays true while the API is serving, so existing uptime checks are unaffected.
+  // `durableStore` exposes the persistence clobber guard: 'blocked' means the boot-time read
+  // from Postgres failed, in-memory hunt state is NOT authoritative, and we are deliberately
+  // refusing to write back (see lib/persistence.js). That state needs a restart with a healthy
+  // database, and it is otherwise invisible outside the Railway logs.
+  router.get('/api/health', (req, res) => {
+    const h = persistence && typeof persistence.pgHealth === 'function' ? persistence.pgHealth() : null;
+    // 'blocked' = the clobber guard tripped, RESTART NEEDED. 'file-only' = no DATABASE_URL, which
+    // is normal locally but means nothing survives a redeploy in production. Distinguishing the
+    // two matters: reporting a database-less prod boot as 'ok' is how you find out too late.
+    const durableStore = !h ? null : h.pgWritesBlocked ? 'blocked' : h.pgConfigured ? 'ok' : 'file-only';
+    res.json({ ok: true, ...(durableStore ? { durableStore } : {}) });
+  });
 
   return router;
 };
