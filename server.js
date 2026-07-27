@@ -38,8 +38,24 @@ function corsOrigin(origin, callback) {
   callback(new Error('Not allowed by CORS'));
 }
 
+// ONE CORS policy for both transports. Allowlisted site origins get credentialed CORS (cookie
+// sessions); browser-extension origins are reflected WITHOUT credentials — security audit
+// 2026-07-18 #6. That audit fixed only the Express side, and this delegate did not exist, so the
+// Socket.IO server kept `credentials: true` for the SAME reflected chrome-/moz-extension://
+// origins. Sockets take identity from the handshake Bearer token and never read the session
+// cookie, so nothing was exploitable today — but it contradicted a deliberate decision and would
+// have become a live session-riding hole the moment anyone wired session auth into Socket.IO.
+// Defined once and shared (see globalCors below) so the two transports cannot drift again.
+// The `cors` package treats a function as an options delegate, and engine.io passes this straight
+// to it (`require("cors")(this.opts.cors)`), so the same delegate works for both.
+function corsDelegate(req, callback) {
+  const origin = (req.headers && req.headers.origin) || '';
+  const isExtension = /^chrome-extension:\/\//.test(origin) || /^moz-extension:\/\//.test(origin);
+  callback(null, { origin: corsOrigin, credentials: !isExtension });
+}
+
 const io = new Server(server, {
-  cors: { origin: corsOrigin, credentials: true }
+  cors: corsDelegate
 });
 
 // Admin Mission Control live data. Both are in-memory and derived — nothing to persist:
@@ -188,11 +204,7 @@ app.use(helmet({
 // The extension authenticates by HMAC Bearer token, never cookies, so dropping Allow-Credentials
 // for chrome-/moz-extension:// origins stops a *malicious* extension from riding a user's session
 // cookie via the reflection, while the CommunityHunts extension keeps working (Bearer, no cookie).
-const globalCors = cors((req, callback) => {
-  const origin = req.headers.origin || '';
-  const isExtension = /^chrome-extension:\/\//.test(origin) || /^moz-extension:\/\//.test(origin);
-  callback(null, { origin: corsOrigin, credentials: !isExtension });
-});
+const globalCors = cors(corsDelegate); // same delegate the Socket.IO server uses — see its note above
 app.use((req, res, next) => req.path.startsWith('/api/public/') ? next() : globalCors(req, res, next));
 // Stripe webhook needs the raw body for signature verification — mount
 // before the global JSON parser so it gets the unparsed Buffer.
