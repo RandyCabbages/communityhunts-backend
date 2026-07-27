@@ -169,11 +169,26 @@ module.exports = function miscRoutes(deps) {
   // database, and it is otherwise invisible outside the Railway logs.
   router.get('/api/health', (req, res) => {
     const h = persistence && typeof persistence.pgHealth === 'function' ? persistence.pgHealth() : null;
-    // 'blocked' = the clobber guard tripped, RESTART NEEDED. 'file-only' = no DATABASE_URL, which
-    // is normal locally but means nothing survives a redeploy in production. Distinguishing the
-    // two matters: reporting a database-less prod boot as 'ok' is how you find out too late.
-    const durableStore = !h ? null : h.pgWritesBlocked ? 'blocked' : h.pgConfigured ? 'ok' : 'file-only';
-    res.json({ ok: true, ...(durableStore ? { durableStore } : {}) });
+    //   blocked   — the clobber guard tripped at boot; RESTART with a healthy database.
+    //   file-only — no DATABASE_URL. Normal locally; in production it means nothing survives a
+    //               redeploy. Reporting that as 'ok' is how you find out too late.
+    //   degraded  — booted fine but the LAST write to Postgres failed, i.e. the durable store is
+    //               unreachable right now. Previously this still read 'ok' forever, because the
+    //               flag only ever reflected the boot-time read.
+    //   ok        — Postgres configured, boot read succeeded, no failing write since.
+    const durableStore = !h ? null
+      : h.pgWritesBlocked ? 'blocked'
+      : !h.pgConfigured ? 'file-only'
+      : h.pgLastWriteOk === false ? 'degraded'
+      : 'ok';
+    res.json({
+      ok: true,
+      ...(durableStore ? { durableStore } : {}),
+      // Only surfaced while actually degraded, so the normal response stays unchanged.
+      ...(durableStore === 'degraded'
+        ? { durableStoreError: h.pgLastErrorMsg, durableStoreErrorAt: new Date(h.pgLastErrorAt).toISOString() }
+        : {}),
+    });
   });
 
   return router;
