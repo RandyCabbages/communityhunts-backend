@@ -302,6 +302,13 @@ DISCORD_SUGGESTIONS_CHANNEL_ID # suggestions channel: "Feature Request" tickets
 SESSION_SECRET
 DATABASE_URL                   # PostgreSQL (Railway)
 FRONTEND_URL                   # for CORS + OAuth redirect (Vercel URL)
+EXTRA_ORIGINS                  # comma-separated extra CORS origins. THIS is how you make a Vercel
+                               # PREVIEW deploy work: a preview's *.vercel.app origin is not
+                               # allowlisted, so every credentialed call from it is refused —
+                               # including /auth/me, which is why a preview looks permanently
+                               # signed out. Add the specific preview URL here. Never
+                               # blanket-allow *.vercel.app: anyone can deploy there and these
+                               # origins receive credentials. Rules live in lib/corsPolicy.js.
 TWITCH_CLIENT_ID
 TWITCH_CLIENT_SECRET
 ADMIN_IDS                      # comma-separated Discord IDs (defaults to owner)
