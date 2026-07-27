@@ -188,6 +188,10 @@ module.exports = function miscRoutes(deps) {
       ...(durableStore === 'degraded'
         ? { durableStoreError: h.pgLastErrorMsg, durableStoreErrorAt: new Date(h.pgLastErrorAt).toISOString() }
         : {}),
+      // Hunts archived in memory whose durable hunt_history write failed and is queued for retry.
+      // Surfaced only when non-zero, so a healthy response is unchanged. A number that persists
+      // across sweeps means the retry itself is not landing.
+      ...(h && h.statsPending ? { statsPending: h.statsPending } : {}),
     });
   });
 

@@ -327,11 +327,20 @@ heading for.
 - `initPersistence({ dataDir })` overrides the JSON file locations; test suites pass a temp dir so
   parallel `node --test` files don't fight over the repo-root paths.
 
-**Shutdown is now graceful** (`server.js`, bottom). SIGTERM/SIGINT flush the debounced write before
-exit. Registering those listeners **overrides Node's default exit**, so the handler must always
-reach `process.exit()` — hence the bounded `flushAll` plus an unref'd 5s backstop. Get this wrong
-and every deploy stalls until Railway force-kills. Note Node on **Windows has no real SIGTERM**;
-verify this path from the Railway deploy logs (`[shutdown] durable writes flushed`), not locally.
+**Shutdown is graceful, and there is exactly ONE handler** — `installGracefulShutdown` in
+`lib/shutdown.js`, wired once at the bottom of `server.js`. **Do not add a second SIGTERM/SIGINT
+listener.** Two handlers both run, and whichever reaches `process.exit()` first kills the other
+mid-drain; this branch originally added its own alongside the existing one, which would have lost
+the debounced write on every deploy — the exact data loss both changes exist to prevent.
+
+The handler is given `flush: () => persistence.flushAll({ timeoutMs: 5000 })`. It **must** be
+`flushAll`, never `persistHunts()`/`persistArchive()` — those only SCHEDULE, so the process would
+exit before the queued write ran. Registering a signal listener **overrides Node's default exit**,
+so the drain must always reach `process.exit()`: `flushAll` resolves rather than rejects, takes its
+own timeout, and `lib/shutdown.js` adds an unref'd backstop that force-exits a hung flush. Get that
+wrong and every deploy stalls until Railway force-kills. Node on **Windows has no real SIGTERM**, so
+verify this path from the Railway deploy logs, not locally. Drain order, idempotence under a second
+signal, and the forced exit are pinned by `lib/shutdown.test.js`.
 
 **The clobber guard FAILS CLOSED — don't make it permissive again.** `pgWritesBlocked` is set
 `true` the moment `initPersistence` receives a pool, and cleared only when the boot read
