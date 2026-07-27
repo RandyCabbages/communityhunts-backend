@@ -203,8 +203,16 @@ app.use(express.json({ limit: '256kb' }));
 const { Pool } = require('pg');
 let pgPool = null;
 if (process.env.DATABASE_URL) {
-  pgPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
-  console.log('[pg] Pool created');
+  // Railway's managed Postgres requires TLS, so SSL is the default. But this was hardcoded ON,
+  // which meant the backend could NEVER connect to a plain local Postgres — it fails with
+  // "The server does not support SSL connections". That is the reason no test in this repo has
+  // ever run against a real database: it was not possible to stand one up locally.
+  // Opt out with sslmode=disable, or automatically for a loopback host. Production URLs are
+  // neither, so prod behaviour is unchanged.
+  const dbUrl = process.env.DATABASE_URL;
+  const noSsl = /[?&]sslmode=disable\b/.test(dbUrl) || /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(dbUrl);
+  pgPool = new Pool({ connectionString: dbUrl, ssl: noSsl ? false : { rejectUnauthorized: false } });
+  console.log(`[pg] Pool created (ssl=${noSsl ? 'off — local' : 'on'})`);
 } else {
   console.log('[pg] No DATABASE_URL — sessions and settings will be in-memory only (will reset on redeploy)');
 }
