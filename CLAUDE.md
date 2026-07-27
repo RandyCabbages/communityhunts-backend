@@ -79,9 +79,10 @@ rainbet_slots.json     ← auto-generated AND auto-committed by lib/rainbetSlotS
 Unit tests sit beside their module as `*.test.js` (`node:test`).
 
 ```bash
-npm test                    # everything: lib/ + routes/ (641 tests, ~3s)
+npm test                    # everything: lib/ + routes/ + sockets/ (652 tests, ~3s)
 npm run test:lib            # lib only
 npm run test:routes         # routes only
+npm run test:sockets        # socket authz / viewer-count invariants
 node --test lib/            # BROKEN on Node 24 — reports a bogus `test at lib:1:1` failure
 ```
 
@@ -248,12 +249,30 @@ calls:denied            → call permission denied
 bean:live               → Twitch live status update (tenant channel)
 hunts:twitchlive        → per-creator Twitch live map for the hub ({ userId: { isLive, login } })
 
+watch:hunt              ← join hunt:<userId> — TENANT-GATED, see below
+leave:hunt              ← leave that room
 watch:overdrop          ← client joins overdrop:<slug> room (read-only)
 overdrop:sync           → full OverDrop state on join (incl. `enabled`)
 overdrop:item:add / overdrop:item:update / overdrop:item:remove / overdrop:clear
 overdrop:audio:play / overdrop:audio:update / overdrop:audio:stop
 overdrop:enabled        → master switch changed ({ enabled })
 ```
+
+**Socket authz rules — don't regress these** (`sockets/index.test.js` pins all of them):
+
+- **`watch:hunt` is tenant-gated.** A hunt whose `tenantOf(h)` differs from the socket's handshake
+  slug is neither emitted nor joined. This mirrors `GET /api/hunts/:userId`, which got the same
+  guard in the 2026-07-18 security audit (#4) — that fix closed the REST path and MISSED this one,
+  so the same cross-tenant leak (non-anonymous equity names, bonuses, calls, existence of
+  in-setup/offline hunts) stayed reachable over Socket.IO until 2026-07-27.
+- **Identity comes only from the verified handshake token** (`io.use`), never a client event. The
+  old `identify` event let any socket claim any user id and receive the de-masked view; it is gone.
+- **Viewer counting is per-socket-per-hunt.** `watch:hunt` is idempotent via a `watched` Set —
+  it used to increment on every call from an UNAUTHENTICATED socket (forged hub counts) and
+  register a NESTED `disconnect` listener each time (unbounded listener growth). There is now
+  exactly one disconnect handler per socket. `leave:hunt` only decrements what this socket
+  actually watched.
+- **Sockets stay read-only.** Every mutation goes through a `require*` REST route.
 
 ## Slot Autocomplete
 
