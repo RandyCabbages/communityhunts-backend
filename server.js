@@ -721,6 +721,14 @@ function cleanupStaleHunts() {
 setTimeout(cleanupStaleHunts, 30 * 1000);
 setInterval(cleanupStaleHunts, 10 * 60 * 1000);
 
+// Re-send hunts whose durable hunt_history write failed. archiveHunt's handoff to statsStore is
+// asynchronous and used to be fire-and-forget, so a PG blip left a hunt permanently missing from
+// history with nothing to notice. Failures now flag the archive entry; this drains them on the
+// same cadence as the janitor. Count is on /api/health as `statsPending`.
+setInterval(() => {
+  persistence.retryPendingStats().catch(e => console.error('[stats] retry sweep failed:', e.message));
+}, 10 * 60 * 1000);
+
 // Audit-log retention sweep (age + row-cap). Same background-timer pattern as the janitor above.
 setInterval(() => auditLog.prune().catch(e => console.error('[audit] prune failed:', e.message)), 60 * 60 * 1000);
 
