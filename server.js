@@ -27,32 +27,18 @@ const ALLOWED_ORIGINS = [
     ...(process.env.EXTRA_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean),
   ])
 ];
-function corsOrigin(origin, callback) {
-  if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-  // Browser-extension requests (the CommunityHunts Chrome extension) send
-  // Origin: chrome-extension://<id>. Allow the scheme — the extension's mutating
-  // calls are authenticated by HMAC Bearer token, not by origin/cookies, and the
-  // id is unstable for unpacked installs so we can't hardcode it. GET polls send
-  // no Origin (allowed above); only PUT/POST saves send it, which is why saves 500'd.
-  if (/^chrome-extension:\/\//.test(origin) || /^moz-extension:\/\//.test(origin)) return callback(null, true);
-  callback(new Error('Not allowed by CORS'));
-}
-
-// ONE CORS policy for both transports. Allowlisted site origins get credentialed CORS (cookie
-// sessions); browser-extension origins are reflected WITHOUT credentials — security audit
-// 2026-07-18 #6. That audit fixed only the Express side, and this delegate did not exist, so the
-// Socket.IO server kept `credentials: true` for the SAME reflected chrome-/moz-extension://
-// origins. Sockets take identity from the handshake Bearer token and never read the session
-// cookie, so nothing was exploitable today — but it contradicted a deliberate decision and would
-// have become a live session-riding hole the moment anyone wired session auth into Socket.IO.
-// Defined once and shared (see globalCors below) so the two transports cannot drift again.
-// The `cors` package treats a function as an options delegate, and engine.io passes this straight
-// to it (`require("cors")(this.opts.cors)`), so the same delegate works for both.
-function corsDelegate(req, callback) {
-  const origin = (req.headers && req.headers.origin) || '';
-  const isExtension = /^chrome-extension:\/\//.test(origin) || /^moz-extension:\/\//.test(origin);
-  callback(null, { origin: corsOrigin, credentials: !isExtension });
-}
+// ONE CORS policy for both transports — the rules and their rationale now live in
+// lib/corsPolicy.js (extracted in the 2026-07-27 audit so they could be unit-tested).
+// Allowlisted site origins get credentialed CORS; browser-extension origins are reflected
+// WITHOUT credentials (security audit 2026-07-18 #6). Defined once and shared (see globalCors
+// below) so Express and Socket.IO cannot drift apart again.
+//
+// A disallowed origin is refused with `callback(null, false)`, NOT an Error. The Error form
+// propagated into the Express error handler and returned 500 + a stack for every ordinary
+// cross-origin request — which is why Vercel preview deploys look permanently signed out
+// (*.vercel.app isn't allowlisted, so even /auth/me 500s). Add a specific preview URL to
+// EXTRA_ORIGINS to let it through; never blanket-allow *.vercel.app.
+const { corsDelegate } = require('./lib/corsPolicy').makeCorsPolicy(ALLOWED_ORIGINS);
 
 const io = new Server(server, {
   cors: corsDelegate
