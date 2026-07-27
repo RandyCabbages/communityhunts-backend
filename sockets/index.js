@@ -88,7 +88,12 @@ module.exports = function registerSockets(io, deps) {
 
       socket.join(`hunt:${id}`);
       socketUsers[socket.id] = { watchingHuntId: id };
-      if (!watched.has(id)) {           // count each socket once per hunt
+      // Count only a hunt that EXISTS and passed the tenant check above. An unknown id has no
+      // tenant to verify, so counting it let any anonymous socket pre-inflate the hub number for
+      // a Discord id in another community — and the count carried into the real hunt once it was
+      // created. The join itself still happens (a viewer may legitimately open the page before
+      // the host starts); delivery is gated separately in emitHuntUpdate.
+      if (h && !watched.has(id)) {      // count each socket once per hunt
         watched.add(id);
         viewers[id] = (viewers[id] || 0) + 1;
       }
