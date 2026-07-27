@@ -79,12 +79,21 @@ rainbet_slots.json     ← auto-generated AND auto-committed by lib/rainbetSlotS
 Unit tests sit beside their module as `*.test.js` (`node:test`).
 
 ```bash
-node --test lib/*.test.js   # correct
+npm test                    # everything: lib/ + routes/ (641 tests, ~3s)
+npm run test:lib            # lib only
+npm run test:routes         # routes only
 node --test lib/            # BROKEN on Node 24 — reports a bogus `test at lib:1:1` failure
 ```
 
-Route suites that call `app.listen` hang; run lib suites rather than the whole tree. Piping the
-output masks the exit code — check it directly.
+CI runs `npm test` on every PR and on push to `main` (`.github/workflows/test.yml`).
+Piping the output masks the exit code — check it directly.
+
+> **Route suites no longer hang.** The old "route suites that call `app.listen` hang, run lib
+> suites only" rule was wrong and cost real coverage — it was ONE file. `adminTickets.routes.test.js`
+> closed its server with `server.close()`, which only stops *new* connections and waits forever for
+> `fetch`'s idle keep-alive sockets to drain. Fixed by calling `server.closeAllConnections()` first.
+> **If you add a route suite that drives requests over `fetch`, close it the same way** — see the
+> `req()` helper in that file.
 
 **Shared-state rule:** `hunts` and `archive` are mutable singletons **owned by `lib/persistence.js`**.
 `server.js` imports them by reference (`const { hunts, archive } = require('./lib/persistence')`).

@@ -1,4 +1,8 @@
 const express         = require('express');
+// Must run before any router is built: teaches Express 4 to route a rejected async handler
+// into the global error handler below instead of letting it kill the process. See lib/asyncErrors.js.
+require('./lib/asyncErrors')();
+
 const session         = require('express-session');
 const passport        = require('passport');
 const DiscordStrategy = require('passport-discord').Strategy;
@@ -834,6 +838,22 @@ app.use((err, req, res, next) => {
 require('./sockets')(io, {
   getPublicHunts, publicHuntView, emitHubUpdate, tenantOf, integrations, viewers, hunts,
   overdrop, verifyToken, isBanned: bans.isBanned,
+});
+
+// ── Last-resort process guards ────────────────────────────────────
+// lib/asyncErrors.js covers rejections inside route handlers, but not everything runs in a
+// request: the janitor intervals, Twitch polling, the Discord announce sweep, socket handlers
+// and the rainbet slot sync all run detached. A rejection there still defaults to killing the
+// process under Node >= 15, which drops every connected socket and every in-flight hunt save.
+// Log loudly and stay up — a degraded API beats a dead one mid-stream. These handlers are
+// deliberately last in the file so nothing can register ahead of them and swallow the signal.
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL-GUARD] unhandledRejection — server kept alive:\n',
+    reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL-GUARD] uncaughtException — server kept alive:\n',
+    err && err.stack ? err.stack : err);
 });
 
 server.listen(PORT, () => console.log(`✅ Server on port ${PORT}`));
