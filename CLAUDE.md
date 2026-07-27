@@ -179,17 +179,27 @@ POST /api/my-hunt/reset                     → reset to a fresh (born-live) hun
 PUT  /api/my-hunt                           → update own hunt
 
 Hunt lifecycle (2026-07-09): hunts are BORN LIVE on /start (no manual go-live/offline/end in the UI).
-A hunt leaves "live" only automatically — the frontend auto-calls /end when every bonus has a win, or
-the stale-hunt janitor (server.js) reaps it. `huntHasContent(h)` (lib/hunts-core.js) — bonuses OR a real
+A hunt leaves "live" only automatically — the stale-hunt janitor (server.js) reaps it, either as an
+empty dead hunt or as a completed hunt that has gone idle past its grace window (see below). `huntHasContent(h)` (lib/hunts-core.js) — bonuses OR a real
 equity member (amount>0 or non-`creator_auto`/`bean_auto` id) OR non-solo calls — drives BOTH the hub
 filter (getPublicHunts hides empty live hunts) and the janitor's 1h dead-reap (empty regular hunt idle
 ≥1h → delete; sweep every 10m). tracker:/__mod_hunt__/__affiliate_hunt__ keys are exempt from the 1h
 reap and keep the 36h grace.
-The frontend /end is best-effort (one call, no retry), so a COMPLETED hunt (every bonus opened,
-`huntCompleted(h)`) is handled server-side too: `getPublicHunts` also excludes completed hunts (they
-drop off the hub instantly even if still isLive), and the janitor completed-reaps them — regular hunts
-only — into the archive within one ~10m sweep (see server.js cleanupStaleHunts). This is the safety net
-for a closed tab or a failed /end call stranding a finished hunt as "live".
+**A completed hunt does NOT end immediately — it keeps a 10-MINUTE EDITABLE GRACE WINDOW.** Opening the
+last bonus does not archive anything: `COMPLETED_GRACE_MS = 10 * 60 * 1000` (server.js), and the janitor
+only auto-ends a completed hunt once it has been **idle** that long (`huntCompleted(h) &&
+idleMs(h.updatedAt) >= COMPLETED_GRACE_MS`). **Every edit resets the timer**, and the sweep itself runs
+every 10m, so a real end lands ~10–20m after the host stops touching it. That window exists so the host
+can do final tweaks — equity, payouts, win corrections, **vaulting a base-game win from the Opening
+page** — after the last slot is opened. Persistent shared/tracker keys keep the 36h grace instead.
+Correspondingly `getPublicHunts` **deliberately KEEPS completed hunts on the hub** while they are still
+`isLive`, so the hunt stays visible for that window.
+
+> This paragraph previously claimed the frontend auto-calls `/end` the moment every bonus has a win and
+> that `getPublicHunts` excludes completed hunts. Both were stale and directly contradicted the inline
+> comments in `server.js` — it cost a 2026-07-27 investigation a wrong hypothesis (that a vault entry
+> added after the last slot missed the archive snapshot). The two remaining `/api/my-hunt/end` calls in
+> `MyHunt.js` are the explicit reset / back-to-back-start paths, not an auto-end.
 
 POST /api/hunts/:userId/calls               → add slot call (equity members)
 PUT  /api/hunts/:userId                     → edit any hunt (editors)
