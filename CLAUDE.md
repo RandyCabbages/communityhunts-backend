@@ -265,6 +265,16 @@ overdrop:enabled        → master switch changed ({ enabled })
   guard in the 2026-07-18 security audit (#4) — that fix closed the REST path and MISSED this one,
   so the same cross-tenant leak (non-anonymous equity names, bonuses, calls, existence of
   in-setup/offline hunts) stayed reachable over Socket.IO until 2026-07-27.
+- **The tenant gate is enforced TWICE, and the second one is the real one.** `watch:hunt` can only
+  check a hunt that already exists, so a socket asking to watch a Discord id with **no hunt yet**
+  joins `hunt:<id>` unchecked — and socket.io room membership persists, so it would be served
+  every update once that hunt was created in another tenant (found in the 2026-07-27 audit, same
+  leak class as #4/BE #110 through a timing window). **`emitHuntUpdate` therefore re-checks
+  `socket.data.tenantSlug` against `tenantOf(h)` at delivery** (`lib/hunts-core.js`), which is the
+  point that actually carries the data. Do NOT "simplify" that back into an `io.to(room).emit(...)`
+  room broadcast — a broadcast cannot filter recipients, which is why the error path there emits
+  nothing rather than falling back to one. Pinned by `lib/hunts-core.tenant-broadcast.test.js`.
+  Corollary: an unknown hunt id does not accrue a viewer count (nothing to verify it against).
 - **Identity comes only from the verified handshake token** (`io.use`), never a client event. The
   old `identify` event let any socket claim any user id and receive the de-masked view; it is gone.
 - **Viewer counting is per-socket-per-hunt.** `watch:hunt` is idempotent via a `watched` Set —

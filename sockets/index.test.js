@@ -88,11 +88,27 @@ test('watch:hunt DOES serve a hunt in the caller\'s own tenant', () => {
 
 // An unknown hunt id must still be joinable — a viewer can legitimately open a hunt page before
 // the hunt exists in memory. It just must not be counted twice or crash.
+//
+// NOTE the join is deliberately NOT tenant-checked here: there is no hunt yet to read a tenant
+// from. That is exactly why the tenant gate also lives at DELIVERY, in emitHuntUpdate
+// (lib/hunts-core.js) — see lib/hunts-core.tenant-broadcast.test.js. Joining is harmless; being
+// served another tenant's hunt is not.
 test('watch:hunt on an unknown hunt joins without emitting state', () => {
   const h = harness({ hunts: {}, slug: 'bean' });
   h.handlers['watch:hunt']('nobody');
   assert.deepStrictEqual(h.joined, ['hunt:nobody']);
   assert.deepStrictEqual(h.emitted.filter(e => e.ev === 'hunt:update'), []);
+});
+
+// Viewer-count forgery, second variant. The dedupe fix stopped ONE socket inflating a hunt it can
+// see; this is the hunt it CANNOT see. A hunt that doesn't exist has no tenant to check, so
+// counting the watcher lets any anonymous socket pre-inflate the hub number for a Discord id in
+// another community — the count survives into the hunt the moment it's created.
+test('watch:hunt on an unknown hunt does NOT count a viewer', () => {
+  const h = harness({ hunts: {}, slug: 'bean' });
+  h.handlers['watch:hunt']('nobody');
+  assert.strictEqual(h.viewers.nobody, undefined,
+    'a hunt with no tenant to verify must not accrue viewers');
 });
 
 // Viewer-count forgery: the increment had no dedupe, so an unauthenticated socket could inflate
