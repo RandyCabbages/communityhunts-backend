@@ -299,8 +299,8 @@ module.exports = function huntsRoutes(deps) {
     // only visible as a diff (see lib/auditLog.recordHuntChange).
     const _h = hunts[req.user.id];
     const _before = _h
-      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])] }
-      : { bonuses: [], equity: [], calls: [] };
+      ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])], vault: [...(_h.vault || [])] }
+      : { bonuses: [], equity: [], calls: [], vault: [] };
     if (!hunts[req.user.id]) hunts[req.user.id] = {
       user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -354,7 +354,7 @@ module.exports = function huntsRoutes(deps) {
     emitHubUpdate(req.tenant.id);
     auditLog.recordHuntChange(req,
       _before,
-      { bonuses: hunts[req.user.id].bonuses, equity: hunts[req.user.id].equity, calls: hunts[req.user.id].calls },
+      { bonuses: hunts[req.user.id].bonuses, equity: hunts[req.user.id].equity, calls: hunts[req.user.id].calls, vault: hunts[req.user.id].vault },
       { targetId: req.user.id, targetName: req.user.displayName });
     const _autolinks = [..._confirmed.links, ..._linked.links];
     if (_autolinks.length) {
