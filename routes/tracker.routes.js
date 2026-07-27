@@ -92,6 +92,11 @@ module.exports = function trackerRoutes(deps) {
     res.json({ ok: true });
   });
 
+  // end + delete are requireAuth ONLY — deliberately NOT requireSubscription, unlike the read /
+  // start / update routes above. Both act solely on trackerKey(req.user.id), the caller's own
+  // hunt (there is no :userId param), so a lapsed subscriber can still finish or remove THEIR OWN
+  // data. Adding requireSubscription here to "make the guards consistent" would trap a user's
+  // hunt behind an expired card — the asymmetry is the correct behaviour, not an oversight.
   router.post('/api/tracker/my-hunt/end', requireAuth, (req, res) => {
     const key = trackerKey(req.user.id);
     const hunt = hunts[key];
