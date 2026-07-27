@@ -866,4 +866,34 @@ process.on('uncaughtException', (err) => {
     err && err.stack ? err.stack : err);
 });
 
+// ── Graceful shutdown ─────────────────────────────────────────────
+// persistHunts() coalesces its Postgres write behind a short debounce (see lib/persistence.js),
+// so a redeploy can land inside that window. Railway sends SIGTERM before every restart — flush
+// the pending write instead of losing it.
+//
+// Registering these listeners OVERRIDES Node's default exit-on-signal, so this MUST always reach
+// process.exit(): flushAll is bounded by timeoutMs, the whole thing is wrapped, and a detached
+// backstop timer force-exits if anything else stalls. Otherwise every deploy waits for Railway's
+// force-kill. `stopping` makes a second signal a no-op rather than a re-entrant flush.
+let stopping = false;
+async function shutdown(signal) {
+  if (stopping) return;
+  stopping = true;
+  console.log(`[shutdown] ${signal} — flushing pending hunt writes`);
+  const backstop = setTimeout(() => {
+    console.error('[shutdown] flush did not finish in time — exiting anyway');
+    process.exit(0);
+  }, 5000);
+  backstop.unref();
+  try {
+    await persistence.flushAll({ timeoutMs: 3000 });
+    console.log('[shutdown] durable writes flushed');
+  } catch (e) {
+    console.error('[shutdown] flush failed:', e && e.message);
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
+
 server.listen(PORT, () => console.log(`✅ Server on port ${PORT}`));
