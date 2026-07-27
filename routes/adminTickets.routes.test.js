@@ -38,12 +38,24 @@ function fakeTickets(initial) {
   };
 }
 
-function appWith({ tickets, admin = true, platformToken = 'ptok' } = {}) {
+// Records every audit write so tests can assert the triage action is logged. The router calls
+// auditLog.recordFromReq unconditionally on a successful PUT — omitting it from deps threw
+// "Cannot read properties of undefined (reading 'recordFromReq')" and failed both PUT tests for
+// a reason that had nothing to do with what they were testing.
+function fakeAuditLog() {
+  const entries = [];
+  return { entries, recordFromReq: (req, entry) => { entries.push(entry); } };
+}
+
+function appWith({ tickets, admin = true, platformToken = 'ptok', auditLog = fakeAuditLog() } = {}) {
   const app = express();
   app.use(express.json());
-  const requireAuth = (req, res, next) => next();
+  // The router reads req.user.displayName when writing the audit entry, so the stub has to
+  // populate req.user the way the real requireAuth does.
+  const requireAuth = (req, res, next) => { req.user = { id: '135203806676779008', displayName: 'admin' }; next(); };
   const requirePlatformAdmin = admin ? (req, res, next) => next() : (req, res, next) => res.status(403).json({ error: 'forbidden' });
-  app.use(adminTicketsRoutes({ requireAuth, requirePlatformAdmin, tickets, getPlatformBotToken: () => platformToken }));
+  app.use(adminTicketsRoutes({ requireAuth, requirePlatformAdmin, tickets, getPlatformBotToken: () => platformToken, auditLog }));
+  app.auditLog = auditLog;
   return app;
 }
 
@@ -59,7 +71,11 @@ async function req(app, method, pathname, body) {
     await new Promise(res => setImmediate(res)); // let the post-response embed PATCH fire
     return out;
   } finally {
-    server.close();
+    // fetch() keeps its sockets alive, and server.close() only stops NEW connections — it waits
+    // forever for idle keep-alive ones to drain. That is why this suite hung and made the whole
+    // `node --test routes/*.test.js` run look broken; every other route suite is fine.
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
   }
 }
 

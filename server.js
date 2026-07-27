@@ -1,4 +1,8 @@
 const express         = require('express');
+// Must run before any router is built: teaches Express 4 to route a rejected async handler
+// into the global error handler below instead of letting it kill the process. See lib/asyncErrors.js.
+require('./lib/asyncErrors')();
+
 const session         = require('express-session');
 const passport        = require('passport');
 const DiscordStrategy = require('passport-discord').Strategy;
@@ -281,7 +285,10 @@ const confirmedAliases = require('./lib/confirmedAliases');
 confirmedAliases.initConfirmedAliases(pgPool)
   .then(n => console.log(`[confirmed_aliases] ${n} confirmed name(s) loaded`))
   .catch(e => console.error('[confirmed_aliases] initial load failed:', e.message));
-setInterval(() => confirmedAliases.refresh(), 60 * 60 * 1000);
+// .catch on every detached async interval: without it a rejection is an anonymous
+// unhandledRejection (fatal before lib/asyncErrors.js + the process guards, and still
+// undiagnosable after). A named log says which sweep died.
+setInterval(() => confirmedAliases.refresh().catch(e => console.error('[aliases] refresh failed:', e.message)), 60 * 60 * 1000);
 
 // All-time stats: fxRates (currency conversion) + statsStore (durable per-hunt history + per-user
 // rollup, additive to the 100-cap archive). Constructed synchronously; tables are created as part
@@ -699,7 +706,7 @@ setTimeout(cleanupStaleHunts, 30 * 1000);
 setInterval(cleanupStaleHunts, 10 * 60 * 1000);
 
 // Audit-log retention sweep (age + row-cap). Same background-timer pattern as the janitor above.
-setInterval(() => auditLog.prune(), 60 * 60 * 1000);
+setInterval(() => auditLog.prune().catch(e => console.error('[audit] prune failed:', e.message)), 60 * 60 * 1000);
 
 // Admin routes (routes/admin.routes.js). The janitor above stays here (composition-root
 // background task); the manual /api/admin/hunts/cleanup trigger calls the injected cleanupStaleHunts.
@@ -766,7 +773,8 @@ app.use(require('./routes/slots.routes')({ slots, getSlotCallCounts }));
 require('./lib/rainbetSlotSync').startRainbetSlotSync(slots);
 
 // Misc leaf routes: /api/bangers (reads hunts+archive), /api/tickets (persists via tickets store), /api/health.
-app.use(require('./routes/misc.routes')({ hunts, archive, tickets, getPlatformBotToken: tenants.getPlatformBotToken, statsStore, isPrivileged }));
+app.use(require('./routes/misc.routes')({ hunts, archive, tickets, getPlatformBotToken: tenants.getPlatformBotToken, statsStore, isPrivileged,
+  persistence: require('./lib/persistence') }));
 
 // User settings + admin user-management routes (helpers in lib/settings.js).
 app.use(require('./routes/settings.routes')({
@@ -834,6 +842,22 @@ app.use((err, req, res, next) => {
 require('./sockets')(io, {
   getPublicHunts, publicHuntView, emitHubUpdate, tenantOf, integrations, viewers, hunts,
   overdrop, verifyToken, isBanned: bans.isBanned,
+});
+
+// ── Last-resort process guards ────────────────────────────────────
+// lib/asyncErrors.js covers rejections inside route handlers, but not everything runs in a
+// request: the janitor intervals, Twitch polling, the Discord announce sweep, socket handlers
+// and the rainbet slot sync all run detached. A rejection there still defaults to killing the
+// process under Node >= 15, which drops every connected socket and every in-flight hunt save.
+// Log loudly and stay up — a degraded API beats a dead one mid-stream. These handlers are
+// deliberately last in the file so nothing can register ahead of them and swallow the signal.
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL-GUARD] unhandledRejection — server kept alive:\n',
+    reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL-GUARD] uncaughtException — server kept alive:\n',
+    err && err.stack ? err.stack : err);
 });
 
 server.listen(PORT, () => console.log(`✅ Server on port ${PORT}`));
