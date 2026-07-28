@@ -350,9 +350,20 @@ Two things are specific to the archive:
   key silently merges two hunts into one row. `archiveHunt()` REPLACES the snapshot with a fresh
   object when the same hunt is re-ended, so it **carries the id across**; regenerating it would
   orphan the old row and reintroduce the duplicate that upsert exists to prevent.
-- **Order is derived, not stored.** The array's canonical order IS `archivedAt` descending (the
-  boot dedupe sorts by exactly that), so the load does `ORDER BY archived_at DESC NULLS LAST`.
-  Storing positions would mean every insert rewrote every row after it.
+- **Order is derived, not stored.** The load does `ORDER BY archived_at DESC NULLS LAST`; storing
+  positions would mean every insert rewrote every row after it.
+
+  The in-memory array is only *nearly* sorted that way, which is worth knowing before you debug a
+  "the Archived tab reshuffled" report. `unshift` puts new entries first, but `archiveHunt()`
+  REPLACES in place when a hunt is re-ended (`archive[idx] = snap`) — so that entry keeps its old
+  position while taking a NEW `archivedAt`. Measured against production at the migration: **8 of
+  283 entries were out of order.** The first boot after the migration therefore preserves the
+  blob's drifted order, and the *next* boot normalizes it to strict `archivedAt` descending. That
+  is a one-time correction rather than a regression — the tab is labelled newest-first and now
+  actually is — but a handful of rows visibly move once.
+
+  `trimArchive` evicts by POSITION, so ordering also decides which entry is dropped at the cap.
+  Unreachable today (283 vs a 1000 per-tenant cap), but it is why the ordering matters at all.
 
 Deletions here are routine, not theoretical: `trimArchive` evicts past the per-tenant cap,
 `unarchiveHunt` removes a reopened hunt, and both the admin delete and the janitor splice entries
