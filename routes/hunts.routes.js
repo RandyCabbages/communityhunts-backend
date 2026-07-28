@@ -20,6 +20,7 @@ const { diffOpenedBonuses } = require('../lib/activityFeed');
 const { linkWithinHunt, linkFromConfirmed } = require('../lib/identityLink');
 const confirmedAliases = require('../lib/confirmedAliases');
 const { vetEquityIdentity, vetCallerIdentity } = require('../lib/identityWrites');
+const huntUndo = require('../lib/huntUndo');
 
 module.exports = function huntsRoutes(deps) {
   const {
@@ -301,6 +302,9 @@ module.exports = function huntsRoutes(deps) {
     const _before = _h
       ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])], vault: [...(_h.vault || [])] }
       : { bonuses: [], equity: [], calls: [], vault: [] };
+    // The same snapshot also feeds the shared undo history (lib/huntUndo.js), which needs the
+    // scalars too — the arrays above are all the audit log ever looked at.
+    for (const f of huntUndo.SCALAR_FIELDS) _before[f] = _h ? _h[f] : undefined;
     if (!hunts[req.user.id]) hunts[req.user.id] = {
       user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -348,6 +352,19 @@ module.exports = function huntsRoutes(deps) {
     // Unique matches only, blanks only — see lib/identityLink.js. Runs before persist so the
     // stored hunt and the audit snapshot below agree.
     const _linked = linkWithinHunt(hunts[req.user.id]);
+    // Shared undo history. Derived by diffing stored state against what this write produced, so it
+    // captures the change whoever sent it — the site and the extension both land here, and neither
+    // has to cooperate. Recorded BEFORE persist so the entry ships with the state it describes.
+    // `req.undoSkip` is set by the undo route itself: undoing must not be undoable, or the history
+    // never drains.
+    if (!req.undoSkip) {
+      const _undo = huntUndo.buildUndoEntry(_before, hunts[req.user.id], {
+        actorId: req.user.id,
+        actorName: req.user.displayName,
+        source: req.get('X-Client') === 'extension' ? 'extension' : 'site',
+      });
+      if (_undo) huntUndo.pushUndoEntry(hunts[req.user.id], _undo);
+    }
     touch(req.user.id);
     persistHunts();
     emitHuntUpdate(req.user.id);
@@ -386,6 +403,37 @@ module.exports = function huntsRoutes(deps) {
       });
     }
     res.json({ok:true});
+  });
+
+  // -- Shared undo -------------------------------------------------------------
+  // ONE undo for the hunt, used by both the site's and the extension's button, so "undo" means the
+  // same thing wherever it is pressed: reverse the last change anyone made.
+  //
+  // Each client used to keep its own stack of whole-hunt snapshots. That could only ever undo that
+  // client's own actions, and re-sending a snapshot erased whatever the other client had done since
+  // (PUT assigns whole arrays). The history is derived server-side in the PUT above, and the inverse
+  // is applied to CURRENT state -- so work done after the recorded change survives the undo.
+  router.post('/api/my-hunt/undo', requireAuth, (req, res) => {
+    const h = hunts[req.user.id];
+    if (!h) return res.status(404).json({ error: 'No hunt' });
+    if (h.archivedAt) return res.status(409).json({ error: 'Hunt has ended' });
+
+    const popped = huntUndo.popUndo(h);
+    if (!popped) return res.json({ ok: false, reason: 'nothing to undo', remaining: 0 });
+
+    // The patch names only the fields the recorded change touched; everything else stays as the
+    // server holds it, which is what makes an old entry safe to apply.
+    Object.assign(h, popped.patch);
+    touch(req.user.id);
+    persistHunts();
+    emitHuntUpdate(req.user.id);
+    emitHubUpdate(req.tenant.id);
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'hunt.undo', targetId: req.user.id,
+      summary: 'Undid a change by ' + (popped.entry.actorName || 'someone') + (popped.entry.source ? ' (' + popped.entry.source + ')' : ''),
+      detail: { at: popped.entry.at, fields: Object.keys(popped.patch) },
+    });
+    res.json({ ok: true, remaining: (h.undoLog || []).length });
   });
 
   // ── Invite editor ──────────────────────────────────────────────────

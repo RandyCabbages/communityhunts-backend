@@ -15,6 +15,7 @@ const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { linkWithinHunt, linkFromConfirmed } = require('../lib/identityLink');
 const confirmedAliases = require('../lib/confirmedAliases');
+const huntUndo = require('../lib/huntUndo');
 const { vetEquityIdentity, vetCallerIdentity } = require('../lib/identityWrites');
 
 module.exports = function callsRoutes(deps) {
@@ -134,6 +135,28 @@ module.exports = function callsRoutes(deps) {
   });
 
   // ── Edit any hunt (admin/editor) ───────────────────────────────────
+  // Shared undo for a hunt someone else runs — the editor/mod twin of POST /api/my-hunt/undo.
+  // Same single history, so an editor's Undo and the host's Undo mean the same thing.
+  router.post('/api/hunts/:userId/undo', requireAuth, (req, res) => {
+    if (!canEditHunt(req, req.params.userId)) return res.status(403).json({ error: 'Not authorised' });
+    const hunt = hunts[req.params.userId];
+    if (!hunt) return res.status(404).json({ error: 'Hunt not found' });
+    if (hunt.archivedAt) return res.status(409).json({ error: 'Hunt has ended' });
+
+    const popped = huntUndo.popUndo(hunt);
+    if (!popped) return res.json({ ok: false, reason: 'nothing to undo', remaining: 0 });
+
+    Object.assign(hunt, popped.patch);
+    hunt.updatedAt = new Date().toISOString();
+    emitHuntUpdate(req.params.userId);
+    emitHubUpdate(req.tenant.id);
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'hunt.undo', targetId: req.params.userId,
+      summary: 'Undid a change by ' + (popped.entry.actorName || 'someone') + (popped.entry.source ? ' (' + popped.entry.source + ')' : ''),
+      detail: { at: popped.entry.at, fields: Object.keys(popped.patch) },
+    });
+    res.json({ ok: true, remaining: (hunt.undoLog || []).length });
+  });
   router.put('/api/hunts/:userId', requireAuth, async (req, res) => {
     if (!canEditHunt(req, req.params.userId)) return res.status(403).json({error:'Not authorised'});
     const hunt = hunts[req.params.userId];
@@ -141,7 +164,9 @@ module.exports = function callsRoutes(deps) {
     if (rejectBadHuntInput(req, res)) return;
     // Snapshot BEFORE any mutation — an editor deleting someone else's bonus is only visible
     // as a diff (the client replaces whole arrays). See lib/auditLog.recordHuntChange.
-    const _before = { bonuses: [...(hunt.bonuses || [])], equity: [...(hunt.equity || [])], calls: [...(hunt.calls || [])] };
+    const _before = { bonuses: [...(hunt.bonuses || [])], equity: [...(hunt.equity || [])], calls: [...(hunt.calls || [])], vault: [...(hunt.vault || [])] };
+    // Shared undo history also needs the scalars — the audit log only ever read the arrays.
+    for (const f of huntUndo.SCALAR_FIELDS) _before[f] = hunt[f];
     const { bonuses, equity, gifts, chases, payouts, vault, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot, manualOrder } = req.body;
     // See routes/hunts.routes.js for the vet-then-preserve ordering and why equity goes first.
     const _idAudit = { accepted: [], rejected: [] };
@@ -169,6 +194,15 @@ module.exports = function callsRoutes(deps) {
     // replace the whole arrays, so hooking only one leaves a silent gap for editor/admin edits.
     const _confirmed = linkFromConfirmed(hunt, confirmedAliases.resolve);
     const _linked = linkWithinHunt(hunt);
+    // Shared undo history — the twin of the hook in routes/hunts.routes.js. An editor's edit is a
+    // change to this hunt like any other, so it has to be undoable from either client's button.
+    if (!req.undoSkip) {
+      const _undo = huntUndo.buildUndoEntry(_before, hunt, {
+        actorId: req.user.id, actorName: req.user.displayName,
+        source: req.get('X-Client') === 'extension' ? 'extension' : 'site',
+      });
+      if (_undo) huntUndo.pushUndoEntry(hunt, _undo);
+    }
     hunt.updatedAt = new Date().toISOString();
     emitHuntUpdate(req.params.userId); // per-socket (persists + redacts anonymous names)
     emitHubUpdate(req.tenant.id);
