@@ -303,9 +303,10 @@ overdrop:enabled        → master switch changed ({ enabled })
 
 ## Hunt Persistence
 
-- Postgres is the durable store. **Hunts live in `hunts_rows`, ONE ROW PER HUNT**
-  (`user_id` PK, `data` JSONB, `updated_at`). `hunts_kv` still holds `archive` and `shareTokens`
-  as whole-value blobs, plus the now-frozen `hunts` blob left behind by the migration.
+- Postgres is the durable store. **Hunts live in `hunts_rows` and archived hunts in `archive_rows`,
+  ONE ROW EACH** (`hunts_rows`: `user_id` PK; `archive_rows`: `archive_id` PK + `archived_at`).
+  `hunts_kv` now holds only `shareTokens`, plus the frozen `hunts` and `archive` blobs left
+  behind by the migrations.
 - `hunts_data.json` is the fallback for when Postgres is **not** available: no `DATABASE_URL`
   (local dev) or writes blocked by the clobber guard. On Railway the file lands on an ephemeral
   disk that is empty after every redeploy, so production never reads it.
@@ -334,6 +335,28 @@ map simply wasn't in the next write. With rows, a missed `DELETE` means the hunt
 the next boot**. Anything in `lastWrittenHunts` that is no longer in `hunts` is deleted. This also
 raises the stakes on the clobber guard — an unguarded flush against an empty `hunts` map would now
 issue DELETEs rather than an empty upsert. Pinned by `lib/persistence.rows.test.js`.
+
+**The archive got the same treatment, and needed it more.** One blob rewritten in full on every
+hunt end, growing without bound (281 entries in production), and — unlike hunts — never debounced
+at all, across 21 call sites. It is still not debounced: per-row diffing already removes the
+amplification, and adding a timer would mean `flushAll()` has to drain it too, where a missed drain
+on SIGTERM loses an archived hunt.
+
+Two things are specific to the archive:
+
+- **Every snapshot carries its own `archiveId`**, generated once and persisted with it.
+  `sameHuntInstance()` is the in-memory notion of identity but falls back to `(user.id, startedAt)`
+  when `huntId` is absent, and neither is guaranteed on older entries — a null or colliding primary
+  key silently merges two hunts into one row. `archiveHunt()` REPLACES the snapshot with a fresh
+  object when the same hunt is re-ended, so it **carries the id across**; regenerating it would
+  orphan the old row and reintroduce the duplicate that upsert exists to prevent.
+- **Order is derived, not stored.** The array's canonical order IS `archivedAt` descending (the
+  boot dedupe sorts by exactly that), so the load does `ORDER BY archived_at DESC NULLS LAST`.
+  Storing positions would mean every insert rewrote every row after it.
+
+Deletions here are routine, not theoretical: `trimArchive` evicts past the per-tenant cap,
+`unarchiveHunt` removes a reopened hunt, and both the admin delete and the janitor splice entries
+out. All four used to disappear for free by not being in the next blob.
 
 **Migration.** `hunts_rows` is read first; the `hunts_kv` blob is read ONLY when `hunts_rows` is
 empty, which is either a fresh database or the single boot that migrates. That boot leaves the
