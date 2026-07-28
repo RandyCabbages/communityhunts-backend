@@ -303,9 +303,44 @@ overdrop:enabled        → master switch changed ({ enabled })
 
 ## Hunt Persistence
 
-- Hunts stored in `hunts_data.json` via `fs.writeFileSync` on every state change
-- Survives Railway restarts
+- Postgres (`hunts_kv`) is the durable store. `hunts_data.json` is the fallback for when it is
+  **not**: no `DATABASE_URL` (local dev) or writes blocked by the clobber guard. On Railway the
+  file lands on an ephemeral disk that is empty after every redeploy, so production never reads it.
 - `fs` and `path` requires must stay at the top of `server.js` (before any usage)
+
+**`persistHunts()` SCHEDULES a write; it does not perform one.** It marks state dirty and sets a
+250ms trailing timer (`flushHunts()` does the work). It has 52 call sites, one of which is
+`emitHubUpdate` — every hub broadcast. It used to synchronously run an O(hunts × calls) regex
+dedupe over *every* hunt, `JSON.stringify(hunts)` **twice** (once for PG, once for the file), and
+a blocking `fs.writeFileSync` + `renameSync`. All of that blocked the single event loop serving
+every tenant, and because both the blob size and the write rate grow with concurrency, the cost
+grew with its **square** — fine at 3-4 concurrent hunts, ~50x at the 20-30 the platform is
+heading for.
+
+- `flushHunts()` → write now; returns a promise that settles with the PG write. Never rejects.
+- `flushAll({ timeoutMs })` → flush + wait for every in-flight write. Used by the SIGTERM handler.
+- `pgHealth().huntsFlushPending` → dirty-but-unwritten. Stuck `true` means flushes aren't landing.
+- **Tests must `await P.flushHunts()` after `persistHunts()`** — otherwise a "nothing was written"
+  assertion passes vacuously because the timer simply hasn't fired.
+- The dedupe **reassigns** `h.calls` rather than splicing. `archiveHunt` takes a *shallow* copy, so
+  a live hunt and its archived snapshot share that array — mutating in place would rewrite history.
+- `initPersistence({ dataDir })` overrides the JSON file locations; test suites pass a temp dir so
+  parallel `node --test` files don't fight over the repo-root paths.
+
+**Shutdown is graceful, and there is exactly ONE handler** — `installGracefulShutdown` in
+`lib/shutdown.js`, wired once at the bottom of `server.js`. **Do not add a second SIGTERM/SIGINT
+listener.** Two handlers both run, and whichever reaches `process.exit()` first kills the other
+mid-drain; this branch originally added its own alongside the existing one, which would have lost
+the debounced write on every deploy — the exact data loss both changes exist to prevent.
+
+The handler is given `flush: () => persistence.flushAll({ timeoutMs: 5000 })`. It **must** be
+`flushAll`, never `persistHunts()`/`persistArchive()` — those only SCHEDULE, so the process would
+exit before the queued write ran. Registering a signal listener **overrides Node's default exit**,
+so the drain must always reach `process.exit()`: `flushAll` resolves rather than rejects, takes its
+own timeout, and `lib/shutdown.js` adds an unref'd backstop that force-exits a hung flush. Get that
+wrong and every deploy stalls until Railway force-kills. Node on **Windows has no real SIGTERM**, so
+verify this path from the Railway deploy logs, not locally. Drain order, idempotence under a second
+signal, and the forced exit are pinned by `lib/shutdown.test.js`.
 
 **The clobber guard FAILS CLOSED — don't make it permissive again.** `pgWritesBlocked` is set
 `true` the moment `initPersistence` receives a pool, and cleared only when the boot read

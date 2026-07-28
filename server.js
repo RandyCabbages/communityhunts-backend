@@ -892,7 +892,12 @@ process.on('uncaughtException', (err) => {
 installGracefulShutdown({
   server,
   pgPool,
-  flush: async () => { persistHunts(); persistArchive(); },
+  // MUST be flushAll, not persistHunts()/persistArchive(). Since the write-coalescing change those
+  // only SCHEDULE a 250ms trailing write — calling them here would queue a write and then exit
+  // before it ran, losing exactly the data this handler exists to save. flushAll forces the
+  // pending write AND waits for every in-flight one; it resolves rather than rejects, and takes
+  // its own timeout, so a dead database cannot wedge the drain.
+  flush: async () => { await persistence.flushAll({ timeoutMs: 5000 }); },
   log: (m) => console.log(m),
 });
 
