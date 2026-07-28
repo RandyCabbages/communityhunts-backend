@@ -303,10 +303,44 @@ overdrop:enabled        → master switch changed ({ enabled })
 
 ## Hunt Persistence
 
-- Postgres (`hunts_kv`) is the durable store. `hunts_data.json` is the fallback for when it is
-  **not**: no `DATABASE_URL` (local dev) or writes blocked by the clobber guard. On Railway the
-  file lands on an ephemeral disk that is empty after every redeploy, so production never reads it.
+- Postgres is the durable store. **Hunts live in `hunts_rows`, ONE ROW PER HUNT**
+  (`user_id` PK, `data` JSONB, `updated_at`). `hunts_kv` still holds `archive` and `shareTokens`
+  as whole-value blobs, plus the now-frozen `hunts` blob left behind by the migration.
+- `hunts_data.json` is the fallback for when Postgres is **not** available: no `DATABASE_URL`
+  (local dev) or writes blocked by the clobber guard. On Railway the file lands on an ephemeral
+  disk that is empty after every redeploy, so production never reads it.
 - `fs` and `path` requires must stay at the top of `server.js` (before any usage)
+
+**Why one row per hunt.** The 250ms debounce capped the write RATE, but every flush still rewrote
+the entire hunt map as a single JSONB value — change 50 bytes on one hunt, rewrite all of them.
+That cost is paid three times: the write, the WAL it generates (which is also the PITR archive),
+and the `JSON.stringify` blocking the one event loop serving every tenant. All three scale with
+the number of concurrent hunts.
+
+**Changed-ness is decided by comparing content, never by tracking dirty ids.** `persistHunts()`
+has 52 call sites and takes no arguments; any scheme asking callers to name what they touched
+fails silently the first time a call site is missed, and the failure is "this hunt stopped being
+saved". `lastWrittenHunts` (userId → last durably written JSON string) is compared on each flush.
+Two consequences worth knowing:
+
+- **A failed write retries itself.** The baseline only advances once the write lands, so the next
+  flush naturally re-sends exactly the rows that didn't. The old whole-blob write lost them until
+  something else changed.
+- **An unchanged flush writes nothing.** Tests asserting "a write happened" must actually mutate a
+  hunt first — `flushHunts()` on unchanged state is correctly a no-op now.
+
+**Deletion is explicit and it matters.** The blob got deletion for free: a hunt removed from the
+map simply wasn't in the next write. With rows, a missed `DELETE` means the hunt **resurrects on
+the next boot**. Anything in `lastWrittenHunts` that is no longer in `hunts` is deleted. This also
+raises the stakes on the clobber guard — an unguarded flush against an empty `hunts` map would now
+issue DELETEs rather than an empty upsert. Pinned by `lib/persistence.rows.test.js`.
+
+**Migration.** `hunts_rows` is read first; the `hunts_kv` blob is read ONLY when `hunts_rows` is
+empty, which is either a fresh database or the single boot that migrates. That boot leaves the
+baseline empty so the first flush copies every hunt across, and **does not delete the blob** — it
+stays as a frozen last-known-good that a code revert can still read (stale from the migration
+onward). Look for `[persist] Migrating N hunts from the hunts_kv blob into hunts_rows` in the
+deploy logs; it should appear exactly once, ever.
 
 **`persistHunts()` SCHEDULES a write; it does not perform one.** It marks state dirty and sets a
 250ms trailing timer (`flushHunts()` does the work). It has 52 call sites, one of which is
