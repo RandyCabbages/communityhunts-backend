@@ -642,6 +642,10 @@ app.use(require('./routes/calls.routes')({
 app.use(require('./routes/share.routes')({
   requireAuth, canEditHunt, isEquityMember, hunts, archive, publicHuntView,
   shareTokens, shareLinks,
+  // Equipped equity-card ids for the public page (lib/shareCards.js). The tenant comes from the
+  // HUNT, not req.tenant — a share link is opened by outsiders and may carry no slug at all.
+  equippedCardsFor: require('./lib/shareCards').equippedCardsFor,
+  tenantForHunt: h => tenants.getTenantBySlug(huntsCore.tenantOf(h)) || tenants.BEAN_TENANT,
 }));
 
 // ── Stale-hunt janitor ─────────────────────────────────────────────

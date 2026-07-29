@@ -6,7 +6,7 @@ const express = require('express');
 // durable handle for "this streamer's hunt" rather than one ephemeral hunt instance.
 module.exports = (deps) => {
   const { requireAuth, canEditHunt, isEquityMember, hunts, archive, publicHuntView,
-          shareTokens, shareLinks } = deps;
+          shareTokens, shareLinks, equippedCardsFor, tenantForHunt } = deps;
   const router = express.Router();
 
   // Mint (or return the existing) stable share token for the caller's own hunt. Editor-gated.
@@ -23,7 +23,7 @@ module.exports = (deps) => {
   // tracks the current hunt through setup; else their most recent ended hunt; else 404.
   // `frozen` means ENDED (archivedAt set), NOT merely "not live" — a hunt in setup is not frozen,
   // so the share page shows live stats + the suggestion box during setup, not a "FINAL RESULTS" view.
-  router.get('/api/share/:token', (req, res) => {
+  router.get('/api/share/:token', async (req, res) => {
     const { token } = req.params;
     if (!token) return res.status(400).json({ error: 'Bad token' });
 
@@ -54,7 +54,24 @@ module.exports = (deps) => {
     const canAddCalls = req.user && ownerId
       ? (canEditHunt(req, ownerId) || isEquityMember(req.user, ownerId))
       : false;
-    res.json({ hunt: { ...publicHuntView(hunt), canAddCalls }, frozen: !!hunt.archivedAt, ownerId });
+
+    // Each member's equipped cosmetic card, so the public page can render the real equity cards
+    // (the tracker's own source, /api/settings/:userId, is requireAuth). Resolved off the RAW hunt
+    // — the ids it needs are exactly what publicHuntView strips — then attached to the masked
+    // rows. Anonymous members are excluded inside equippedCardsFor and stay excluded here: a card
+    // is a name badge. Cosmetic, so a failure degrades to no cards rather than a broken page.
+    let cards = {};
+    if (equippedCardsFor) {
+      try {
+        cards = await equippedCardsFor(hunt, tenantForHunt ? tenantForHunt(hunt) : null) || {};
+      } catch (e) { console.error('[share] equipped cards lookup failed -', e && e.message); }
+    }
+    const pv = publicHuntView(hunt);
+    const equity = Array.isArray(pv.equity)
+      ? pv.equity.map(e => (e && !e.anonymous) ? { ...e, cosmeticCard: cards[e.id] || null } : e)
+      : pv.equity;
+
+    res.json({ hunt: { ...pv, equity, canAddCalls }, frozen: !!hunt.archivedAt, ownerId });
   });
 
   return router;
