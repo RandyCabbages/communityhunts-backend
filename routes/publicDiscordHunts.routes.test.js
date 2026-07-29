@@ -454,3 +454,90 @@ describe('POST /hunts/shared/equity', () => {
     assert.equal(state.audit.at(-1).action, 'hunt.shared.equity');
   });
 });
+
+const cancel = (app, body) => call(app, 'POST', '/api/public/v1/hunts/shared/cancel', body);
+
+describe('POST /hunts/shared/cancel', () => {
+  it('deletes the run the giveaway opened, and archives nothing', async () => {
+    // "cancel and delete the hunt, no saving of it" — a cancelled giveaway must
+    // not leave its equity sheet behind in the archive for someone to find.
+    const { app, state } = harness();
+    const opened = await open(app, { category: 'affiliate', title: 'Friday' });
+    await equity(app, {
+      key: opened.body.key,
+      members: [{ name: 'Cabbage', discordId: CABBAGE, amount: 50, isRollWinner: true }],
+    });
+
+    const res = await cancel(app, { key: opened.body.key });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.cancelled, true);
+    assert.deepEqual(state.archive, [], 'nothing archived');
+    // The shared hunt still exists — it is a permanent fixture with a page and
+    // an overlay — but it is a fresh, empty run with a new id.
+    const now = state.hunts['__affiliate_hunt__:bean'];
+    assert.notEqual(now.huntId, opened.body.huntId);
+    assert.equal(now.bonuses.length, 0);
+    assert.equal(now.equity.filter(e => e.discordId === CABBAGE).length, 0);
+  });
+
+  it('refuses to touch a run somebody else has since started', async () => {
+    // The whole point of the run key. A mod who reset the hunt and started a
+    // real one must not lose it because an old Discord giveaway was cancelled.
+    const { app, state } = harness();
+    const opened = await open(app, { category: 'affiliate', title: 'Friday' });
+    const theirs = await open(app, { category: 'affiliate', title: 'A mod started this' });
+
+    const res = await cancel(app, { key: opened.body.key });
+
+    assert.equal(res.status, 409);
+    assert.equal(res.body.error.code, 'stale_run');
+    assert.equal(state.hunts['__affiliate_hunt__:bean'].huntId, theirs.body.huntId);
+  });
+
+  it('refuses once the host has actually started hunting', async () => {
+    // Bonuses mean somebody is mid-hunt on stream. Cancelling the giveaway is
+    // not licence to delete that.
+    const { app, state } = harness();
+    const opened = await open(app, { category: 'affiliate', title: 'Friday' });
+    state.hunts['__affiliate_hunt__:bean'].bonuses.push({ slot: 'Sweet Bonanza' });
+
+    const res = await cancel(app, { key: opened.body.key });
+
+    assert.equal(res.status, 409);
+    assert.equal(res.body.error.code, 'hunt_in_progress');
+    assert.equal(state.hunts['__affiliate_hunt__:bean'].bonuses.length, 1);
+  });
+
+  it('is idempotent — cancelling twice is not an error the bot must handle', async () => {
+    const { app } = harness();
+    const opened = await open(app, { category: 'affiliate', title: 'Friday' });
+
+    assert.equal((await cancel(app, { key: opened.body.key })).status, 200);
+    // The second one finds a different (fresh) run, which is the stale case.
+    assert.equal((await cancel(app, { key: opened.body.key })).status, 409);
+  });
+
+  it('refuses a key that is not a shared hunt of this tenant', async () => {
+    const { app } = harness();
+    const res = await cancel(app, { key: '__affiliate_hunt__:someoneelse#abc' });
+    assert.equal(res.status, 400);
+  });
+
+  it('needs the write scope', async () => {
+    const { app } = harness({ scopes: ['read'] });
+    const res = await cancel(app, { key: '__affiliate_hunt__:bean#abc' });
+    assert.equal(res.status, 403);
+    assert.equal(res.body.error.code, 'insufficient_scope');
+  });
+
+  it('records who did it, because this one destroys something', async () => {
+    const { app, state } = harness();
+    const opened = await open(app, { category: 'affiliate', title: 'Friday' });
+    await cancel(app, { key: opened.body.key });
+
+    const entry = state.audit.find(a => a.action === 'hunt.shared.cancel');
+    assert.ok(entry, 'a cancel must be in the audit log');
+    assert.equal(entry.actorId, 'apikey:bean');
+  });
+});
