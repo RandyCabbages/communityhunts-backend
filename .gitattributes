@@ -1,0 +1,19 @@
+# Normalize line endings: store LF in the repo and check out LF on every
+# platform. Stops the recurring "LF will be replaced by CRLF" warnings and the
+# phantom whole-file diffs that show up on Windows checkouts — one 33-line edit
+# to lib/settings.js once rendered as an 893-line diff for exactly this reason.
+* text=auto eol=lf
+
+# Common binary assets — never normalize these.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+*.otf   binary
+*.pdf   binary
