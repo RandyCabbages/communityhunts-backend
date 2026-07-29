@@ -167,6 +167,12 @@ module.exports = function publicRoutes(deps) {
     res.json({ data: list, pagination: { limit: list.length, offset: 0, total: list.length } });
   });
 
+  // The Discord bot's shared-hunt endpoints — separate feature, separate plan gate
+  // (`discord_hunts`), own file. Mounted HERE rather than in server.js so it inherits the CORS +
+  // `ipFloor → requireApiKey → rateLimit` chain above and the error envelope below, instead of
+  // carrying a second copy of both that can drift.
+  router.use(require('./publicDiscordHunts.routes')(deps));
+
   // Public-scoped error envelope (the global handler returns a bare string — wrong shape).
   // MUST stay path-scoped. Unscoped, this caught errors from every router mounted BEFORE this
   // one in server.js (auth, hunts, mod-hunt, mods, announcements, ledger): Express propagates
