@@ -15,7 +15,8 @@ const { sanitizeBonusReplayUrls, preserveRowIdentity } = require('../lib/hunts-c
 const huntRevert = require('../lib/huntRevert');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
-const { defaultHuntTitle, sanitizeTitle } = require('../lib/huntTitle');
+const { sanitizeTitle } = require('../lib/huntTitle');
+const makeSharedHunts = require('../lib/sharedHunts');
 
 // Audit summaries name the hunt, not its key: these are SHARED hunts, so `targetId` is the fixed
 // key (`__tenant_hunt__:<tenant>`) rather than a user id, and a raw key reads as gibberish in the log.
@@ -119,45 +120,15 @@ module.exports = function modHuntRoutes(deps) {
   router.post('/api/affiliate-hunt/activity/:id/restore', requireMod, restoreRoute(affiliateHuntKey, AFFILIATE_HUNT_LABEL));
   router.post('/api/vip-hunt/activity/:id/restore', requireMod, restoreRoute(vipHuntKey, VIP_HUNT_LABEL));
 
-  // Resolve the display name shown in Bean's-Hunt/Affiliate-Hunt equity from the tenant's own
-  // branding, instead of hardcoding 'Bean'. Bean's tenant has branding.hostName === 'Bean', so
-  // this naturally resolves to the same value for Bean — zero behavior change for the existing
-  // production tenant.
-  function hostNameFor(tenantId) {
-    const t = tenants.getTenantBySlug(tenantId) || tenants.getTenantBySlug('bean');
-    return t?.branding?.hostName || t?.displayName || 'Bean';
-  }
-
-  // The host equity row below is written by the server from tenant config, not typed by anyone, so
-  // it carries the tenant's configured host id. Without it the host's display name shows up in the
-  // /admin/identity review queue as if it were an unidentified participant, and Tier 1 has no seed
-  // to link this hunt's typed caller names against. Null for a tenant with no hostDiscordId — the
-  // row then seeds without the field rather than with a junk one.
-  function hostIdFor(tenantId) {
-    const t = tenants.getTenantBySlug(tenantId) || tenants.getTenantBySlug('bean');
-    return t?.hostDiscordId || null;
-  }
-  const hostEquityRow = (tenantId, amount) => {
-    const row = { id: 'bean_auto', name: hostNameFor(tenantId), amount, isRollWinner: false };
-    const id = hostIdFor(tenantId);
-    return id ? { ...row, discordId: String(id) } : row;
-  };
+  // Shared with routes/public.routes.js, which opens the same affiliate/VIP runs for the Discord
+  // bot. Two copies of "what a fresh affiliate hunt looks like" would drift, and the drifted one
+  // would be writing a real hunt with the wrong starting equity.
+  const { hostNameFor, hostEquityRow, emptyModHunt, emptyAffiliateHunt, emptyVipHunt } =
+    makeSharedHunts({ tenants, uid });
 
   // ── Mod hunt — private solo hunt run jointly by a community's Mods ────
   // Stored under modHuntKey(tenantId) so Bean's OBS overlay link never changes.
   // Never appears on Hub or archive listings.
-  function emptyModHunt(tenantId, title) {
-    return {
-      user: { id: modHuntKey(tenantId), displayName: hostNameFor(tenantId), avatar: null },
-      huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null,
-      tenantId: tenantId || 'bean',
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      title: sanitizeTitle(title) || defaultHuntTitle(hostNameFor(tenantId), 'mod', Date.now()),
-      huntType: 'solo', bonuses: [], equity: [hostEquityRow(tenantId, 0)],
-      calls: [], invitedEditors: [], callLimit: 0, huntMode: 'hunting',
-      roundRobin: false, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null,
-    };
-  }
 
   router.get('/api/mod-hunt', requireMod, (req, res) => {
     const key = modHuntKey(req.tenant.id);
@@ -322,19 +293,6 @@ module.exports = function modHuntRoutes(deps) {
   });
 
   // ── Affiliate hunt — VIP-style hunt run jointly by a community's Mods ──
-  function emptyAffiliateHunt(tenantId, title) {
-    return {
-      user: { id: affiliateHuntKey(tenantId), displayName: hostNameFor(tenantId), avatar: null },
-      huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null,
-      tenantId: tenantId || 'bean',
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      title: sanitizeTitle(title) || defaultHuntTitle(hostNameFor(tenantId), 'affiliate', Date.now()),
-      huntType: 'vip', bonuses: [],
-      equity: [hostEquityRow(tenantId, 1000)],
-      calls: [], invitedEditors: [], callLimit: 10, huntMode: 'hunting',
-      roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null,
-    };
-  }
 
   router.get('/api/affiliate-hunt', requireMod, (req, res) => {
     const key = affiliateHuntKey(req.tenant.id);
@@ -493,19 +451,6 @@ module.exports = function modHuntRoutes(deps) {
   });
 
   // ── VIP hunt — VIP-style hunt run jointly by a community's Mods ──
-  function emptyVipHunt(tenantId, title) {
-    return {
-      user: { id: vipHuntKey(tenantId), displayName: hostNameFor(tenantId), avatar: null },
-      huntId: uid(), isLive: true, startedAt: new Date().toISOString(), archivedAt: null,
-      tenantId: tenantId || 'bean',
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      title: sanitizeTitle(title) || defaultHuntTitle(hostNameFor(tenantId), 'vip', Date.now()),
-      huntType: 'vip', bonuses: [],
-      equity: [hostEquityRow(tenantId, 1000)],
-      calls: [], invitedEditors: [], callLimit: 10, huntMode: 'hunting',
-      roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null,
-    };
-  }
 
   router.get('/api/vip-hunt', requireMod, (req, res) => {
     const key = vipHuntKey(req.tenant.id);
