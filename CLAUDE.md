@@ -285,6 +285,19 @@ overdrop:enabled        → master switch changed ({ enabled })
   room broadcast — a broadcast cannot filter recipients, which is why the error path there emits
   nothing rather than falling back to one. Pinned by `lib/hunts-core.tenant-broadcast.test.js`.
   Corollary: an unknown hunt id does not accrue a viewer count (nothing to verify it against).
+- **`io.to('hunt:<id>').emit(...)` is banned. Use `emitToHuntRoom(id, slug, event, payload, accept)`**
+  (`lib/hunts-core.js`), which applies the tenant gate per socket and takes an optional extra
+  predicate. A room broadcast cannot filter recipients, so every new one silently reopens the leak
+  above. Two call sites had already drifted back to a raw broadcast (2026-07-29 sweep): the
+  stale-hunt janitor's end-of-sweep `hunt:update`, and the call-request list below.
+- **Owner-only payloads need the `accept` predicate, not just the tenant gate** — every viewer of a
+  live hunt is in the right tenant. `calls:request:new` / `calls:request:update` carry the Discord
+  id, display name and avatar of everyone who asked for call permission (including the ones the
+  owner DENIES), while `GET /api/hunts/:userId/call-requests` 403s exactly those people. Delivery
+  now matches the frontend's `canEdit` (host / admin-mod with authority / invited editor) because
+  those socket events are the request panel's ONLY data source — there is no REST fetch behind it,
+  so under-delivering blanks the panel instead of merely delaying it. Pinned by
+  `routes/calls.routes.test.js`.
 - **Identity comes only from the verified handshake token** (`io.use`), never a client event. The
   old `identify` event let any socket claim any user id and receive the de-masked view; it is gone.
 - **Viewer counting is per-socket-per-hunt.** `watch:hunt` is idempotent via a `watched` Set —
