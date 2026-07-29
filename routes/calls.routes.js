@@ -17,11 +17,12 @@ const { linkWithinHunt, linkFromConfirmed } = require('../lib/identityLink');
 const confirmedAliases = require('../lib/confirmedAliases');
 const huntUndo = require('../lib/huntUndo');
 const { vetEquityIdentity, vetCallerIdentity } = require('../lib/identityWrites');
+const { huntTypeDenial } = require('../lib/huntTypeGate');
 
 module.exports = function callsRoutes(deps) {
   const {
     hunts, io, persistHunts,
-    requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged, isPrivilegedViewer,
+    requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged, isPrivilegedViewer, reqIsMod,
     normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, emitToHuntRoom, uid, rejectBadHuntInput,
     auditLog, activityFeed, getKnownUser,
   } = deps;
@@ -198,6 +199,11 @@ module.exports = function callsRoutes(deps) {
     if (chases      !== undefined) hunt.chases      = sanitizeChases(chases);
     if (vault       !== undefined) hunt.vault       = vault;
     if (calls       !== undefined) hunt.calls       = preserveRowIdentity(_before.calls, _vetted(vetCallerIdentity(_before.calls, calls, _eq)), 'callerId');
+    // VIP is a mod-run surface. This route's gate (canEditHunt) passes for the owner and invited
+    // co-editors, so without this a user could promote their own hunt by calling it here instead
+    // of PUT /api/my-hunt. Rule is shared with that route — see lib/huntTypeGate.js.
+    const _typeDenied = huntTypeDenial(huntType, req, reqIsMod);
+    if (_typeDenied) return res.status(403).json({ error: _typeDenied });
     if (huntType    !== undefined) hunt.huntType    = huntType;
     if (callLimit   !== undefined) hunt.callLimit   = callLimit;
     if (huntMode    !== undefined) hunt.huntMode    = huntMode;

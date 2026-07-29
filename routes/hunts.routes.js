@@ -13,6 +13,7 @@
 // hunts/archive are persistence-owned singletons (by reference). hunt:update via publicHuntView.
 
 const express = require('express');
+const { huntTypeDenial } = require('../lib/huntTypeGate');
 const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquityMember, initialEquity, preserveRowIdentity } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
@@ -146,8 +147,8 @@ module.exports = function huntsRoutes(deps) {
 
   router.post('/api/my-hunt/start', requireAuth, (req, res) => {
     const { huntType = 'community', startingBalance, currency, pullPreferredSlots } = req.body;
-    if (huntType === 'vip' && !reqIsMod(req))
-      return res.status(403).json({error:'Not authorised for VIP hunts'});
+    const _typeDenied = huntTypeDenial(huntType, req, reqIsMod);
+    if (_typeDenied) return res.status(403).json({ error: _typeDenied });
     if (currency !== undefined && !CURRENCIES.includes(currency))
       return res.status(400).json({ error: 'Invalid currency' });
     const bal = (Number.isFinite(+startingBalance) && +startingBalance >= 0) ? +startingBalance : undefined;
@@ -331,8 +332,8 @@ module.exports = function huntsRoutes(deps) {
     if (vault      !== undefined) hunts[req.user.id].vault      = vault;
     if (calls      !== undefined) hunts[req.user.id].calls      = preserveRowIdentity(_before.calls, _vetted(vetCallerIdentity(_before.calls, calls, _eq)), 'callerId');
     if (huntType   !== undefined) {
-      if (huntType === 'vip' && !reqIsMod(req))
-        return res.status(403).json({error:'Not authorised for VIP hunt'});
+      const _typeDenied = huntTypeDenial(huntType, req, reqIsMod);
+      if (_typeDenied) return res.status(403).json({ error: _typeDenied });
       hunts[req.user.id].huntType = huntType;
     }
     if (callLimit  !== undefined) hunts[req.user.id].callLimit  = callLimit;

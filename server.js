@@ -619,7 +619,7 @@ app.use(require('./routes/overdrop.routes')({ requireMod, overdrop }));
 // Slot-call + call-permission routes (routes/calls.routes.js). Owns huntCallRequests state.
 app.use(require('./routes/calls.routes')({
   hunts, io, persistHunts,
-  requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged, isPrivilegedViewer,
+  requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged, isPrivilegedViewer, reqIsMod,
   normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, emitToHuntRoom, uid, rejectBadHuntInput,
   auditLog, activityFeed,
   // Vets client-supplied equity discordIds on the editor save path (lib/identityWrites.js).

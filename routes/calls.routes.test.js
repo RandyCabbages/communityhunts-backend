@@ -53,7 +53,7 @@ const pass = (req, res, next) => next();
 
 // `callerRef.current` rather than a fixed user: huntCallRequests is module-local to each router
 // factory, so a second app() would not see the first one's pending requests.
-function appWith({ hunts, callerRef, io }) {
+function appWith({ hunts, callerRef, io, canEdit = false, mods = ['modId'] }) {
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => { req.user = callerRef.current; req.tenant = { id: 'bean' }; next(); });
@@ -61,7 +61,8 @@ function appWith({ hunts, callerRef, io }) {
   app.use(callsRoutes({
     hunts, io, persistHunts() {},
     requireAuth: pass,
-    canEditHunt: () => false,
+    canEditHunt: () => canEdit,
+    reqIsMod: (req) => !!req.user && mods.includes(req.user.id),
     isEquityMember: () => false,
     reqCanAdminHunt: (req, ownerId) => req.user && req.user.id === 'modId',
     isPrivileged: () => false,
@@ -73,8 +74,8 @@ function appWith({ hunts, callerRef, io }) {
     emitHubUpdate() {},
     emitHuntUpdate: async () => {},
     uid: () => `req${++n}`,
-    rejectBadHuntInput: pass,
-    auditLog: { record() {} },
+    rejectBadHuntInput: () => false,   // predicate: false = input is acceptable
+    auditLog: { record() {}, recordHuntChange() {}, recordFromReq() {} },
     activityFeed: { push() {} },
     getKnownUser: () => null,
   }));
@@ -87,6 +88,7 @@ async function call(app, method, pathname, body) {
     const r = await fetch(`http://127.0.0.1:${server.address().port}${pathname}`, {
       method, headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body === undefined ? {} : body),
+      signal: AbortSignal.timeout(5000),   // a handler that never responds must FAIL, not hang
     });
     return { status: r.status, body: await r.json().catch(() => null) };
   } finally {
@@ -171,4 +173,82 @@ test('the post-decision request list is gated the same way', async () => {
 
   assert.deepStrictEqual(got(viewer, 'calls:request:update'), [], 'a denied request must not be announced to the room');
   assert.strictEqual(got(owner, 'calls:request:update').length, 1, 'the owner\'s badge still refreshes');
+});
+
+// ── huntType 'vip' is mod-only, on EVERY write path ────────────────────────────────────────
+// POST /api/my-hunt/start and PUT /api/my-hunt both refuse a non-mod setting huntType 'vip':
+//
+//   if (huntType === 'vip' && !reqIsMod(req))
+//     return res.status(403).json({error:'Not authorised for VIP hunt'});
+//
+// PUT /api/hunts/:userId is the third write path for the same field and had no such check — it
+// just did `if (huntType !== undefined) hunt.huntType = huntType`. Its gate is canEditHunt, which
+// passes for the OWNER as well as invited co-editors, so a regular user could promote their own
+// hunt to VIP simply by calling this route against their own id instead of /api/my-hunt. Same
+// user, same payload, different URL.
+//
+// Same shape as the socket-twin misses: a guard applied to one route and missed on its twin.
+
+const vipHunt = () => ({
+  [OWNER]: { user: { id: OWNER }, tenantId: 'bean', isLive: true, huntType: 'community',
+             equity: [], calls: [], bonuses: [] },
+});
+
+test('a non-mod EDITOR cannot set huntType vip through PUT /api/hunts/:userId', async () => {
+  const hunts = vipHunt();
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, callerRef: { current: { id: 'editorId' } }, io, canEdit: true });
+
+  const res = await call(app, 'PUT', `/api/hunts/${OWNER}`, { huntType: 'vip' });
+
+  assert.strictEqual(res.status, 403);
+  assert.strictEqual(hunts[OWNER].huntType, 'community', 'the hunt must not have been promoted');
+});
+
+// The owner passes canEditHunt for their own hunt, so this is the self-promotion path.
+test('the OWNER cannot self-promote to vip through the editor route', async () => {
+  const hunts = vipHunt();
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, callerRef: { current: { id: OWNER } }, io, canEdit: true });
+
+  const res = await call(app, 'PUT', `/api/hunts/${OWNER}`, { huntType: 'vip' });
+
+  assert.strictEqual(res.status, 403);
+  assert.strictEqual(hunts[OWNER].huntType, 'community');
+});
+
+test('a mod CAN set huntType vip through the same route', async () => {
+  const hunts = vipHunt();
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, callerRef: { current: { id: 'modId' } }, io, canEdit: true });
+
+  const res = await call(app, 'PUT', `/api/hunts/${OWNER}`, { huntType: 'vip' });
+
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(hunts[OWNER].huntType, 'vip');
+});
+
+// The guard must be surgical: it is about 'vip' specifically, not about editing huntType at all.
+test('a non-mod editor can still set the non-privileged hunt types', async () => {
+  const hunts = vipHunt();
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, callerRef: { current: { id: 'editorId' } }, io, canEdit: true });
+
+  const res = await call(app, 'PUT', `/api/hunts/${OWNER}`, { huntType: 'solo' });
+
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(hunts[OWNER].huntType, 'solo');
+});
+
+// A save that does not mention huntType must not be affected by the guard at all.
+test('an ordinary editor save that omits huntType is untouched', async () => {
+  const hunts = vipHunt();
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, callerRef: { current: { id: 'editorId' } }, io, canEdit: true });
+
+  const res = await call(app, 'PUT', `/api/hunts/${OWNER}`, { callLimit: 7 });
+
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(hunts[OWNER].callLimit, 7);
+  assert.strictEqual(hunts[OWNER].huntType, 'community');
 });
