@@ -10,7 +10,7 @@
 // huntCallRequests is process-local pending-request state, owned here.
 
 const express = require('express');
-const { sanitizeBonusReplayUrls, bindEquityIdentityByName, preserveRowIdentity } = require('../lib/hunts-core');
+const { sanitizeBonusReplayUrls, bindEquityIdentityByName, preserveRowIdentity, tenantOf } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { linkWithinHunt, linkFromConfirmed } = require('../lib/identityLink');
@@ -21,11 +21,29 @@ const { vetEquityIdentity, vetCallerIdentity } = require('../lib/identityWrites'
 module.exports = function callsRoutes(deps) {
   const {
     hunts, io, persistHunts,
-    requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged,
-    normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
+    requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged, isPrivilegedViewer,
+    normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, emitToHuntRoom, uid, rejectBadHuntInput,
     auditLog, activityFeed, getKnownUser,
   } = deps;
   const router = express.Router();
+
+  // The pending-request list is owner-only data: `GET /api/hunts/:userId/call-requests` 403s
+  // everyone else. It used to be pushed with io.to(`hunt:${userId}`).emit(...), and that room holds
+  // every viewer of a live hunt — so each request's Discord id, display name and avatar went to the
+  // whole audience, including for requests the owner goes on to DENY. Same REST-gated /
+  // socket-ungated shape as the 2026-07-18 audit #4 miss.
+  //
+  // Delivery matches who the frontend actually shows the panel to (HuntTracker gates it on
+  // `canEdit`): host, admin/mod with authority over this hunt, invited co-editor. That is slightly
+  // wider than the REST gate, which omits co-editors — narrowing to REST's exact set would blank
+  // the panel for people who legitimately co-run the hunt, and these events are its ONLY source.
+  const seesRequests = (hunt, ownerId) => (s) => {
+    const viewerId = s.data && s.data.userId;          // verified handshake token, never client-set
+    if (!viewerId) return false;                       // anonymous socket: never
+    if (String(viewerId) === String(ownerId)) return true;
+    if ((hunt.invitedEditors || []).includes(String(viewerId))) return true;
+    return typeof isPrivilegedViewer === 'function' ? !!isPrivilegedViewer(viewerId, hunt) : false;
+  };
 
   // See the twin in routes/hunts.routes.js — an editor's save is vetted the same way an owner's is.
   const isKnownAccount = getKnownUser ? (id) => getKnownUser(id) : null;
@@ -248,8 +266,9 @@ module.exports = function callsRoutes(deps) {
     };
     huntCallRequests[userId].push(request);
 
-    // Notify the hunt owner
-    io.to(`hunt:${userId}`).emit('calls:request:new', { requests: huntCallRequests[userId] });
+    // Notify the hunt owner — and ONLY the hunt owner (see seesRequests above).
+    emitToHuntRoom(userId, tenantOf(hunt), 'calls:request:new',
+      { requests: huntCallRequests[userId] }, seesRequests(hunt, userId));
     res.json({ status: 'requested' });
   });
 
@@ -287,8 +306,10 @@ module.exports = function callsRoutes(deps) {
       io.to(`hunt:${userId}`).emit('calls:denied', { userId: reqItem.userId });
     }
 
-    // Update owner's notification count
-    io.to(`hunt:${userId}`).emit('calls:request:update', { requests: huntCallRequests[userId] });
+    // Update owner's notification count — same gate; a DENIED request must not be announced to the
+    // room either (it names someone the owner just turned down).
+    emitToHuntRoom(userId, tenantOf(hunts[userId] || {}), 'calls:request:update',
+      { requests: huntCallRequests[userId] }, seesRequests(hunts[userId] || {}, userId));
     res.json({ ok: true });
   });
 

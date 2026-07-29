@@ -387,7 +387,7 @@ const {
   MOD_HUNT_ID, AFFILIATE_HUNT_ID, VIP_HUNT_ID, modHuntKey, affiliateHuntKey, vipHuntKey,
   huntSummary, huntCompleted, huntHasContent, tenantOf, inTenant,
   getPublicHunts, getArchivedHunts, getAllHunts, getSlotCallCounts, getGotInLog, getHuntsFullExport,
-  emitHubUpdate, publicHuntView, emitHuntUpdate,
+  emitHubUpdate, publicHuntView, emitHuntUpdate, emitToHuntRoom,
   uid, touch,
 } = huntsCore;
 
@@ -619,8 +619,8 @@ app.use(require('./routes/overdrop.routes')({ requireMod, overdrop }));
 // Slot-call + call-permission routes (routes/calls.routes.js). Owns huntCallRequests state.
 app.use(require('./routes/calls.routes')({
   hunts, io, persistHunts,
-  requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged,
-  normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, uid, rejectBadHuntInput,
+  requireAuth, canEditHunt, isEquityMember, reqCanAdminHunt, isPrivileged, isPrivilegedViewer,
+  normalizeSlot, nameOf, publicHuntView, emitHubUpdate, emitHuntUpdate, emitToHuntRoom, uid, rejectBadHuntInput,
   auditLog, activityFeed,
   // Vets client-supplied equity discordIds on the editor save path (lib/identityWrites.js).
   getKnownUser: settings.getKnownUser,
@@ -664,7 +664,7 @@ function cleanupStaleHunts() {
       const persistentKey = id.startsWith('tracker:') || id.startsWith(MOD_HUNT_ID) || id.startsWith(AFFILIATE_HUNT_ID) || id.startsWith(VIP_HUNT_ID);
       if (!persistentKey && !huntHasContent(h) && idleMs(h.updatedAt || h.startedAt) >= EMPTY_STALE_MS) {
         delete hunts[id]; deleted++;
-        affectedTenants.add(tenantOf(h)); touchedRooms.push(id); huntsChanged = true;
+        affectedTenants.add(tenantOf(h)); touchedRooms.push([id, tenantOf(h)]); huntsChanged = true;
         continue;
       }
       // Completed-reap: a live hunt whose every bonus has been opened is DONE — but the host keeps a
@@ -678,7 +678,7 @@ function cleanupStaleHunts() {
         h.updatedAt = new Date().toISOString();
         if (!h.archivedAt) h.archivedAt = new Date().toISOString();
         archiveHunt(h); archivedN++;
-        affectedTenants.add(tenantOf(h)); touchedRooms.push(id); huntsChanged = true;
+        affectedTenants.add(tenantOf(h)); touchedRooms.push([id, tenantOf(h)]); huntsChanged = true;
         continue;
       }
       if (idleMs(h.updatedAt || h.startedAt) < STALE_MS) continue;
@@ -690,7 +690,7 @@ function cleanupStaleHunts() {
       } else {
         delete hunts[id]; deleted++;          // empty — nothing to archive
       }
-      affectedTenants.add(tenantOf(h)); touchedRooms.push(id); huntsChanged = true;
+      affectedTenants.add(tenantOf(h)); touchedRooms.push([id, tenantOf(h)]); huntsChanged = true;
     } else if (h.archivedAt) {
       if (huntCompleted(h) || idleMs(h.archivedAt) < STALE_MS) continue;
       unarchiveHunt(h); delete hunts[id]; deleted++;   // incomplete + idle → drop from both maps
@@ -713,7 +713,13 @@ function cleanupStaleHunts() {
   if (huntsChanged) persistHunts();
   if (archiveChanged) persistArchive();
   affectedTenants.forEach(t => emitHubUpdate(t));
-  touchedRooms.forEach(id => io.to(`hunt:${id}`).emit('hunt:update', publicHuntView(hunts[id]) || { isLive:false, archivedAt:new Date().toISOString() }));
+  // Per-socket, tenant-gated — NOT io.to(room).emit. A room broadcast cannot filter recipients, and
+  // a socket that joined `hunt:<id>` before the hunt existed is still in the room no matter which
+  // tenant it belongs to (the BE #115 window). This sweep is the one place that had to keep talking
+  // about a hunt AFTER deleting it, so the tenant travels with the room id rather than being read
+  // back out of `hunts`. Deleted → the stub tells watchers it ended; archived → the masked view.
+  touchedRooms.forEach(([id, slug]) => emitToHuntRoom(id, slug, 'hunt:update',
+    publicHuntView(hunts[id]) || { isLive:false, archivedAt:new Date().toISOString() }));
   if (deleted || archivedN) console.log(`[janitor] swept stale hunts — ${deleted} deleted, ${archivedN} auto-archived`);
   return { deleted, archived: archivedN };
 }
