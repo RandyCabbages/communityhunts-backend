@@ -16,7 +16,8 @@
 
 const express = require('express');
 const { isRealDiscordId } = require('../lib/userIds');
-const { isCategory, keyForCategory, sharedRunHasWork, cleanMembers, mergeEquity } = require('../lib/discordHunts');
+const { isCategory, keyForCategory, sharedRunHasWork, encodeRunKey, decodeRunKey,
+        cleanMembers, mergeEquity } = require('../lib/discordHunts');
 const { vetEquityIdentity } = require('../lib/identityWrites');
 
 // Bounds the per-request work: each id is a lookup, and the bot only ever asks about the winners
@@ -116,9 +117,16 @@ module.exports = function publicDiscordHuntsRoutes(deps) {
         });
 
         res.set('Cache-Control', 'no-store');
-        // `huntId` identifies THIS run, where `key` is the same for every run of the category.
-        // A caller that stores it gets a real stale-run guard on the equity write below.
-        res.status(201).json({ key, huntId: hunt.huntId, category, shareUrl: shareLinks.shareUrl(tid, token) });
+        // `key` is a RUN key — the hunt key with this run's id on it. Hand it back on the equity
+        // write and the stale-run guard there works with nothing else stored anywhere: the caller
+        // keeps one opaque string, not two fields it has to plumb through a third service.
+        // `huntId` is also returned on its own, for a caller that would rather hold them apart.
+        res.status(201).json({
+          key: encodeRunKey(key, hunt.huntId),
+          huntId: hunt.huntId,
+          category,
+          shareUrl: shareLinks.shareUrl(tid, token),
+        });
       } catch (e) { next(e); }
     });
 
@@ -142,18 +150,20 @@ module.exports = function publicDiscordHuntsRoutes(deps) {
         }
 
         const key = keyFor(body.category, tid);
-        // The key the giveaway opened against. A mismatch means the caller is writing against a
-        // hunt it did not open — refuse rather than land somebody's winners on the wrong sheet.
-        if (body.key && body.key !== key) {
+        // The run key the giveaway opened against, as `open` handed it over. A bare hunt key is
+        // still accepted — it just carries no run to check, so it only gets the weaker guard.
+        const claimed = decodeRunKey(body.key);
+        if (body.key && claimed.key !== key) {
           return fail(res, 409, 'stale_key', 'That hunt key is not this category\'s current hunt');
         }
 
         const hunt = hunts[key];
         if (!hunt) return fail(res, 404, 'no_hunt', 'That hunt has not been opened');
-        // Optional, and the only check that can actually see a RESET: `key` is stable across runs,
-        // so it cannot. A caller that stored the `huntId` from open gets its winners refused rather
-        // than merged into whatever run a mod has started since.
-        if (body.huntId && body.huntId !== hunt.huntId) {
+        // The only check that can see a RESET. The hunt key is the same string for every run of a
+        // category, so comparing it cannot; the run id can. Without this, winners from a giveaway
+        // whose hunt a mod restarted mid-stream land on the new run's sheet as if they were its own.
+        const claimedRun = claimed.huntId || body.huntId;
+        if (claimedRun && claimedRun !== hunt.huntId) {
           return fail(res, 409, 'stale_run', 'That run has ended — the hunt has been reset since');
         }
         // A run a mod has ENDED is already in the archive as its own snapshot. Merging into the
@@ -198,7 +208,8 @@ module.exports = function publicDiscordHuntsRoutes(deps) {
         res.set('Cache-Control', 'no-store');
         // Surfaced, not silent: a row whose discordId was refused will not roll up into payouts or
         // caller leaderboards, and the caller needs to know that happened.
-        res.json({ key, huntId: hunt.huntId, added, updated, rejectedIdentities: vetted.rejected.length });
+        res.json({ key: encodeRunKey(key, hunt.huntId), huntId: hunt.huntId,
+                   added, updated, rejectedIdentities: vetted.rejected.length });
       } catch (e) { next(e); }
     });
 
