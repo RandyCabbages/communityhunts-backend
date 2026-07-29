@@ -16,7 +16,7 @@
 
 const express = require('express');
 const { isRealDiscordId } = require('../lib/userIds');
-const { isCategory, keyForCategory, sharedRunHasWork, encodeRunKey, decodeRunKey,
+const { CATEGORIES, isCategory, keyForCategory, sharedRunHasWork, encodeRunKey, decodeRunKey,
         cleanMembers, mergeEquity } = require('../lib/discordHunts');
 const { vetEquityIdentity } = require('../lib/identityWrites');
 
@@ -210,6 +210,73 @@ module.exports = function publicDiscordHuntsRoutes(deps) {
         // caller leaderboards, and the caller needs to know that happened.
         res.json({ key: encodeRunKey(key, hunt.huntId), huntId: hunt.huntId,
                    added, updated, rejectedIdentities: vetted.rejected.length });
+      } catch (e) { next(e); }
+    });
+
+  // Throw the run away, because the giveaway that made it was cancelled.
+  //
+  // The ONLY destructive endpoint here, and the only one that archives nothing. A cancelled
+  // giveaway "does need to cancel and delete the hunt, no saving of it" — leaving its equity
+  // sheet in the archive would put a hunt that never happened into the ledger and the hunt
+  // history, where it reads as real.
+  //
+  // The run is REPLACED with a fresh empty one rather than the key being deleted outright. The
+  // shared hunt is a permanent fixture: it has a page, an overlay pointed at it and a stable share
+  // link, so removing the object mid-stream would break surfaces that have nothing to do with the
+  // giveaway. A new empty run with a new id is the same thing from every angle that matters — the
+  // cancelled run is gone, and nothing was kept.
+  router.post('/api/public/v1/hunts/shared/cancel',
+    requireApiFeature('discord_hunts'), requireApiScope('write'), writeRateLimit, (req, res, next) => {
+      try {
+        const tid = req.apiTenantId;
+        const body = req.body || {};
+
+        // Which hunt this key is for is derived from the key itself, not taken from the caller:
+        // a cancel that trusted a `category` field alongside a mismatched key could delete the
+        // wrong one of the two.
+        const claimed = decodeRunKey(body.key);
+        const category = CATEGORIES.find((c) => keyFor(c, tid) === claimed.key);
+        if (!category) {
+          return fail(res, 400, 'invalid_key',
+            'key must be a run key for one of this tenant\'s shared hunts');
+        }
+
+        const key = claimed.key;
+        const hunt = hunts[key];
+        if (!hunt) return fail(res, 404, 'no_hunt', 'That hunt has not been opened');
+
+        // Refuses unless this is still the same run. Cancelling an old giveaway must never reach
+        // through and delete the run a mod started after it — which is exactly what a bare hunt
+        // key could not prevent, since it is the same string for every run of a category.
+        if (!claimed.huntId || claimed.huntId !== hunt.huntId) {
+          return fail(res, 409, 'stale_run', 'That run has ended — the hunt has been reset since');
+        }
+
+        // Bonuses mean somebody is mid-hunt on stream. Cancelling the giveaway that seeded the
+        // sheet is not licence to delete an actual hunt, and unlike everything else here that
+        // loss would be unrecoverable, because this is the one path that does not archive.
+        if (Array.isArray(hunt.bonuses) && hunt.bonuses.length > 0) {
+          return fail(res, 409, 'hunt_in_progress',
+            'That hunt has bonuses on it. End or reset it on the site instead.');
+        }
+
+        const had = Array.isArray(hunt.equity) ? hunt.equity.length : 0;
+        hunts[key] = category === 'affiliate'
+          ? sharedHunts.emptyAffiliateHunt(tid)
+          : sharedHunts.emptyVipHunt(tid);
+        persistHunts();
+        emitHuntUpdate(key);
+
+        auditLog.record({
+          category: 'api', action: 'hunt.shared.cancel',
+          actorId: `apikey:${tid}`, actorName: 'Discord bot', tenantId: tid, targetId: key,
+          summary: `Discord bot cancelled the ${category} hunt "${hunt.title}" (${had} equity ${had === 1 ? 'row' : 'rows'} discarded, nothing archived)`,
+          detail: { category, huntId: hunt.huntId, equityDiscarded: had },
+          ip: req.ip,
+        });
+
+        res.set('Cache-Control', 'no-store');
+        res.json({ cancelled: true, category, huntId: hunt.huntId, equityDiscarded: had });
       } catch (e) { next(e); }
     });
 
