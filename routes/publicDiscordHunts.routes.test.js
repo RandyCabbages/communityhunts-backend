@@ -177,7 +177,9 @@ describe('POST /hunts/shared/open', () => {
     const res = await open(app, { category: 'affiliate', title: 'Friday $2,500' });
 
     assert.equal(res.status, 201);
-    assert.equal(res.body.key, '__affiliate_hunt__:bean');
+    // A RUN key: the hunt key plus the id of this particular run. One opaque string, so a caller
+    // storing it gets the stale-run guard with nothing else to plumb through.
+    assert.equal(res.body.key, `__affiliate_hunt__:bean#${res.body.huntId}`);
     assert.match(res.body.shareUrl, /^https:\/\/communityhunts\.gg\/bean\/share\/.+/);
     assert.equal(state.hunts['__affiliate_hunt__:bean'].title, 'Friday $2,500');
     assert.equal(state.hunts['__affiliate_hunt__:bean'].huntType, 'vip');
@@ -188,7 +190,7 @@ describe('POST /hunts/shared/open', () => {
     const { app, state } = harness();
     const res = await open(app, { category: 'vip', title: 'VIP night' });
 
-    assert.equal(res.body.key, '__vip_hunt__:bean');
+    assert.equal(res.body.key, `__vip_hunt__:bean#${res.body.huntId}`);
     assert.equal(state.hunts['__affiliate_hunt__:bean'], undefined);
   });
 
@@ -266,10 +268,13 @@ describe('POST /hunts/shared/open', () => {
 });
 
 describe('POST /hunts/shared/equity', () => {
+  // `runKey` is what the API handed over and what a caller sends back; `key` is the plain hunt
+  // key, which is how the sheet is found in `hunts`. Keeping them apart in the tests is the point
+  // — a test that used one for the other would stop checking anything.
   async function opened(opts) {
     const h = harness(opts);
     const res = await open(h.app, { category: 'affiliate' });
-    return { ...h, key: res.body.key, huntId: res.body.huntId };
+    return { ...h, runKey: res.body.key, key: '__affiliate_hunt__:bean', huntId: res.body.huntId };
   }
 
   const winners = [
@@ -278,8 +283,8 @@ describe('POST /hunts/shared/equity', () => {
   ];
 
   it('merges the winners onto the sheet', async () => {
-    const { app, state, key } = await opened();
-    const res = await equity(app, { category: 'affiliate', key, members: winners });
+    const { app, state, key, runKey } = await opened();
+    const res = await equity(app, { category: 'affiliate', key: runKey, members: winners });
 
     assert.equal(res.status, 200);
     assert.equal(res.body.added, 2);
@@ -289,18 +294,18 @@ describe('POST /hunts/shared/equity', () => {
   it('never deletes a row a mod added by hand', async () => {
     // The reason this is a merge endpoint at all: the plain PUT would replace the array, and a
     // short array through it deletes everyone the bot did not send.
-    const { app, state, key } = await opened();
+    const { app, state, key, runKey } = await opened();
     state.hunts[key].equity.push({ id: 'typed', name: 'Goofer', amount: 50, isRollWinner: true });
 
-    await equity(app, { category: 'affiliate', key, members: [{ name: 'Cabbage', amount: 50 }] });
+    await equity(app, { category: 'affiliate', key: runKey, members: [{ name: 'Cabbage', amount: 50 }] });
 
     assert.deepEqual(state.hunts[key].equity.map(r => r.name), ['Bean', 'Goofer', 'Cabbage']);
   });
 
   it('is idempotent — the bot re-sends the same winners every sweep', async () => {
-    const { app, state, key } = await opened();
-    await equity(app, { category: 'affiliate', key, members: winners });
-    const second = await equity(app, { category: 'affiliate', key, members: winners });
+    const { app, state, key, runKey } = await opened();
+    await equity(app, { category: 'affiliate', key: runKey, members: winners });
+    const second = await equity(app, { category: 'affiliate', key: runKey, members: winners });
 
     assert.equal(second.body.added, 0);
     assert.equal(state.hunts[key].equity.length, 3);
@@ -309,9 +314,9 @@ describe('POST /hunts/shared/equity', () => {
   it('strips a discordId that belongs to nobody, and says so', async () => {
     // vetEquityIdentity, same as the editor save path. An API key is a LESS trusted caller than
     // a signed-in host, so it is not optional here.
-    const { app, state, key } = await opened();
+    const { app, state, key, runKey } = await opened();
     const res = await equity(app, {
-      category: 'affiliate', key,
+      category: 'affiliate', key: runKey,
       members: [{ name: 'Nobody', discordId: STRANGER, amount: 50 }],
     });
 
@@ -322,8 +327,8 @@ describe('POST /hunts/shared/equity', () => {
   });
 
   it('keeps an id CH does know', async () => {
-    const { app, state, key } = await opened();
-    await equity(app, { category: 'affiliate', key, members: winners });
+    const { app, state, key, runKey } = await opened();
+    await equity(app, { category: 'affiliate', key: runKey, members: winners });
 
     assert.equal(state.hunts[key].equity.find(r => r.name === 'Cabbage').discordId, CABBAGE);
   });
@@ -340,12 +345,13 @@ describe('POST /hunts/shared/equity', () => {
   });
 
   it('refuses a run that has been reset since the giveaway opened', async () => {
-    // `key` is stable across runs, so it cannot see a reset. The huntId can, and that is the
-    // difference between winners landing on their own sheet and on a stranger\'s.
-    const { app, state, key, huntId } = await opened();
+    // The guard that only the RUN key can give. Nothing is passed here but the string `open`
+    // handed over — no second field, no schema change anywhere between here and the caller — and
+    // it is still the difference between winners landing on their own sheet and on a stranger's.
+    const { app, state, key, runKey } = await opened();
     await open(app, { category: 'affiliate' });                     // a mod restarts the run
 
-    const res = await equity(app, { category: 'affiliate', key, huntId, members: winners });
+    const res = await equity(app, { category: 'affiliate', key: runKey, members: winners });
 
     assert.equal(res.status, 409);
     assert.equal(res.body.error.code, 'stale_run');
@@ -353,19 +359,40 @@ describe('POST /hunts/shared/equity', () => {
   });
 
   it('accepts the write when the run is still the one that was opened', async () => {
+    const { app, runKey } = await opened();
+    const res = await equity(app, { category: 'affiliate', key: runKey, members: winners });
+
+    assert.equal(res.status, 200);
+  });
+
+  it('still takes a bare hunt key, with the weaker guard', async () => {
+    // Back-compat, and the honest limit of it: a caller holding a plain key gets the category
+    // check and nothing else, because a plain key cannot say WHICH run it meant.
+    const { app, key } = await opened();
+    await open(app, { category: 'affiliate' });                     // a mod restarts the run
+
+    const res = await equity(app, { category: 'affiliate', key, members: winners });
+
+    assert.equal(res.status, 200, 'accepted — there is no run in a bare key to refuse on');
+  });
+
+  it('takes the run as a separate huntId field too', async () => {
     const { app, key, huntId } = await opened();
     const res = await equity(app, { category: 'affiliate', key, huntId, members: winners });
 
     assert.equal(res.status, 200);
+    assert.equal((await equity(app, {
+      category: 'affiliate', key, huntId: 'some-other-run', members: winners,
+    })).body.error.code, 'stale_run');
   });
 
   it('refuses to write onto a run a mod has ended', async () => {
     // It is already archived as its own snapshot; merging into the live object now would leave
     // the archived copy — what the ledger and hunt history read — missing these winners.
-    const { app, state, key } = await opened();
+    const { app, state, key, runKey } = await opened();
     state.hunts[key].archivedAt = '2026-07-29T00:00:00.000Z';
 
-    const res = await equity(app, { category: 'affiliate', key, members: winners });
+    const res = await equity(app, { category: 'affiliate', key: runKey, members: winners });
 
     assert.equal(res.status, 409);
     assert.equal(res.body.error.code, 'run_ended');
@@ -397,9 +424,9 @@ describe('POST /hunts/shared/equity', () => {
   });
 
   it('persists and broadcasts the change', async () => {
-    const { app, state, key } = await opened();
+    const { app, state, key, runKey } = await opened();
     const before = state.persists;
-    await equity(app, { category: 'affiliate', key, members: winners });
+    await equity(app, { category: 'affiliate', key: runKey, members: winners });
 
     assert.ok(state.persists > before, 'the sheet was written, not just held in memory');
     assert.deepEqual(state.emitted.filter(k => k === key).length, 2, 'open + equity');
@@ -418,11 +445,10 @@ describe('POST /hunts/shared/equity', () => {
 
   it('does write one when an existing row\'s amount really moved', async () => {
     // The other half of the rule above: quiet on a no-op sweep, never quiet on a real change.
-    const { app, state } = await opened();
-    const key = '__affiliate_hunt__:bean';
-    await equity(app, { category: 'affiliate', key, members: [{ name: 'Cabbage', amount: 50 }] });
+    const { app, state, runKey } = await opened();
+    await equity(app, { category: 'affiliate', key: runKey, members: [{ name: 'Cabbage', amount: 50 }] });
     const after = state.audit.length;
-    await equity(app, { category: 'affiliate', key, members: [{ name: 'Cabbage', amount: 75 }] });
+    await equity(app, { category: 'affiliate', key: runKey, members: [{ name: 'Cabbage', amount: 75 }] });
 
     assert.equal(state.audit.length, after + 1);
     assert.equal(state.audit.at(-1).action, 'hunt.shared.equity');
