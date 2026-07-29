@@ -528,6 +528,13 @@ app.use(require('./routes/apiKeys.routes')({
   requireAuth, apiKeys, tenants, isPlatformAdmin, canUse: features.canUse,
 }));
 
+// Share-token minting + the frontend URL shape behind it. One instance, shared by the share
+// routes (a host pressing Share) and the public API (the Discord bot opening a shared hunt) —
+// the token must be stable per owner, so a second minting path would break its own promise.
+const shareLinks = require('./lib/shareLinks')({
+  shareTokens, tokenForOwner, persistShareTokens, hunts, uid, frontendUrl: FRONTEND_URL,
+});
+
 // Public Developer API (key-authed, tier-gated). requireApiKey derives the tenant from the key
 // and overrides req.tenant, so a post-resolveTenant mount is safe. Handlers use req.apiTenantId.
 const serializers = require('./lib/publicSerializers');
@@ -550,6 +557,11 @@ app.use(require('./routes/public.routes')({
   archiveHunt: persistence.archiveHunt,
   auditLog,
   isKnownAccount: (id) => settings.getKnownUser(id),
+  // …and the Discord bot's shared-hunt endpoints, mounted inside that router
+  // (routes/publicDiscordHunts.routes.js). Its own `sharedHunts` instance over the same deps as
+  // the mod console's — a pure factory, so both build byte-identical runs from one definition.
+  affiliateHuntKey, vipHuntKey, sharedHunts: require('./lib/sharedHunts')({ tenants, uid }),
+  shareLinks, persistHunts, emitHuntUpdate, uid,
 }));
 
 // Global curated slot lists — public read, owner-only writes.
@@ -628,8 +640,8 @@ app.use(require('./routes/calls.routes')({
 
 // Share-link routes (routes/share.routes.js): token mint + public resolve.
 app.use(require('./routes/share.routes')({
-  requireAuth, canEditHunt, isEquityMember, hunts, archive, publicHuntView, uid,
-  shareTokens, tokenForOwner, persistShareTokens,
+  requireAuth, canEditHunt, isEquityMember, hunts, archive, publicHuntView,
+  shareTokens, shareLinks,
 }));
 
 // ── Stale-hunt janitor ─────────────────────────────────────────────

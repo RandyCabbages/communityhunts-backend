@@ -5,8 +5,8 @@ const express = require('express');
 // map (shareTokens), NOT on the hunt object, so it survives reset/start/end — the link is a
 // durable handle for "this streamer's hunt" rather than one ephemeral hunt instance.
 module.exports = (deps) => {
-  const { requireAuth, canEditHunt, isEquityMember, hunts, archive, publicHuntView, uid,
-          shareTokens, tokenForOwner, persistShareTokens } = deps;
+  const { requireAuth, canEditHunt, isEquityMember, hunts, archive, publicHuntView,
+          shareTokens, shareLinks } = deps;
   const router = express.Router();
 
   // Mint (or return the existing) stable share token for the caller's own hunt. Editor-gated.
@@ -14,14 +14,8 @@ module.exports = (deps) => {
     const { userId } = req.params;
     if (!canEditHunt(req, userId)) return res.status(403).json({ error: 'Forbidden' });
 
-    let token = tokenForOwner(userId);          // 1) reuse a stable token if one exists
-    if (!token) {
-      const hunt = hunts[userId];
-      token = (hunt && hunt.shareToken) || uid(); // 2) adopt a legacy per-hunt token, else mint fresh
-      shareTokens[token] = userId;
-      persistShareTokens();
-    }
-    res.json({ token });
+    // Minting lives in lib/shareLinks.js — the public API's shared-hunt open needs the same token.
+    res.json({ token: shareLinks.ensureShareToken(userId) });
   });
 
   // Public: resolve a token to a read-only overview. No auth — anyone with the link can view.
