@@ -37,8 +37,8 @@ if (!mode) {
   console.error('       restore-drill-verify.js --compare drill.json');
   process.exit(2);
 }
-if (!process.env.DATABASE_URL) {
-  console.error('DATABASE_URL is not set. Run this through `railway run --service <service>`.');
+if (!process.env.DATABASE_PUBLIC_URL && !process.env.DATABASE_URL) {
+  console.error('No database URL in the environment. Run this through `railway run --service <service>`.');
   process.exit(2);
 }
 
@@ -46,8 +46,14 @@ if (!process.env.DATABASE_URL) {
 // MODULE_NOT_FOUND stack from a checkout with no node_modules.
 const { Pool } = require('pg');
 
+// DATABASE_URL is the PRIVATE endpoint (postgres.railway.internal) and only resolves from inside
+// Railway's network — `railway run` from a laptop injects it but cannot reach it. The public
+// endpoint goes through the service's TCP proxy and works from anywhere, so prefer it when set and
+// fall back to DATABASE_URL for the in-cluster case.
+const CONN = process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL;
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: CONN,
   max: 1,
   ssl: { rejectUnauthorized: false },
   statement_timeout: 30000,
@@ -78,6 +84,12 @@ async function snapshot(target) {
 
   // Money, over the same frozen set. A checksum tells you something changed; these tell you
   // whether the part that matters changed, in units a human can argue about.
+  //
+  // These are deliberately currency-BLIND raw sums — they are comparison artifacts, not the
+  // platform's headline numbers. /api/community-stats normalizes through the FX rate captured at
+  // archive time and reads ~$372K; this reads ~$37M because ARS hunts dominate an unconverted sum.
+  // Equality between two snapshots is all that is being asserted, so the conversion is irrelevant
+  // here — but do not quote these figures at anyone.
   const money = (await q(`
     SELECT round(coalesce(sum((SELECT coalesce(sum((b->>'win')::numeric), 0)
              FROM jsonb_array_elements(CASE jsonb_typeof(data->'bonuses')
@@ -94,7 +106,12 @@ async function snapshot(target) {
   if (mode === 'baseline') {
     // Target slightly in the past: a hunt archived in the same second the snapshot is taken
     // could otherwise land on one side of the boundary here and the other side there.
-    const target = (await q(`SELECT (now() - interval '2 minutes') AT TIME ZONE 'UTC' AS t`))[0].t;
+    //
+    // NOT `AT TIME ZONE 'UTC'`. That yields `timestamp WITHOUT time zone`, which node-postgres
+    // parses as LOCAL time — so on a UTC-5 machine the printed target came out FIVE HOURS IN THE
+    // FUTURE, and the whole procedure hangs off a human copying that value into the Backups tab.
+    // Plain `now()` is timestamptz, which the driver converts correctly.
+    const target = (await q(`SELECT now() - interval '2 minutes' AS t`))[0].t;
     const snap = await snapshot(target);
     const out = {
       takenAt: new Date().toISOString(),
