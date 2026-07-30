@@ -444,6 +444,10 @@ DISCORD_TICKETS_BOT_TOKEN      # business bot (App 1506278609445191800) — POST
 DISCORD_TICKETS_CHANNEL_ID     # inquiries channel: Bug / Other / Community Request tickets
 DISCORD_SUGGESTIONS_CHANNEL_ID # suggestions channel: "Feature Request" tickets
 SESSION_SECRET
+PUBLIC_ID_SECRET               # keys the opaque `owner.id` on /api/public/v1/hunts (lib/publicIds.js).
+                               # Set ONCE, never rotate — consumers store that id as a foreign key.
+                               # Unset falls back to SESSION_SECRET with a startup warning, which is
+                               # wrong long-term because rotating SESSION_SECRET is a thing we do.
 DATABASE_URL                   # PostgreSQL (Railway)
 FRONTEND_URL                   # for CORS + OAuth redirect (Vercel URL)
 EXTRA_ORIGINS                  # comma-separated extra CORS origins. THIS is how you make a Vercel
