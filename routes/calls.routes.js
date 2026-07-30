@@ -10,7 +10,7 @@
 // huntCallRequests is process-local pending-request state, owned here.
 
 const express = require('express');
-const { sanitizeBonusReplayUrls, bindEquityIdentityByName, preserveRowIdentity, tenantOf } = require('../lib/hunts-core');
+const { sanitizeBonusReplayUrls, bindEquityIdentityByName, preserveRowIdentity, stampNewCalls, tenantOf } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { linkWithinHunt, linkFromConfirmed } = require('../lib/identityLink');
@@ -157,7 +157,7 @@ module.exports = function callsRoutes(deps) {
     if (payouts     !== undefined) hunt.payouts     = sanitizePayouts(payouts);
     if (chases      !== undefined) hunt.chases      = sanitizeChases(chases);
     if (vault       !== undefined) hunt.vault       = vault;
-    if (calls       !== undefined) hunt.calls       = preserveRowIdentity(_before.calls, _vetted(vetCallerIdentity(_before.calls, calls, _eq)), 'callerId');
+    if (calls       !== undefined) hunt.calls       = stampNewCalls(_before.calls, preserveRowIdentity(_before.calls, _vetted(vetCallerIdentity(_before.calls, calls, _eq)), 'callerId'));
     // VIP is a mod-run surface. This route's gate (canEditHunt) passes for the owner and invited
     // co-editors, so without this a user could promote their own hunt by calling it here instead
     // of PUT /api/my-hunt. Rule is shared with that route — see lib/huntTypeGate.js.
