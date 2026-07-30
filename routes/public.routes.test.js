@@ -297,9 +297,24 @@ test('GET /hunts filters by ownerId, and an unknown owner is an empty list not a
     assert.deepStrictEqual(body.data.map(h => h.id), ['h_a']);
     assert.strictEqual(body.data[0].owner.id, ownerIdOf(mine));
 
-    const none = await get(base, '/api/public/v1/hunts?ownerId=usr_nosuchowner');
+    // WELL-FORMED but matching nothing: still an empty page, deliberately. An owner who simply
+    // has no hunts yet is a legitimate state and must not be reported as an error.
+    const unknown = `usr_${'A'.repeat(22)}`;
+    const none = await get(base, `/api/public/v1/hunts?ownerId=${unknown}`);
     assert.strictEqual(none.status, 200);
     assert.deepStrictEqual((await none.json()).data, []);
+  });
+});
+
+test('a MALFORMED ownerId is a 400, so a typo stops looking like "no hunts yet"', async () => {
+  // The distinction this endpoint could not previously make. For a new tenant the correct response
+  // to a correct query is also an empty array, so a typo'd id was invisible without asking a human.
+  await withServer(makeApp({ hunts: { '111': liveHunt() } }), async base => {
+    for (const bad of ['usr_nosuchowner', '110983319176384512', 'usr_', 'Runner', `usr_${'A'.repeat(23)}`]) {
+      const r = await get(base, `/api/public/v1/hunts?ownerId=${encodeURIComponent(bad)}`);
+      assert.strictEqual(r.status, 400, `expected 400 for ownerId=${bad}`);
+      assert.strictEqual((await r.json()).error.code, 'invalid_owner_id');
+    }
   });
 });
 
