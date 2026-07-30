@@ -19,6 +19,9 @@ const { vetEquityIdentity } = require('../lib/identityWrites');
 // actually enforces, and a second copy is how the documented ceiling drifts from the real one.
 const { buildApiMe } = require('../lib/apiIdentity');
 const { LIMITS, WRITE_LIMITS } = require('../lib/rateLimit');
+// The `?ownerId=` shape check, from the module that MINTS the shape — same anti-drift reasoning
+// as huntCategoryOf above.
+const { isPublicOwnerId } = require('../lib/publicIds');
 
 // ── Query parameters ──────────────────────────────────────────────────────────────────────────
 // Unknown params used to be ignored in silence, which is the worst of the three options: a
@@ -179,6 +182,16 @@ module.exports = function publicRoutes(deps) {
       return res.status(400).json({ error: { code: 'invalid_view', message: 'view must be one of: full, summary' } });
     }
     const ownerId = req.query.ownerId === undefined ? null : String(req.query.ownerId);
+    // A misconfigured consumer and a correct-but-empty one used to be indistinguishable: both got
+    // `200 {"data":[],"total":0}`. For a NEW tenant that is the normal response to a correct query,
+    // so a typo'd owner id was invisible until someone asked a human. Reject what is provably not
+    // an owner id; a well-formed id that matches nothing still pages empty, because an owner with
+    // no hunts yet is a legitimate state and erroring on it would be a worse ambiguity.
+    if (ownerId !== null && !isPublicOwnerId(ownerId)) {
+      return res.status(400).json({ error: { code: 'invalid_owner_id',
+        message: 'ownerId must be an owner id from this API (the `owner.id` field, e.g. usr_… ). '
+          + 'A well-formed id that matches no hunts returns an empty page, not an error.' } });
+    }
     let list = [];
     // Mirrors lib/hunts-core.js getPublicHunts/getArchivedHunts, applied to the raw hunt objects
     // (not huntSummary — serializers.publicHunt needs the full hunt), with ONE deliberate
