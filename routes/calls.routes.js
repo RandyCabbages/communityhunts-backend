@@ -52,54 +52,11 @@ module.exports = function callsRoutes(deps) {
   // huntCallRequests[huntOwnerId] = [{id, userId, displayName, avatar, requestedAt}]
   const huntCallRequests = {};
 
-  // Shared add-call logic for both the equity-member endpoint and the public link endpoint.
-  // `isEditor` controls the rolling-mode + callLimit exemptions (owners/admins bypass them).
-  // `limitExempt` additionally waives ONLY the per-person callLimit (privileged: supporter/king/mod),
-  // without granting the rolling-mode edit bypass.
-  function addCallToHunt(hunt, user, slot, isEditor, source, limitExempt) {
-    if (!slot?.trim()) return { error: 'Slot name required', status: 400 };
-
-    // Block non-editors from adding calls when the hunt is rolling
-    if (hunt.huntMode === 'rolling' && !isEditor)
-      return { error: 'Cannot add calls while the hunt is rolling', status: 403 };
-
-    // Duplicate check (normalized: "CULT" === "CULT.")
-    if (hunt.calls.some(c => normalizeSlot(c.slot) === normalizeSlot(slot)))
-      return { error: `"${slot}" was already suggested`, status: 400 };
-
-    // Per-person limit (not applied to editors/admins, or limit-exempt privileged callers)
-    const callerName = nameOf(user);
-    if (hunt.callLimit > 0 && !isEditor && !limitExempt) {
-      const myCount = hunt.calls.filter(c => c.user.toLowerCase() === callerName).length;
-      if (myCount >= hunt.callLimit)
-        return { error: `You've reached the limit of ${hunt.callLimit} calls`, status: 400 };
-    }
-
-    // `ts` exists so caller stats can eventually be range-filtered. Until enough history carries
-    // it, lib/adminMetrics.js reports caller hit rates ALL-TIME — filtering got-ins by range while
-    // the calls behind them are undateable produced a ~0% hit rate for everyone.
-    const newCall = { id: Math.random().toString(36).slice(2,8), slot: slot.trim(),
-      user: user.displayName||user.username, callerId: user.id ? String(user.id) : undefined,
-      status: 'pending', ts: Date.now(), ...(source ? { source } : {}) };
-    // New calls go to the END of the pending queue. The old "insert after first 3"
-    // splice predates round-robin + the top-4 lock: it shoved every incoming call up
-    // top — even INTO the locked top 4, pushing locked calls down. Queue order is the
-    // frontend's job now (round-robin at render time; frozen stored order while
-    // lockTop4 is on), and the host's own local add already appends to the end.
-    const pendingCalls = hunt.calls.filter(c=>c.status==='pending');
-    const otherCalls   = hunt.calls.filter(c=>c.status!=='pending');
-    hunt.calls = [...pendingCalls, newCall, ...otherCalls];
-    hunt.updatedAt = new Date().toISOString();
-    emitHuntUpdate(hunt.user.id); // per-socket (persists + redacts anonymous names)
-    // Admin Mission Control live feed (transient, best-effort — optional-chained so a missing
-    // dep can never break a call submission).
-    activityFeed?.push(hunt.tenantId || 'bean', {
-      type: 'call',
-      text: `${newCall.user} called ${newCall.slot}`,
-      meta: { slot: newCall.slot, callerId: newCall.callerId || null },
-    });
-    return { ok: true, call: newCall };
-  }
+  // The add-call rules live in lib/huntCalls.js so the Discord bot's public endpoint gets the same
+  // duplicate check, rolling gate and per-person limit rather than a second copy of them.
+  const { addCallToHunt } = require('../lib/huntCalls')({
+    normalizeSlot, nameOf, emitHuntUpdate, activityFeed,
+  });
 
   // ── Equity member: add slot call ────────────────────────────────────
   router.post('/api/hunts/:userId/calls', requireAuth, (req, res) => {
@@ -109,7 +66,8 @@ module.exports = function callsRoutes(deps) {
       return res.status(403).json({error:'Not an equity member'});
 
     const isEditor = canEditHunt(req, req.params.userId);
-    const result = addCallToHunt(hunt, req.user, req.body.slot, isEditor, undefined, isPrivileged(req));
+    const result = addCallToHunt(hunt, req.user, req.body.slot,
+      { isEditor, limitExempt: isPrivileged(req) });
     if (result.error) return res.status(result.status).json({error: result.error});
     res.json({ok:true, call: result.call});
   });
@@ -124,7 +82,8 @@ module.exports = function callsRoutes(deps) {
 
     // Owners/admins/editors keep their exemptions; everyone else is a limited submitter.
     const isEditor = canEditHunt(req, req.params.userId);
-    const result = addCallToHunt(hunt, req.user, req.body.slot, isEditor, 'public', isPrivileged(req));
+    const result = addCallToHunt(hunt, req.user, req.body.slot,
+      { isEditor, source: 'public', limitExempt: isPrivileged(req) });
     if (result.error) return res.status(result.status).json({error: result.error});
     res.json({ok:true, call: result.call});
   });
