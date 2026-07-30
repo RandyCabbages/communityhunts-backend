@@ -488,7 +488,7 @@ app.use(require('./routes/hunts.routes')({
 app.use(require('./routes/mod-hunt.routes')({
   hunts, archive, io, persistHunts, archiveHunt, unarchiveHunt,
   requireMod, modHuntKey, affiliateHuntKey, vipHuntKey, tenants,
-  uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput, auditLog,
+  uid, touch, publicHuntView, emitHuntUpdate, emitToHuntRoom, rejectBadHuntInput, auditLog,
   getSettings: settings.getSettings, saveSettings: settings.saveSettings,
   persistOverlayConfig: require('./lib/overlayConfig').persistOverlayConfig,
 }));
