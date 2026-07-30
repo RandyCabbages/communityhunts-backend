@@ -31,18 +31,18 @@ function liveHunt(over = {}) {
   };
 }
 
-function makeApp({ hunts = {}, archive = [] } = {}) {
+function makeApp({ hunts = {}, archive = [], tenant, requireApiFeature } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => {
-    req.apiTenant = { id: TENANT, slug: TENANT };
+    req.apiTenant = tenant || { id: TENANT, slug: TENANT };
     req.apiTenantId = TENANT;
     req.apiTier = 'pro';
     req.apiScopes = ['read', 'write'];
     next();
   });
   app.use(publicRoutes({
-    requireApiKey: pass, requireApiFeature: () => pass, requireApiScope: () => pass,
+    requireApiKey: pass, requireApiFeature: requireApiFeature || (() => pass), requireApiScope: () => pass,
     rateLimit: pass, writeRateLimit: pass, ipFloor: pass,
     serializers,
     getHuntStats: () => ({ currencies: [], byCurrency: {}, tz: 'UTC' }),
@@ -362,5 +362,58 @@ test('GET /hunts/:id rejects an unknown param too', async () => {
     const r = await get(base, '/api/public/v1/hunts/h_live?expand=all');
     assert.strictEqual(r.status, 400);
     assert.strictEqual((await r.json()).error.code, 'unknown_param');
+  });
+});
+
+// ── GET /me ───────────────────────────────────────────────────────────────────────────────────
+// The endpoint that replaces the conversation every new tenant currently needs. What matters here
+// is the WIRING (the payload itself is pinned in lib/apiIdentity.test.js): that it is reachable on
+// a plan the rest of the API refuses, that it revalidates like the other reads, and that it still
+// rejects a stray parameter.
+
+const RICH_TENANT = {
+  id: TENANT, slug: TENANT, displayName: 'Acme Slots',
+  hostDiscordId: '110983319176384512', branding: { hostName: 'Dave' },
+};
+
+test('GET /me answers the questions an integrator otherwise has to ask a human', async () => {
+  await withServer(makeApp({ tenant: RICH_TENANT }), async base => {
+    const r = await get(base, '/api/public/v1/me');
+    assert.strictEqual(r.status, 200);
+    const { data } = await r.json();
+    assert.strictEqual(data.community.slug, TENANT);
+    assert.strictEqual(data.community.name, 'Acme Slots');
+    assert.strictEqual(data.streamer.name, 'Dave');
+    assert.ok(data.streamer.id.startsWith('usr_'));
+    assert.deepStrictEqual(data.houseHuntTypes, ['streamer', 'vip', 'affiliate']);
+    assert.strictEqual(Object.keys(data.houseOwnerIds).length, 3);
+    assert.strictEqual(data.key.tier, 'pro');
+    // The limits reported must be the ones this router actually enforces.
+    const { LIMITS } = require('../lib/rateLimit');
+    assert.strictEqual(data.key.rateLimit.readPerMin, LIMITS.pro.perMin);
+    // A raw Discord id must never leave this API — /me included.
+    assert.ok(!JSON.stringify(data).includes('110983319176384512'));
+  });
+});
+
+test('GET /me is NOT tier-gated — the moment you most need to be told your tier', async () => {
+  const deny = () => (req, res) =>
+    res.status(403).json({ error: { code: 'forbidden_tier', message: 'nope' } });
+  await withServer(makeApp({ tenant: RICH_TENANT, requireApiFeature: deny }), async base => {
+    assert.strictEqual((await get(base, '/api/public/v1/hunts')).status, 403);
+    assert.strictEqual((await get(base, '/api/public/v1/me')).status, 200);
+  });
+});
+
+test('GET /me revalidates and rejects an unknown param', async () => {
+  await withServer(makeApp({ tenant: RICH_TENANT }), async base => {
+    const r1 = await get(base, '/api/public/v1/me');
+    assert.strictEqual(r1.headers.get('cache-control'), 'private, no-cache');
+    const r2 = await get(base, '/api/public/v1/me', { 'If-None-Match': r1.headers.get('etag') });
+    assert.strictEqual(r2.status, 304);
+
+    const r3 = await get(base, '/api/public/v1/me?verbose=1');
+    assert.strictEqual(r3.status, 400);
+    assert.strictEqual((await r3.json()).error.code, 'unknown_param');
   });
 });
