@@ -14,6 +14,11 @@ const { validateImport, buildImportedHunt } = require('../lib/huntImport');
 // field it filters on.
 const { PUBLIC_HUNT_CATEGORIES, huntCategoryOf } = require('../lib/hunts-core');
 const { vetEquityIdentity } = require('../lib/identityWrites');
+// The self-description payload + the rate-limit tables it reports. Required directly rather than
+// injected for the same reason as the two above: `/me` must describe the limits this router
+// actually enforces, and a second copy is how the documented ceiling drifts from the real one.
+const { buildApiMe } = require('../lib/apiIdentity');
+const { LIMITS, WRITE_LIMITS } = require('../lib/rateLimit');
 
 // ── Query parameters ──────────────────────────────────────────────────────────────────────────
 // Unknown params used to be ignored in silence, which is the worst of the three options: a
@@ -138,6 +143,20 @@ module.exports = function publicRoutes(deps) {
   // ipFloor runs BEFORE requireApiKey deliberately: rateLimit keys off the tenant resolved from
   // the key, so without this a request carrying an invalid key is metered by nothing at all.
   router.use('/api/public/v1', ipFloor, requireApiKey, rateLimit);
+
+  // Who am I, and what is this community? Deliberately NOT behind requireApiFeature: every other
+  // endpoint answers `403 forbidden_tier` on a plan that doesn't include the API, and the one
+  // moment a consumer most needs to be told their tier is exactly then. It exposes nothing the
+  // key holder doesn't already hold.
+  router.get('/api/public/v1/me', allowParams(), (req, res) => {
+    return sendRevalidatable(req, res, { data: buildApiMe({
+      tenant: req.apiTenant,
+      tier: req.apiTier,
+      scopes: req.apiScopes,
+      limits: LIMITS,
+      writeLimits: WRITE_LIMITS,
+    }) });
+  });
 
   router.get('/api/public/v1/hunts', requireApiFeature('developer_api'),
     allowParams('status', 'huntType', 'ownerId', 'view', 'limit', 'offset'), (req, res) => {
