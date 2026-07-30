@@ -11,7 +11,7 @@
 // Behavior unchanged from the inline routes; every hunt:update goes through publicHuntView.
 
 const express = require('express');
-const { sanitizeBonusReplayUrls, preserveRowIdentity, tenantOf } = require('../lib/hunts-core');
+const { sanitizeBonusReplayUrls, preserveRowIdentity, stampNewCalls, tenantOf } = require('../lib/hunts-core');
 const huntRevert = require('../lib/huntRevert');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
@@ -117,7 +117,7 @@ module.exports = function modHuntRoutes(deps) {
     const before = { bonuses: [...(h.bonuses || [])], equity: [...(h.equity || [])], calls: [...(h.calls || [])] };
     if (patch.bonuses !== undefined) h.bonuses = preserveRowIdentity(before.bonuses, sanitizeBonusReplayUrls(patch.bonuses), 'callerId');
     if (patch.equity  !== undefined) h.equity  = preserveRowIdentity(before.equity, patch.equity, 'discordId');
-    if (patch.calls   !== undefined) h.calls   = preserveRowIdentity(before.calls, patch.calls, 'callerId');
+    if (patch.calls   !== undefined) h.calls   = stampNewCalls(before.calls, preserveRowIdentity(before.calls, patch.calls, 'callerId'));
     touch(key);
     persistHunts();
     emitHuntUpdate(key);
@@ -189,7 +189,7 @@ module.exports = function modHuntRoutes(deps) {
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
     if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (vault      !== undefined) hunts[key].vault      = vault;
-    if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
+    if (calls      !== undefined) hunts[key].calls      = stampNewCalls(_before.calls, preserveRowIdentity(_before.calls, calls, 'callerId'));
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
     if (huntMode   !== undefined) hunts[key].huntMode   = huntMode;
     if (roundRobin !== undefined) hunts[key].roundRobin = roundRobin;
@@ -352,7 +352,7 @@ module.exports = function modHuntRoutes(deps) {
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
     if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (vault      !== undefined) hunts[key].vault      = vault;
-    if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
+    if (calls      !== undefined) hunts[key].calls      = stampNewCalls(_before.calls, preserveRowIdentity(_before.calls, calls, 'callerId'));
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
     if (huntMode   !== undefined) hunts[key].huntMode   = huntMode;
     if (roundRobin !== undefined) hunts[key].roundRobin = roundRobin;
@@ -510,7 +510,7 @@ module.exports = function modHuntRoutes(deps) {
     if (payouts    !== undefined) hunts[key].payouts    = sanitizePayouts(payouts);
     if (chases     !== undefined) hunts[key].chases     = sanitizeChases(chases);
     if (vault      !== undefined) hunts[key].vault      = vault;
-    if (calls      !== undefined) hunts[key].calls      = preserveRowIdentity(_before.calls, calls, 'callerId');
+    if (calls      !== undefined) hunts[key].calls      = stampNewCalls(_before.calls, preserveRowIdentity(_before.calls, calls, 'callerId'));
     if (callLimit  !== undefined) hunts[key].callLimit  = callLimit;
     if (huntMode   !== undefined) hunts[key].huntMode   = huntMode;
     if (roundRobin !== undefined) hunts[key].roundRobin = roundRobin;

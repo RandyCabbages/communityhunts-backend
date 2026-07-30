@@ -14,7 +14,7 @@
 
 const express = require('express');
 const { huntTypeDenial } = require('../lib/huntTypeGate');
-const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquityMember, initialEquity, preserveRowIdentity } = require('../lib/hunts-core');
+const { CURRENCIES, sanitizeBonusReplayUrls, huntHasContent, inTenant, linkEquityMember, initialEquity, preserveRowIdentity, stampNewCalls } = require('../lib/hunts-core');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { diffOpenedBonuses } = require('../lib/activityFeed');
@@ -330,7 +330,7 @@ module.exports = function huntsRoutes(deps) {
     if (payouts    !== undefined) hunts[req.user.id].payouts    = sanitizePayouts(payouts);
     if (chases     !== undefined) hunts[req.user.id].chases     = sanitizeChases(chases);
     if (vault      !== undefined) hunts[req.user.id].vault      = vault;
-    if (calls      !== undefined) hunts[req.user.id].calls      = preserveRowIdentity(_before.calls, _vetted(vetCallerIdentity(_before.calls, calls, _eq)), 'callerId');
+    if (calls      !== undefined) hunts[req.user.id].calls      = stampNewCalls(_before.calls, preserveRowIdentity(_before.calls, _vetted(vetCallerIdentity(_before.calls, calls, _eq)), 'callerId'));
     if (huntType   !== undefined) {
       const _typeDenied = huntTypeDenial(huntType, req, reqIsMod);
       if (_typeDenied) return res.status(403).json({ error: _typeDenied });
