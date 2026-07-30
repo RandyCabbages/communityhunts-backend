@@ -11,7 +11,7 @@
 // Behavior unchanged from the inline routes; every hunt:update goes through publicHuntView.
 
 const express = require('express');
-const { sanitizeBonusReplayUrls, preserveRowIdentity } = require('../lib/hunts-core');
+const { sanitizeBonusReplayUrls, preserveRowIdentity, tenantOf } = require('../lib/hunts-core');
 const huntRevert = require('../lib/huntRevert');
 const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
@@ -28,10 +28,46 @@ module.exports = function modHuntRoutes(deps) {
   const {
     hunts, archive, io, persistHunts, archiveHunt, unarchiveHunt,
     requireMod, modHuntKey, affiliateHuntKey, vipHuntKey, tenants,
-    uid, touch, publicHuntView, emitHuntUpdate, rejectBadHuntInput,
+    uid, touch, publicHuntView, emitHuntUpdate, emitToHuntRoom, rejectBadHuntInput,
     auditLog, getSettings, saveSettings, persistOverlayConfig,
   } = deps;
   const router = express.Router();
+
+  // ── Delete a shared hunt ───────────────────────────────────────────
+  // Removes the singleton key OUTRIGHT. These three keys were previously un-removable: /reset
+  // replaces the key with a fresh BORN-LIVE hunt (and the affiliate/VIP seeds carry a 1000
+  // starting pot, so a "deleted" hunt came straight back reading as live), and /end archives in
+  // place, leaving the spent hunt as the active singleton with no way to clear it.
+  //
+  // Deliberately does NOT archive — /end is the save path, so "save it first" composes as
+  // /end then DELETE, and a plain DELETE stays a true discard.
+  //
+  // Watchers are the subtle part: emitHuntUpdate early-returns on a missing hunt, so calling it
+  // after the delete emits NOTHING and a second mod's tab (or the OBS source) keeps rendering a
+  // hunt that is gone. Capture tenantOf(h) BEFORE the delete and fan a distinct `hunt:deleted`
+  // through emitToHuntRoom, which applies the same per-socket tenant gate as every other hunt
+  // emit (a room broadcast here would reopen the cross-tenant leak from the 2026-07-18 audit).
+  const deleteRoute = (keyFor, label) => (req, res) => {
+    const key = keyFor(req.tenant.id);
+    const h = hunts[key];
+    if (!h) return res.status(404).json({ error: 'No hunt' });
+    const slug = tenantOf(h);
+    auditLog.recordFromReq(req, {
+      category: 'hunt', action: 'hunt.delete', targetId: key,
+      summary: `${(req.user && req.user.displayName) || 'a mod'} deleted ${label}${h.title ? ` "${h.title}"` : ''}`,
+      detail: {
+        title: h.title || null,
+        before: { bonuses: h.bonuses || [], equity: h.equity || [], calls: h.calls || [], vault: h.vault || [] },
+      },
+    });
+    delete hunts[key];
+    persistHunts(); // a missed persist deletes in memory only — the hunt resurrects on next boot
+    emitToHuntRoom(key, slug, 'hunt:deleted', { id: key });
+    res.json({ ok: true });
+  };
+  router.delete('/api/mod-hunt', requireMod, deleteRoute(modHuntKey, MOD_HUNT_LABEL));
+  router.delete('/api/affiliate-hunt', requireMod, deleteRoute(affiliateHuntKey, AFFILIATE_HUNT_LABEL));
+  router.delete('/api/vip-hunt', requireMod, deleteRoute(vipHuntKey, VIP_HUNT_LABEL));
 
   // Shared-overlay styling. The mod/affiliate hunts are shared, so their OBS overlay config lives
   // under the hunt KEY (modHuntKey/affiliateHuntKey), read publicly via GET /api/overlay-config/:id.
