@@ -1,4 +1,5 @@
-// The Discord bot's three endpoints, on the public API.
+// The Discord bot's endpoints, on the public API: which accounts exist, open a run, merge the
+// giveaway's winners onto its equity sheet, cancel a run, and file a winner's slot calls.
 //
 // Mounted INSIDE routes/public.routes.js so it inherits that router's CORS, `Vary: Authorization`,
 // `ipFloor → requireApiKey → rateLimit` chain and error envelope — one chain, not a second copy
@@ -17,7 +18,7 @@
 const express = require('express');
 const { isRealDiscordId } = require('../lib/userIds');
 const { CATEGORIES, isCategory, keyForCategory, sharedRunHasWork, encodeRunKey, decodeRunKey,
-        cleanMembers, mergeEquity } = require('../lib/discordHunts');
+        cleanMembers, mergeEquity, cleanSlots, findEquityRow } = require('../lib/discordHunts');
 const { vetEquityIdentity } = require('../lib/identityWrites');
 
 // Bounds the per-request work: each id is a lookup, and the bot only ever asks about the winners
@@ -31,8 +32,15 @@ module.exports = function publicDiscordHuntsRoutes(deps) {
     requireApiFeature, requireApiScope, writeRateLimit,
     hunts, affiliateHuntKey, vipHuntKey, sharedHunts, shareLinks,
     archiveHunt, persistHunts, emitHuntUpdate, uid, isKnownAccount, auditLog,
+    normalizeSlot, nameOf, activityFeed,
   } = deps;
   const router = express.Router();
+
+  // The same implementation the session-authed call routes use, so a bot-filed call meets the
+  // identical duplicate check, rolling gate and per-person limit.
+  const { addCallToHunt } = require('../lib/huntCalls')({
+    normalizeSlot, nameOf, emitHuntUpdate, activityFeed,
+  });
 
   const keyFor = (category, tenantId) =>
     keyForCategory(category, tenantId, { affiliateHuntKey, vipHuntKey });
@@ -277,6 +285,90 @@ module.exports = function publicDiscordHuntsRoutes(deps) {
 
         res.set('Cache-Control', 'no-store');
         res.json({ cancelled: true, category, huntId: hunt.huntId, equityDiscarded: had });
+      } catch (e) { next(e); }
+    });
+
+  // A checked-in winner's slot calls, filed from Discord.
+  //
+  // **Authorised by the equity sheet, not by the key.** The key says which community this is; it
+  // must not also mean "may call for anybody". The caller has to already hold a row on this run,
+  // which is the same question routes/calls.routes.js asks through isEquityMember. Unlinked
+  // winners still work — the equity merge put them on the sheet by name at check-in, and that is
+  // deliberately the ONLY route by which they can call at all: a shared run has
+  // `publicCalls: false`, so the website's own public-call link is closed to them.
+  //
+  // Every slot is answered on its own. The bot writes one reply out of these, and someone who
+  // typed five slots needs to know which of them landed rather than a single yes or no.
+  router.post('/api/public/v1/hunts/shared/calls',
+    requireApiFeature('discord_hunts'), requireApiScope('write'), writeRateLimit, (req, res, next) => {
+      try {
+        const tid = req.apiTenantId;
+        const body = req.body || {};
+        if (!isCategory(body.category)) {
+          return fail(res, 400, 'invalid_category', 'category must be one of: affiliate, vip');
+        }
+
+        const key = keyFor(body.category, tid);
+        const claimed = decodeRunKey(body.key);
+        if (body.key && claimed.key !== key) {
+          return fail(res, 409, 'stale_key', 'That hunt key is not this category\'s current hunt');
+        }
+
+        const hunt = hunts[key];
+        if (!hunt) return fail(res, 404, 'no_hunt', 'That hunt has not been opened');
+        // The same three guards the equity write applies, for the same reason: a call must not land
+        // on a run a mod restarted underneath the giveaway, nor on one already in the archive.
+        const claimedRun = claimed.huntId || body.huntId;
+        if (claimedRun && claimedRun !== hunt.huntId) {
+          return fail(res, 409, 'stale_run', 'That run has ended — the hunt has been reset since');
+        }
+        if (hunt.archivedAt) return fail(res, 409, 'run_ended', 'That run has ended');
+
+        const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : '';
+        const asserted = isRealDiscordId(body.discordId) ? String(body.discordId) : null;
+        const row = findEquityRow(hunt.equity, { discordId: asserted, name });
+        if (!row) {
+          return fail(res, 403, 'not_on_hunt', 'You are not on that hunt\'s equity sheet');
+        }
+
+        const slots = cleanSlots(body.slots);
+        if (slots.length === 0) {
+          return fail(res, 400, 'invalid_slots', 'slots must be a non-empty array of slot names');
+        }
+
+        // Built from the MATCHED ROW, never from the request. The row's discordId was vetted when
+        // it was written; taking the body's would let a name match staple a stranger's id onto
+        // somebody else's call and roll it into their caller stats. This is the same guarantee
+        // vetCallerIdentity gives on the editor save path, made structural instead of checked.
+        const user = { id: row.discordId ? String(row.discordId) : undefined,
+                       displayName: row.name };
+
+        const results = slots.map((slot) => {
+          const outcome = addCallToHunt(hunt, user, slot, { source: 'discord' });
+          return outcome.ok
+            ? { slot, ok: true }
+            : { slot, ok: false, reason: outcome.code, message: outcome.error };
+        });
+
+        const added = results.filter((r) => r.ok).length;
+
+        // Only when something actually landed. A caller re-submitting the same five slots is a
+        // no-op, and an audit line per no-op buries the ones that mean something — the same reason
+        // the equity write compares content before recording.
+        if (added > 0) {
+          persistHunts();
+          auditLog.record({
+            category: 'api', action: 'hunt.shared.calls',
+            actorId: `apikey:${tid}`, actorName: 'Discord bot', tenantId: tid, targetId: key,
+            summary: `Discord bot filed ${added} slot ${added === 1 ? 'call' : 'calls'} for ${row.name} on the ${body.category} hunt`,
+            detail: { category: body.category, huntId: hunt.huntId, added,
+                      refused: results.length - added },
+            ip: req.ip,
+          });
+        }
+
+        res.set('Cache-Control', 'no-store');
+        res.json({ key: encodeRunKey(key, hunt.huntId), huntId: hunt.huntId, added, results });
       } catch (e) { next(e); }
     });
 

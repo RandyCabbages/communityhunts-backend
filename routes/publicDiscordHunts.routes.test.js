@@ -28,7 +28,7 @@ const tenants = {
 function harness({ plan = 'partner', scopes = ['read', 'write'], known = [CABBAGE],
                    knownThrows = false, hunts = {} } = {}) {
   const state = {
-    hunts, archive: [], shareTokens: {}, audit: [], emitted: [], persists: 0, asked: [],
+    hunts, archive: [], shareTokens: {}, audit: [], emitted: [], persists: 0, asked: [], feed: [],
   };
   let n = 0;
   const uid = () => `uid${++n}`;
@@ -79,6 +79,11 @@ function harness({ plan = 'partner', scopes = ['read', 'write'], known = [CABBAG
       frontendUrl: 'https://communityhunts.gg',
     }),
     uid,
+    // For the slot-call endpoint: the same three the calls router is given, so a bot-filed call
+    // goes through lib/huntCalls.js with the real duplicate rule rather than a stubbed one.
+    normalizeSlot: (name) => (name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(),
+    nameOf: (user) => (user?.displayName || user?.username || '').toLowerCase().trim(),
+    activityFeed: { push: (tid, entry) => state.feed.push({ tid, ...entry }) },
   }));
 
   return { app, state };
@@ -456,6 +461,7 @@ describe('POST /hunts/shared/equity', () => {
 });
 
 const cancel = (app, body) => call(app, 'POST', '/api/public/v1/hunts/shared/cancel', body);
+const slotCalls = (app, body) => call(app, 'POST', '/api/public/v1/hunts/shared/calls', body);
 
 describe('POST /hunts/shared/cancel', () => {
   it('deletes the run the giveaway opened, and archives nothing', async () => {
@@ -539,5 +545,176 @@ describe('POST /hunts/shared/cancel', () => {
     const entry = state.audit.find(a => a.action === 'hunt.shared.cancel');
     assert.ok(entry, 'a cancel must be in the audit log');
     assert.equal(entry.actorId, 'apikey:bean');
+  });
+});
+
+describe('POST /hunts/shared/calls', () => {
+  const KEY = '__affiliate_hunt__:bean';
+
+  // A run as `open` leaves it, plus the two winners a giveaway would have merged on: one linked,
+  // one name-only. Written out rather than driven through `open` so each case starts from a known
+  // sheet — the equity sheet IS the authorisation here, so it is the fixture that matters.
+  const openRun = (over = {}) => ({
+    [KEY]: {
+      user: { id: KEY },
+      huntId: 'run1',
+      tenantId: 'bean',
+      archivedAt: null,
+      calls: [],
+      callLimit: 10,
+      huntMode: 'hunting',
+      equity: [
+        { id: 'bean_auto', name: 'Bean', discordId: BEAN, amount: 1000 },
+        { id: 'r1', name: 'Cabbage', discordId: CABBAGE, amount: 100 },
+        { id: 'r2', name: 'Sverrir', amount: 100 },
+      ],
+      ...over,
+    },
+  });
+
+  it('files every slot and says so', async () => {
+    const { app, state } = harness({ hunts: openRun() });
+
+    const res = await slotCalls(app, {
+      category: 'affiliate', key: `${KEY}#run1`,
+      discordId: CABBAGE, name: 'Cabbage',
+      slots: ['Gates of Olympus', 'Sweet Bonanza'],
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.added, 2);
+    assert.deepEqual(res.body.results.map(r => r.ok), [true, true]);
+    assert.equal(res.body.huntId, 'run1');
+    assert.equal(state.hunts[KEY].calls.length, 2);
+    assert.equal(state.hunts[KEY].calls[0].callerId, CABBAGE);
+    assert.equal(state.hunts[KEY].calls[0].source, 'discord');
+  });
+
+  it('reports a duplicate per slot without refusing the rest', async () => {
+    const { app } = harness({ hunts: openRun() });
+    await slotCalls(app, { category: 'affiliate', key: KEY, discordId: CABBAGE, name: 'Cabbage',
+      slots: ['CULT'] });
+
+    const res = await slotCalls(app, {
+      category: 'affiliate', key: KEY, discordId: CABBAGE, name: 'Cabbage',
+      slots: ['CULT.', 'Big Bass Bonanza'],
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.added, 1);
+    assert.equal(res.body.results[0].ok, false);
+    assert.equal(res.body.results[0].reason, 'duplicate');
+    assert.match(res.body.results[0].message, /already suggested/);
+    assert.equal(res.body.results[1].ok, true);
+  });
+
+  it('reports the per-person limit per slot', async () => {
+    const { app } = harness({ hunts: openRun({ callLimit: 1 }) });
+
+    const res = await slotCalls(app, {
+      category: 'affiliate', key: KEY, discordId: CABBAGE, name: 'Cabbage',
+      slots: ['One', 'Two'],
+    });
+
+    assert.equal(res.body.added, 1);
+    assert.equal(res.body.results[1].reason, 'limit');
+  });
+
+  it('an unlinked winner is matched by name and their call is filed name-only', async () => {
+    const { app, state } = harness({ hunts: openRun() });
+
+    const res = await slotCalls(app, {
+      category: 'affiliate', key: KEY, name: 'Sverrir', slots: ['Gates of Olympus'],
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(state.hunts[KEY].calls[0].user, 'Sverrir');
+    assert.equal(state.hunts[KEY].calls[0].callerId, undefined);
+  });
+
+  it('a client-asserted id is never trusted over the matched row', async () => {
+    const { app, state } = harness({ hunts: openRun() });
+
+    await slotCalls(app, {
+      category: 'affiliate', key: KEY, discordId: STRANGER, name: 'Sverrir',
+      slots: ['Gates of Olympus'],
+    });
+
+    assert.equal(state.hunts[KEY].calls[0].callerId, undefined,
+      'the unknown id is dropped, not written onto Sverrir\'s call');
+  });
+
+  it('refuses somebody who is not on the equity sheet', async () => {
+    const { app, state } = harness({ hunts: openRun() });
+
+    const res = await slotCalls(app, {
+      category: 'affiliate', key: KEY, discordId: STRANGER, name: 'Stranger',
+      slots: ['Gates of Olympus'],
+    });
+
+    assert.equal(res.status, 403);
+    assert.equal(res.body.error.code, 'not_on_hunt');
+    assert.equal(state.hunts[KEY].calls.length, 0);
+  });
+
+  it('refuses a run that has been reset since', async () => {
+    const { app } = harness({ hunts: openRun() });
+
+    const res = await slotCalls(app, {
+      category: 'affiliate', key: `${KEY}#older`, discordId: CABBAGE, name: 'Cabbage',
+      slots: ['Gates of Olympus'],
+    });
+
+    assert.equal(res.status, 409);
+    assert.equal(res.body.error.code, 'stale_run');
+  });
+
+  it('refuses an ended run', async () => {
+    const { app } = harness({ hunts: openRun({ archivedAt: '2026-07-29T00:00:00.000Z' }) });
+
+    const res = await slotCalls(app, {
+      category: 'affiliate', key: KEY, discordId: CABBAGE, name: 'Cabbage', slots: ['Gates'] });
+
+    assert.equal(res.status, 409);
+    assert.equal(res.body.error.code, 'run_ended');
+  });
+
+  it('refuses an empty submission and a bad category', async () => {
+    const { app } = harness({ hunts: openRun() });
+
+    const empty = await slotCalls(app, {
+      category: 'affiliate', key: KEY, discordId: CABBAGE, name: 'Cabbage', slots: ['  ', ''] });
+    assert.equal(empty.status, 400);
+    assert.equal(empty.body.error.code, 'invalid_slots');
+
+    const bad = await slotCalls(app, {
+      category: 'topLb', key: KEY, discordId: CABBAGE, name: 'Cabbage', slots: ['Gates'] });
+    assert.equal(bad.status, 400);
+    assert.equal(bad.body.error.code, 'invalid_category');
+  });
+
+  it('audits once for the batch, and not at all when nothing landed', async () => {
+    const { app, state } = harness({ hunts: openRun() });
+    const lines = () => state.audit.filter(a => a.action === 'hunt.shared.calls').length;
+
+    await slotCalls(app, { category: 'affiliate', key: KEY, discordId: CABBAGE, name: 'Cabbage',
+      slots: ['Gates of Olympus'] });
+    const afterFirst = lines();
+
+    await slotCalls(app, { category: 'affiliate', key: KEY, discordId: CABBAGE, name: 'Cabbage',
+      slots: ['Gates of Olympus'] });
+
+    assert.equal(afterFirst, 1);
+    assert.equal(lines(), 1, 'a submission that added nothing writes no audit line');
+  });
+
+  it('needs the write scope', async () => {
+    const { app } = harness({ hunts: openRun(), scopes: ['read'] });
+
+    const res = await slotCalls(app, {
+      category: 'affiliate', key: KEY, discordId: CABBAGE, name: 'Cabbage', slots: ['Gates'] });
+
+    assert.equal(res.status, 403);
+    assert.equal(res.body.error.code, 'insufficient_scope');
   });
 });

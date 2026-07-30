@@ -562,6 +562,10 @@ app.use(require('./routes/public.routes')({
   // the mod console's — a pure factory, so both build byte-identical runs from one definition.
   affiliateHuntKey, vipHuntKey, sharedHunts: require('./lib/sharedHunts')({ tenants, uid }),
   shareLinks, persistHunts, emitHuntUpdate, uid,
+  // For the bot's slot-call endpoint: the same three routes/calls.routes.js is given, so a
+  // bot-filed call goes through lib/huntCalls.js with identical dedupe, naming and live-feed
+  // behaviour rather than a second copy of those rules.
+  normalizeSlot, nameOf, activityFeed,
 }));
 
 // Global curated slot lists — public read, owner-only writes.
