@@ -228,3 +228,139 @@ test('the stream says hunt.gone and closes when the hunt is deleted', async () =
     assert.strictEqual(events[1].name, 'hunt.gone');
   });
 });
+
+// ── selection: owner, huntType, view ──────────────────────────────────────────────────────────
+// A consumer showing ONE streamer's hunts had no way to select them: nothing on a hunt identified
+// an owner, and `?huntType=` was silently ignored — including `?huntType=bogus`, which answered
+// 200 with the entire community's hunts. The filter looked like it worked and the board was wrong.
+
+function archivedHunt(over = {}) {
+  return { ...liveHunt(), huntId: 'h_arch', isLive: false,
+    archivedAt: '2026-07-20T12:00:00.000Z', ...over };
+}
+
+const ownerIdOf = h => serializers.publicOwner(h).id;
+
+test('GET /hunts filters by huntType, and counts only what matched', async () => {
+  const hunts = {
+    '111': liveHunt({ huntId: 'h_a', huntType: 'community' }),
+    '222': liveHunt({ huntId: 'h_b', huntType: 'solo', user: { id: '222', displayName: 'Solo' } }),
+  };
+  await withServer(makeApp({ hunts }), async base => {
+    const r = await get(base, '/api/public/v1/hunts?huntType=solo');
+    const body = await r.json();
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(body.data.map(h => h.id), ['h_b']);
+    // total is what MATCHED, not what existed — otherwise a consumer pages through empty results.
+    assert.strictEqual(body.pagination.total, 1);
+  });
+});
+
+test('GET /hunts accepts a comma-separated huntType list', async () => {
+  const hunts = {
+    '111': liveHunt({ huntId: 'h_a', huntType: 'community' }),
+    '222': liveHunt({ huntId: 'h_b', huntType: 'solo', user: { id: '222', displayName: 'Solo' } }),
+  };
+  await withServer(makeApp({ hunts }), async base => {
+    const body = await (await get(base, '/api/public/v1/hunts?huntType=solo,community')).json();
+    assert.strictEqual(body.data.length, 2);
+  });
+});
+
+test('GET /hunts REJECTS an unrecognised huntType instead of returning everything', async () => {
+  // The exact reported failure: `?huntType=bogus` used to answer 200 with all 322 hunts.
+  const hunts = { '111': liveHunt() };
+  await withServer(makeApp({ hunts }), async base => {
+    const r = await get(base, '/api/public/v1/hunts?huntType=bogus');
+    assert.strictEqual(r.status, 400);
+    assert.strictEqual((await r.json()).error.code, 'invalid_hunt_type');
+  });
+});
+
+test('GET /hunts REJECTS an unknown query parameter instead of ignoring it', async () => {
+  const hunts = { '111': liveHunt() };
+  await withServer(makeApp({ hunts }), async base => {
+    // `type` is the plausible near-miss a consumer actually wrote.
+    const r = await get(base, '/api/public/v1/hunts?type=community');
+    assert.strictEqual(r.status, 400);
+    const body = await r.json();
+    assert.strictEqual(body.error.code, 'unknown_param');
+    assert.ok(body.error.message.includes('type'), 'the message must name the offending param');
+  });
+});
+
+test('GET /hunts filters by ownerId, and an unknown owner is an empty list not an error', async () => {
+  const mine = liveHunt({ huntId: 'h_a' });
+  const theirs = liveHunt({ huntId: 'h_b', user: { id: '999', displayName: 'Someone Else' } });
+  await withServer(makeApp({ hunts: { '111': mine, '999': theirs } }), async base => {
+    const body = await (await get(base, `/api/public/v1/hunts?ownerId=${ownerIdOf(mine)}`)).json();
+    assert.deepStrictEqual(body.data.map(h => h.id), ['h_a']);
+    assert.strictEqual(body.data[0].owner.id, ownerIdOf(mine));
+
+    const none = await get(base, '/api/public/v1/hunts?ownerId=usr_nosuchowner');
+    assert.strictEqual(none.status, 200);
+    assert.deepStrictEqual((await none.json()).data, []);
+  });
+});
+
+test('the ownerId a consumer filters on is the one the response hands back', async () => {
+  // Round-trip: read an owner off a hunt, feed it straight back as the filter. If these two ever
+  // derive the id differently, filtering silently returns nothing and looks like "no hunts".
+  const hunts = { '111': liveHunt() };
+  await withServer(makeApp({ hunts }), async base => {
+    const first = (await (await get(base, '/api/public/v1/hunts')).json()).data[0];
+    const again = await (await get(base, `/api/public/v1/hunts?ownerId=${first.owner.id}`)).json();
+    assert.strictEqual(again.data.length, 1);
+    assert.strictEqual(again.data[0].id, first.id);
+  });
+});
+
+test('GET /hunts?view=summary omits bonuses, calls and equity', async () => {
+  const hunts = { '111': liveHunt({ calls: [{ slot: 'A', user: 'x', status: 'in' }] }) };
+  await withServer(makeApp({ hunts }), async base => {
+    const body = await (await get(base, '/api/public/v1/hunts?view=summary')).json();
+    const row = body.data[0];
+    assert.ok(!('bonuses' in row) && !('calls' in row) && !('equity' in row));
+    assert.strictEqual(row.bonusCount, 1);   // the count survives; the array does not
+    assert.ok(row.owner.id);
+  });
+});
+
+test('the default view is still full — summary is opt-in', async () => {
+  const hunts = { '111': liveHunt() };
+  await withServer(makeApp({ hunts }), async base => {
+    const row = (await (await get(base, '/api/public/v1/hunts')).json()).data[0];
+    assert.ok(Array.isArray(row.bonuses) && Array.isArray(row.calls) && Array.isArray(row.equity));
+  });
+});
+
+test('GET /hunts rejects an unrecognised view', async () => {
+  await withServer(makeApp({ hunts: { '111': liveHunt() } }), async base => {
+    const r = await get(base, '/api/public/v1/hunts?view=tiny');
+    assert.strictEqual(r.status, 400);
+    assert.strictEqual((await r.json()).error.code, 'invalid_view');
+  });
+});
+
+test('filters compose with status, and the summary ETag still revalidates', async () => {
+  const hunts = { '111': liveHunt({ huntId: 'h_a' }) };
+  const archive = [archivedHunt({ user: { id: '111', displayName: 'Runner' } })];
+  await withServer(makeApp({ hunts, archive }), async base => {
+    const path = '/api/public/v1/hunts?status=archived&huntType=community&view=summary';
+    const r1 = await get(base, path);
+    const body = await r1.json();
+    assert.deepStrictEqual(body.data.map(h => h.id), ['h_arch']);
+
+    const r2 = await get(base, path, { 'If-None-Match': r1.headers.get('etag') });
+    assert.strictEqual(r2.status, 304);
+    assert.strictEqual((await r2.text()).length, 0);
+  });
+});
+
+test('GET /hunts/:id rejects an unknown param too', async () => {
+  await withServer(makeApp({ hunts: { '111': liveHunt() } }), async base => {
+    const r = await get(base, '/api/public/v1/hunts/h_live?expand=all');
+    assert.strictEqual(r.status, 400);
+    assert.strictEqual((await r.json()).error.code, 'unknown_param');
+  });
+});

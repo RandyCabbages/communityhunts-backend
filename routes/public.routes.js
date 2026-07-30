@@ -8,7 +8,39 @@ const crypto = require('crypto');
 // matching routes/misc.routes.js — the twin call site for the same rail.
 const { shouldMaskIdentity } = require('../lib/settings');
 const { validateImport, buildImportedHunt } = require('../lib/huntImport');
+// The public `huntType` vocabulary + the function that derives it. Required directly rather than
+// injected for the same reason shouldMaskIdentity above is: the filter must use the very same
+// derivation the serializer does, and a second copy is how a filter starts disagreeing with the
+// field it filters on.
+const { PUBLIC_HUNT_CATEGORIES, huntCategoryOf } = require('../lib/hunts-core');
 const { vetEquityIdentity } = require('../lib/identityWrites');
+
+// ── Query parameters ──────────────────────────────────────────────────────────────────────────
+// Unknown params used to be ignored in silence, which is the worst of the three options: a
+// consumer writing the obvious `?huntType=community` filter got a confident 200 carrying every
+// hunt in the community, shipped it, and displayed the wrong data. There was no error, no warning,
+// and the response looked right. `?huntType=bogus` did the same. A 400 costs one integration one
+// clear message; silence costs every integration a wrong board.
+//
+// Applied per route with that route's own allowlist, so a param can never be accepted on an
+// endpoint that doesn't read it.
+function allowParams(...allowed) {
+  const ok = new Set(allowed);
+  return (req, res, next) => {
+    const unknown = Object.keys(req.query).filter(k => !ok.has(k));
+    if (unknown.length) {
+      return res.status(400).json({ error: { code: 'unknown_param',
+        message: `Unknown query parameter(s): ${unknown.join(', ')}. This endpoint accepts: ${allowed.join(', ') || '(none)'}` } });
+    }
+    next();
+  };
+}
+
+// A single value or a comma-separated list. Empty entries are dropped rather than treated as a
+// value, so a trailing comma is forgiving; an unrecognised value is not.
+function parseList(raw) {
+  return String(raw).split(',').map(s => s.trim()).filter(Boolean);
+}
 
 function paginate(req) {
   let limit = parseInt(req.query.limit, 10); if (!Number.isFinite(limit) || limit <= 0) limit = 25;
@@ -107,12 +139,27 @@ module.exports = function publicRoutes(deps) {
   // the key, so without this a request carrying an invalid key is metered by nothing at all.
   router.use('/api/public/v1', ipFloor, requireApiKey, rateLimit);
 
-  router.get('/api/public/v1/hunts', requireApiFeature('developer_api'), (req, res) => {
+  router.get('/api/public/v1/hunts', requireApiFeature('developer_api'),
+    allowParams('status', 'huntType', 'ownerId', 'view', 'limit', 'offset'), (req, res) => {
     const tid = req.apiTenantId;
     const status = req.query.status === undefined ? 'all' : String(req.query.status);
     if (!['live', 'archived', 'all'].includes(status)) {
       return res.status(400).json({ error: { code: 'invalid_status', message: 'status must be one of: live, archived, all' } });
     }
+    let types = null;
+    if (req.query.huntType !== undefined) {
+      types = parseList(req.query.huntType);
+      const bad = types.filter(t => !PUBLIC_HUNT_CATEGORIES.includes(t));
+      if (!types.length || bad.length) {
+        return res.status(400).json({ error: { code: 'invalid_hunt_type',
+          message: `huntType must be one or more of: ${PUBLIC_HUNT_CATEGORIES.join(', ')} (comma-separated)` } });
+      }
+    }
+    const view = req.query.view === undefined ? 'full' : String(req.query.view);
+    if (!['full', 'summary'].includes(view)) {
+      return res.status(400).json({ error: { code: 'invalid_view', message: 'view must be one of: full, summary' } });
+    }
+    const ownerId = req.query.ownerId === undefined ? null : String(req.query.ownerId);
     let list = [];
     // Mirrors lib/hunts-core.js getPublicHunts/getArchivedHunts, applied to the raw hunt objects
     // (not huntSummary — serializers.publicHunt needs the full hunt), with ONE deliberate
@@ -132,16 +179,33 @@ module.exports = function publicRoutes(deps) {
     if (status === 'archived' || status === 'all') {
       list = list.concat(archive.filter(h => tenantOf(h) === tid && huntCompleted(h)));
     }
+    // Filters run BEFORE pagination, so `pagination.total` counts what matched rather than what
+    // existed — a consumer paging an owner's hunts would otherwise walk mostly-empty pages.
+    // Both compare against the same serializer the response uses, so "what you filter on" and
+    // "what you read back" cannot disagree.
+    if (types) {
+      const want = new Set(types);
+      // huntCategoryOf, not `serializers.publicHunt(h).huntType` — the latter would serialize every
+      // bonus, call and equity row of every hunt in the community to read one string off the result.
+      list = list.filter(h => want.has(huntCategoryOf(h) || 'community'));
+    }
+    if (ownerId) {
+      list = list.filter(h => {
+        const o = serializers.publicOwner(h);
+        return o && o.id === ownerId;
+      });
+    }
     list.sort((a, b) => new Date(b.archivedAt || b.startedAt || 0) - new Date(a.archivedAt || a.startedAt || 0));
     const { limit, offset } = paginate(req);
-    const page = list.slice(offset, offset + limit).map(serializers.publicHunt);
+    const shape = view === 'summary' ? serializers.publicHuntSummary : serializers.publicHunt;
+    const page = list.slice(offset, offset + limit).map(shape);
     // Every entry carries `updatedAt`, so the intended cheap pattern is: poll THIS endpoint, then
     // re-fetch only the hunts whose stamp moved. The conditional GET makes the poll itself nearly
     // free when nothing moved at all.
     return sendRevalidatable(req, res, { data: page, pagination: { limit, offset, total: list.length } });
   });
 
-  router.get('/api/public/v1/hunts/:id', requireApiFeature('developer_api'), (req, res) => {
+  router.get('/api/public/v1/hunts/:id', requireApiFeature('developer_api'), allowParams(), (req, res) => {
     const tid = req.apiTenantId, id = req.params.id;
     const found = findHunt(hunts, archive, tenantOf, id, tid);
     if (!found) return res.status(404).json({ error: { code: 'not_found', message: 'Hunt not found' } });
@@ -177,7 +241,7 @@ module.exports = function publicRoutes(deps) {
   const STREAM_MAX_MS = 30 * 60 * 1000;
   const openStreams = new Map(); // tenantId -> currently open count
 
-  router.get('/api/public/v1/hunts/:id/stream', requireApiFeature('developer_api'), (req, res) => {
+  router.get('/api/public/v1/hunts/:id/stream', requireApiFeature('developer_api'), allowParams(), (req, res) => {
     const tid = req.apiTenantId, id = req.params.id;
     const first = findHunt(hunts, archive, tenantOf, id, tid);
     if (!first) return res.status(404).json({ error: { code: 'not_found', message: 'Hunt not found' } });
@@ -290,7 +354,7 @@ module.exports = function publicRoutes(deps) {
       } catch (e) { next(e); }
     });
 
-  router.get('/api/public/v1/stats', requireApiFeature('developer_api'), (req, res) => {
+  router.get('/api/public/v1/stats', requireApiFeature('developer_api'), allowParams(), (req, res) => {
     const stats = getHuntStats(req.apiTenantId);
     res.set('Cache-Control', 'private, max-age=60'); // private: per-tenant, never shared-cacheable
     res.json({ data: serializers.publicStats(stats) });
@@ -298,7 +362,8 @@ module.exports = function publicRoutes(deps) {
 
   // Premium tier (developer_api_premium): got-in event log + banger rail, same selection
   // logic as the session-authed admin export / public /api/bangers route respectively.
-  router.get('/api/public/v1/got-in', requireApiFeature('developer_api_premium'), (req, res) => {
+  router.get('/api/public/v1/got-in', requireApiFeature('developer_api_premium'),
+    allowParams('limit', 'offset'), (req, res) => {
     const rows = getGotInLog(req.apiTenantId);
     const { limit, offset } = paginate(req);
     const page = serializers.publicGotIn(rows.slice(offset, offset + limit));
@@ -306,7 +371,7 @@ module.exports = function publicRoutes(deps) {
     res.json({ data: page, pagination: { limit, offset, total: rows.length } });
   });
 
-  router.get('/api/public/v1/bangers', requireApiFeature('developer_api_premium'), (req, res) => {
+  router.get('/api/public/v1/bangers', requireApiFeature('developer_api_premium'), allowParams(), (req, res) => {
     // isAnon is REQUIRED here — without it a host who opted into anonymous mode is returned by
     // real name to every holder of this community's API key, while the public hub masks them.
     const list = collectBangers(hunts, archive, req.apiTenantId, { isAnon: shouldMaskIdentity })
