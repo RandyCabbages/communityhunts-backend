@@ -3,6 +3,7 @@
 // the tenant from the KEY and overrides req.tenant, so tenant never comes from a header here.
 
 const express = require('express');
+const crypto = require('crypto');
 // Anonymous-host masking, required by collectBangers. Required directly rather than injected,
 // matching routes/misc.routes.js — the twin call site for the same rail.
 const { shouldMaskIdentity } = require('../lib/settings');
@@ -14,6 +15,61 @@ function paginate(req) {
   limit = Math.min(limit, 100);
   let offset = parseInt(req.query.offset, 10); if (!Number.isFinite(offset) || offset < 0) offset = 0;
   return { limit, offset };
+}
+
+// ── Conditional GET ───────────────────────────────────────────────────────────────────────────
+// A live board has to stay current, and the only way to do that here was to re-fetch the whole
+// hunt on a timer. Roughly 12-20x of those fetches return bytes identical to the last one.
+//
+// The validator is derived from the CONTENT, not from a timestamp. Several write paths mutate a
+// hunt without stamping `updatedAt` — the admin currency backfill rewrites archived entries in
+// place, for one — and a timestamp validator would serve a 304 for a hunt that really did change.
+// Hashing costs one sha1 over one already-serialized hunt; being wrong costs a stale board on
+// stream.
+function etagOf(body) {
+  return `"${crypto.createHash('sha1').update(body).digest('base64url')}"`;
+}
+
+// RFC 9110: If-None-Match is a comma-separated list, and entries may carry the `W/` weak marker.
+// We only ever mint our own tags, so comparing the opaque part is enough.
+function ifNoneMatchHits(header, etag) {
+  if (!header) return false;
+  if (header.trim() === '*') return true;
+  const bare = t => t.trim().replace(/^W\//, '');
+  return header.split(',').some(t => bare(t) === bare(etag));
+}
+
+// Send JSON under a revalidation contract: 304 (no body) when the caller already holds this exact
+// representation.
+//
+// `private, no-cache` is what makes this work AT ALL, and it replaced `no-store` here. `no-store`
+// forbids the client from keeping the copy it would later revalidate, so an ETag under it is
+// inert. `no-cache` means "keep it, but always revalidate before use" — which is the actual
+// requirement. `private` is retained from the old header for the same reason it was set: these
+// bodies are per-tenant and must never be held by a shared cache (with `Vary: Authorization`
+// as the belt to that suspenders).
+function sendRevalidatable(req, res, payload) {
+  const body = JSON.stringify(payload);
+  const etag = etagOf(body);
+  res.set('ETag', etag);
+  res.set('Cache-Control', 'private, no-cache');
+  if (ifNoneMatchHits(req.headers['if-none-match'], etag)) return res.status(304).end();
+  return res.type('application/json').send(body);
+}
+
+// Find one hunt by public id within a tenant. Scans in place rather than building
+// `[...Object.values(hunts), ...archive]` per request, which copied every live hunt AND the whole
+// archive (283 entries in production) to locate one id. First match wins; no index to keep in
+// sync with the ~25 call sites that mutate those two containers.
+function findHunt(hunts, archive, tenantOf, id, tid) {
+  for (const k of Object.keys(hunts)) {
+    const h = hunts[k];
+    if (h && h.huntId === id && tenantOf(h) === tid) return h;
+  }
+  for (const h of archive) {
+    if (h && h.huntId === id && tenantOf(h) === tid) return h;
+  }
+  return null;
 }
 
 module.exports = function publicRoutes(deps) {
@@ -79,18 +135,110 @@ module.exports = function publicRoutes(deps) {
     list.sort((a, b) => new Date(b.archivedAt || b.startedAt || 0) - new Date(a.archivedAt || a.startedAt || 0));
     const { limit, offset } = paginate(req);
     const page = list.slice(offset, offset + limit).map(serializers.publicHunt);
-    res.set('Cache-Control', 'no-store');
-    res.json({ data: page, pagination: { limit, offset, total: list.length } });
+    // Every entry carries `updatedAt`, so the intended cheap pattern is: poll THIS endpoint, then
+    // re-fetch only the hunts whose stamp moved. The conditional GET makes the poll itself nearly
+    // free when nothing moved at all.
+    return sendRevalidatable(req, res, { data: page, pagination: { limit, offset, total: list.length } });
   });
 
   router.get('/api/public/v1/hunts/:id', requireApiFeature('developer_api'), (req, res) => {
     const tid = req.apiTenantId, id = req.params.id;
-    const found = [...Object.values(hunts), ...archive].find(h => h.huntId === id && tenantOf(h) === tid);
+    const found = findHunt(hunts, archive, tenantOf, id, tid);
     if (!found) return res.status(404).json({ error: { code: 'not_found', message: 'Hunt not found' } });
-    // Explicit, not absent: with no directive a shared cache may heuristically cache a 200 GET,
-    // and this body is per-tenant. A live hunt also changes constantly.
-    res.set('Cache-Control', 'no-store');
-    res.json({ data: serializers.publicHunt(found) });
+    return sendRevalidatable(req, res, { data: serializers.publicHunt(found) });
+  });
+
+  // ── Live change stream (SSE) ────────────────────────────────────────────────────────────────
+  // A thin change PING, never hunt state. The consumer receives the ping and re-fetches
+  // GET /hunts/:id itself.
+  //
+  // Carrying state here would be the classic failure: if ping B overtook ping A, a live board
+  // would go BACKWARDS, on stream. With a bare ping there is nothing to reorder — the consumer
+  // always fetches current truth, so a duplicate, late or replayed ping is harmless.
+  //
+  // Change detection is an in-process tick that re-derives the payload ETag, NOT a hook on
+  // emitHuntUpdate. Deliberate: hunts also change through paths that never reach the socket
+  // fanout — the write endpoint below, admin edits, the archive janitor — and a hook would go
+  // silent on exactly those. Cost is one sha1 over one hunt per second per connection, and
+  // connections are capped below.
+  //
+  // NOT reachable from a browser `EventSource`: that API cannot set an Authorization header, and
+  // the key must never travel in a query string (it lands in access logs and Referer). This is a
+  // server-to-server channel — fan out to your viewers over your own socket.
+  const STREAM_TICK_MS = 1000;
+  const STREAM_HEARTBEAT_MS = 25000;
+  // A held-open connection is a timer plus a socket for as long as it lasts, so it is a resource
+  // a key can accumulate. Partner-scale is a handful; this is the abuse ceiling, not a product
+  // limit.
+  const STREAM_MAX_PER_TENANT = 20;
+  // Bounded lifetime. `req.on('close')` is the normal cleanup and fires reliably, but a
+  // half-open connection that never emits it would otherwise hold its timer forever. The client
+  // reconnects on its own (see the `retry:` hint below), so ending is invisible to them.
+  const STREAM_MAX_MS = 30 * 60 * 1000;
+  const openStreams = new Map(); // tenantId -> currently open count
+
+  router.get('/api/public/v1/hunts/:id/stream', requireApiFeature('developer_api'), (req, res) => {
+    const tid = req.apiTenantId, id = req.params.id;
+    const first = findHunt(hunts, archive, tenantOf, id, tid);
+    if (!first) return res.status(404).json({ error: { code: 'not_found', message: 'Hunt not found' } });
+
+    const open = openStreams.get(tid) || 0;
+    if (open >= STREAM_MAX_PER_TENANT) {
+      res.set('Retry-After', '30');
+      return res.status(429).json({ error: { code: 'too_many_streams',
+        message: `At most ${STREAM_MAX_PER_TENANT} concurrent streams per community` } });
+    }
+    openStreams.set(tid, open + 1);
+
+    res.status(200).set({
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      // Correct here, unlike on the GETs above: an event stream is not a representation anyone
+      // revalidates.
+      'Cache-Control': 'no-store',
+      'Connection': 'keep-alive',
+      // nginx-class proxies buffer a response body by default, which would hold every ping until
+      // the connection closed — i.e. exactly invert the point of this endpoint.
+      'X-Accel-Buffering': 'no',
+    });
+    res.flushHeaders();
+
+    const snapshot = h => etagOf(JSON.stringify(serializers.publicHunt(h)));
+    const send = (event, huntId) =>
+      res.write(`event: ${event}\ndata: ${JSON.stringify({ event, huntId, occurredAt: Date.now() })}\n\n`);
+
+    let tick = null, beat = null, life = null, closed = false;
+    const stop = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(tick); clearInterval(beat); clearTimeout(life);
+      const n = (openStreams.get(tid) || 1) - 1;
+      if (n > 0) openStreams.set(tid, n); else openStreams.delete(tid);
+      res.end();
+    };
+
+    // Reconnect hint for EventSource-compatible clients, then an immediate ping so a consumer
+    // syncs on connect instead of waiting for the first change.
+    res.write('retry: 5000\n\n');
+    let last = snapshot(first);
+    send('hunt.changed', id);
+
+    tick = setInterval(() => {
+      const h = findHunt(hunts, archive, tenantOf, id, tid);
+      // Deleted by an admin, or reaped by the janitor. Say so once and close rather than
+      // silently going quiet, which a consumer cannot distinguish from an idle hunt.
+      if (!h) { send('hunt.gone', id); return stop(); }
+      const now = snapshot(h);
+      if (now === last) return;
+      last = now;
+      send('hunt.changed', id);
+    }, STREAM_TICK_MS);
+
+    // A comment line. Keeps an idle proxy from reaping a stream between bonuses.
+    beat = setInterval(() => res.write(': heartbeat\n\n'), STREAM_HEARTBEAT_MS);
+    life = setTimeout(stop, STREAM_MAX_MS);
+
+    req.on('close', stop);
+    res.on('close', stop);
   });
 
   // Write a completed hunt. FOUR independent gates, all of which must pass:
