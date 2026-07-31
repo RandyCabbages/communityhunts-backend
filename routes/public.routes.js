@@ -237,13 +237,6 @@ module.exports = function publicRoutes(deps) {
     return sendRevalidatable(req, res, { data: page, pagination: { limit, offset, total: list.length } });
   });
 
-  router.get('/api/public/v1/hunts/:id', requireApiFeature('developer_api'), allowParams(), (req, res) => {
-    const tid = req.apiTenantId, id = req.params.id;
-    const found = findHunt(hunts, archive, tenantOf, id, tid);
-    if (!found) return res.status(404).json({ error: { code: 'not_found', message: 'Hunt not found' } });
-    return sendRevalidatable(req, res, { data: serializers.publicHunt(found) });
-  });
-
   // ── Live change stream (SSE) ────────────────────────────────────────────────────────────────
   // A thin change PING, never hunt state. The consumer receives the ping and re-fetches
   // GET /hunts/:id itself.
@@ -262,7 +255,11 @@ module.exports = function publicRoutes(deps) {
   // the key must never travel in a query string (it lands in access logs and Referer). This is a
   // server-to-server channel — fan out to your viewers over your own socket.
   const STREAM_TICK_MS = 1000;
-  const STREAM_HEARTBEAT_MS = 25000;
+  // 15s, not 25s. Idle-connection timeouts on proxies and load balancers cluster around 30-60s,
+  // and a beat that lands at 25s leaves almost no margin — an integrator sampling for 25 seconds
+  // saw nothing at all and reasonably concluded there was no heartbeat. Cheap insurance: a
+  // comment line costs ~14 bytes.
+  const STREAM_HEARTBEAT_MS = 15000;
   // A held-open connection is a timer plus a socket for as long as it lasts, so it is a resource
   // a key can accumulate. Partner-scale is a handful; this is the abuse ceiling, not a product
   // limit.
@@ -273,16 +270,19 @@ module.exports = function publicRoutes(deps) {
   const STREAM_MAX_MS = 30 * 60 * 1000;
   const openStreams = new Map(); // tenantId -> currently open count
 
-  router.get('/api/public/v1/hunts/:id/stream', requireApiFeature('developer_api'), allowParams(), (req, res) => {
-    const tid = req.apiTenantId, id = req.params.id;
-    const first = findHunt(hunts, archive, tenantOf, id, tid);
-    if (!first) return res.status(404).json({ error: { code: 'not_found', message: 'Hunt not found' } });
-
+  // Everything both streams share: the tenant budget, the SSE headers, the reconnect hint, the
+  // heartbeat, the bounded lifetime and the idempotent teardown. Extracted when the second stream
+  // arrived rather than copied — a second copy of a cleanup path is how one of them ends up
+  // leaking a timer that nothing points at any more.
+  //
+  // Returns null when it has already answered (429). The caller must then return immediately.
+  function beginStream(req, res, tid) {
     const open = openStreams.get(tid) || 0;
     if (open >= STREAM_MAX_PER_TENANT) {
       res.set('Retry-After', '30');
-      return res.status(429).json({ error: { code: 'too_many_streams',
+      res.status(429).json({ error: { code: 'too_many_streams',
         message: `At most ${STREAM_MAX_PER_TENANT} concurrent streams per community` } });
+      return null;
     }
     openStreams.set(tid, open + 1);
 
@@ -298,43 +298,118 @@ module.exports = function publicRoutes(deps) {
     });
     res.flushHeaders();
 
-    const snapshot = h => etagOf(JSON.stringify(serializers.publicHunt(h)));
-    const send = (event, huntId) =>
-      res.write(`event: ${event}\ndata: ${JSON.stringify({ event, huntId, occurredAt: Date.now() })}\n\n`);
-
-    let tick = null, beat = null, life = null, closed = false;
+    const timers = [];
+    let closed = false;
     const stop = () => {
       if (closed) return;
       closed = true;
-      clearInterval(tick); clearInterval(beat); clearTimeout(life);
+      // Node's clearInterval and clearTimeout both accept a Timeout, so one loop retires every
+      // timer this stream owns regardless of which kind it is.
+      for (const t of timers) clearInterval(t);
       const n = (openStreams.get(tid) || 1) - 1;
       if (n > 0) openStreams.set(tid, n); else openStreams.delete(tid);
       res.end();
     };
+    const send = (event, huntId) =>
+      res.write(`event: ${event}\ndata: ${JSON.stringify({ event, huntId, occurredAt: Date.now() })}\n\n`);
+    const every = (ms, fn) => { timers.push(setInterval(fn, ms)); };
 
-    // Reconnect hint for EventSource-compatible clients, then an immediate ping so a consumer
-    // syncs on connect instead of waiting for the first change.
+    // Reconnect hint for EventSource-compatible clients.
     res.write('retry: 5000\n\n');
-    let last = snapshot(first);
-    send('hunt.changed', id);
+    // A comment line. Keeps an idle proxy from reaping a stream between bonuses.
+    every(STREAM_HEARTBEAT_MS, () => res.write(': heartbeat\n\n'));
+    timers.push(setTimeout(stop, STREAM_MAX_MS));
+    req.on('close', stop);
+    res.on('close', stop);
 
-    tick = setInterval(() => {
+    return { send, stop, every };
+  }
+
+  // ── Tenant discovery stream ─────────────────────────────────────────────────────────────────
+  // The per-hunt stream below cannot announce a hunt that does not exist yet, so a consumer had
+  // to poll the list purely to notice one had STARTED. This is that signal.
+  //
+  // DELIBERATELY COARSE, and the docs say so. Change detection here diffs a cheap per-hunt digest
+  // — live set membership, bonus count, last-changed stamp, category — instead of serializing and
+  // hashing every hunt in the community once a second, which is what the per-hunt stream does for
+  // one hunt. So an edit that moves nothing in that digest (a win value corrected on a bonus that
+  // was already counted) produces no event here. That is the right trade for discovery: this
+  // stream tells you WHICH hunts to watch, and /hunts/{id}/stream tells you what changed in one.
+  //
+  // Only the LIVE map is scanned, never `archive`. A hunt leaving the live set is `hunt.ended`,
+  // which is the same information at a fraction of the cost — the archive grows without bound and
+  // re-scanning it every second per connection would make the tick cost track total history.
+  //
+  // MUST be registered before `/hunts/:id`, or that route matches with id = "stream" and answers
+  // 404 not_found — which is exactly what an integrator reported before this existed.
+  router.get('/api/public/v1/hunts/stream', requireApiFeature('developer_api'), allowParams(), (req, res) => {
+    const tid = req.apiTenantId;
+
+    // Mirrors the `status=live` branch of the list endpoint, so "on this stream" and "in that
+    // response" mean the same thing. Keep the two in step by hand, as that handler already notes.
+    const liveDigest = () => {
+      const out = new Map();
+      for (const k of Object.keys(hunts)) {
+        const h = hunts[k];
+        if (!h || !h.huntId || tenantOf(h) !== tid) continue;
+        if (!h.isLive || !huntHasContent(h) || huntCompleted(h)) continue;
+        out.set(h.huntId, `${(h.bonuses || []).length}|${serializers.lastChangedAt(h) || ''}|${huntCategoryOf(h) || ''}`);
+      }
+      return out;
+    };
+
+    const s = beginStream(req, res, tid);
+    if (!s) return;
+
+    let prev = liveDigest();
+    // Sync on connect: one ping per currently-live hunt, so a consumer learns the present set
+    // without a list call. `hunt.changed` rather than `hunt.started` — these did not just start,
+    // and claiming they did would put a false "hunt started" on someone's board at reconnect.
+    for (const id of prev.keys()) s.send('hunt.changed', id);
+
+    s.every(STREAM_TICK_MS, () => {
+      const now = liveDigest();
+      for (const [id, sig] of now) {
+        if (!prev.has(id)) s.send('hunt.started', id);
+        else if (prev.get(id) !== sig) s.send('hunt.changed', id);
+      }
+      // Left the live set: ended, archived, reaped or deleted. The consumer stops watching it and
+      // reads the final state from GET /hunts/{id}, which still serves it from the archive.
+      for (const id of prev.keys()) if (!now.has(id)) s.send('hunt.ended', id);
+      prev = now;
+    });
+  });
+
+  router.get('/api/public/v1/hunts/:id', requireApiFeature('developer_api'), allowParams(), (req, res) => {
+    const tid = req.apiTenantId, id = req.params.id;
+    const found = findHunt(hunts, archive, tenantOf, id, tid);
+    if (!found) return res.status(404).json({ error: { code: 'not_found', message: 'Hunt not found' } });
+    return sendRevalidatable(req, res, { data: serializers.publicHunt(found) });
+  });
+
+  router.get('/api/public/v1/hunts/:id/stream', requireApiFeature('developer_api'), allowParams(), (req, res) => {
+    const tid = req.apiTenantId, id = req.params.id;
+    const first = findHunt(hunts, archive, tenantOf, id, tid);
+    if (!first) return res.status(404).json({ error: { code: 'not_found', message: 'Hunt not found' } });
+
+    const s = beginStream(req, res, tid);
+    if (!s) return;
+
+    const snapshot = h => etagOf(JSON.stringify(serializers.publicHunt(h)));
+    // An immediate ping so a consumer syncs on connect instead of waiting for the first change.
+    let last = snapshot(first);
+    s.send('hunt.changed', id);
+
+    s.every(STREAM_TICK_MS, () => {
       const h = findHunt(hunts, archive, tenantOf, id, tid);
       // Deleted by an admin, or reaped by the janitor. Say so once and close rather than
       // silently going quiet, which a consumer cannot distinguish from an idle hunt.
-      if (!h) { send('hunt.gone', id); return stop(); }
+      if (!h) { s.send('hunt.gone', id); return s.stop(); }
       const now = snapshot(h);
       if (now === last) return;
       last = now;
-      send('hunt.changed', id);
-    }, STREAM_TICK_MS);
-
-    // A comment line. Keeps an idle proxy from reaping a stream between bonuses.
-    beat = setInterval(() => res.write(': heartbeat\n\n'), STREAM_HEARTBEAT_MS);
-    life = setTimeout(stop, STREAM_MAX_MS);
-
-    req.on('close', stop);
-    res.on('close', stop);
+      s.send('hunt.changed', id);
+    });
   });
 
   // Write a completed hunt. FOUR independent gates, all of which must pass:
