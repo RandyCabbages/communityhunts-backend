@@ -17,6 +17,7 @@ const { sanitizePayouts } = require('../lib/payouts');
 const { sanitizeChases } = require('../lib/chases');
 const { sanitizeTitle } = require('../lib/huntTitle');
 const makeSharedHunts = require('../lib/sharedHunts');
+const { sanitizeHuntMeta } = require('../lib/huntKinds');
 
 // Audit summaries name the hunt, not its key: these are SHARED hunts, so `targetId` is the fixed
 // key (`__tenant_hunt__:<tenant>`) rather than a user id, and a raw key reads as gibberish in the log.
@@ -201,6 +202,10 @@ module.exports = function modHuntRoutes(deps) {
     // Ending Balance (tenant hunt page only): once set, the frontend uses it as the authoritative
     // total winnings. null clears it back to the summed-bonus-wins behavior.
     if (endingBalance !== undefined) hunts[key].endingBalance = endingBalance;
+    // Hunt metadata (kind, tournament, plan, pull list). sanitizeHuntMeta returns ONLY the keys
+    // present in the body, so a partial save cannot blank a field the caller never mentioned —
+    // the same contract as every `!== undefined` guard above.
+    Object.assign(hunts[key], sanitizeHuntMeta(req.body));
     hunts[key].huntType = 'solo';
     touch(key);
     persistHunts();
