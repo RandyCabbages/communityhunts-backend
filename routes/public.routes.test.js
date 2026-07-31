@@ -432,3 +432,93 @@ test('GET /me revalidates and rejects an unknown param', async () => {
     assert.strictEqual((await r3.json()).error.code, 'unknown_param');
   });
 });
+
+// ── tenant discovery stream ───────────────────────────────────────────────────────────────────
+// The per-hunt stream cannot announce a hunt that does not exist yet, so consumers polled the list
+// purely to notice one had started. This is that signal — deliberately coarse: it says WHICH hunts
+// to watch, not what changed inside one.
+
+test('GET /hunts/stream is the discovery stream, NOT a hunt with the id "stream"', async () => {
+  // Route order is the whole test. Registered after /hunts/:id, this path matches that route with
+  // id = "stream" and answers 404 not_found — the exact symptom reported before it existed.
+  await withServer(makeApp({ hunts: {} }), async base => {
+    const ac = new AbortController();
+    const r = await fetch(`${base}/api/public/v1/hunts/stream`, { signal: ac.signal });
+    assert.strictEqual(r.status, 200);
+    assert.match(r.headers.get('content-type'), /^text\/event-stream/);
+    ac.abort();
+    await new Promise(resolve => setTimeout(resolve, 50));
+  });
+});
+
+test('the discovery stream syncs the current live set on connect, as hunt.changed', async () => {
+  // Not hunt.started: these did not just start, and saying so would put a false "hunt started" on
+  // a consumer's board every time their connection blipped.
+  const hunts = { '111': liveHunt({ huntId: 'h_a' }) };
+  await withServer(makeApp({ hunts }), async base => {
+    const { events } = await readEvents(base, '/api/public/v1/hunts/stream', 1);
+    assert.strictEqual(events[0].name, 'hunt.changed');
+    assert.strictEqual(events[0].data.huntId, 'h_a');
+  });
+});
+
+test('the discovery stream announces a hunt that did not exist at connect time', async () => {
+  const hunts = { '111': liveHunt({ huntId: 'h_a' }) };
+  await withServer(makeApp({ hunts }), async base => {
+    const { events } = await readEvents(base, '/api/public/v1/hunts/stream', 2,
+      () => { hunts['222'] = liveHunt({ huntId: 'h_new', user: { id: '222', displayName: 'New' } }); });
+    // The one thing the per-hunt stream structurally cannot do.
+    assert.strictEqual(events[1].name, 'hunt.started');
+    assert.strictEqual(events[1].data.huntId, 'h_new');
+  });
+});
+
+test('a hunt leaving the live set is hunt.ended, and the stream stays open', async () => {
+  const hunts = { '111': liveHunt({ huntId: 'h_a' }), '222': liveHunt({ huntId: 'h_b', user: { id: '222', displayName: 'B' } }) };
+  await withServer(makeApp({ hunts }), async base => {
+    const { events } = await readEvents(base, '/api/public/v1/hunts/stream', 3,
+      () => { hunts['111'].isLive = false; });
+    const ended = events.find(e => e.name === 'hunt.ended');
+    assert.ok(ended, 'no hunt.ended emitted');
+    assert.strictEqual(ended.data.huntId, 'h_a');
+  });
+});
+
+test('the discovery stream emits hunt.changed when a bonus is added', async () => {
+  const hunt = liveHunt({ huntId: 'h_a' });
+  await withServer(makeApp({ hunts: { '111': hunt } }), async base => {
+    const { events } = await readEvents(base, '/api/public/v1/hunts/stream', 2,
+      () => { hunt.bonuses.push({ slot: 'Sugar Rush', bet: 2, win: null }); });
+    assert.strictEqual(events[1].name, 'hunt.changed');
+    assert.strictEqual(events[1].data.huntId, 'h_a');
+  });
+});
+
+test('discovery pings carry no hunt state — same thin shape as the per-hunt stream', async () => {
+  const hunts = { '111': liveHunt({ huntId: 'h_a' }) };
+  await withServer(makeApp({ hunts }), async base => {
+    const { events } = await readEvents(base, '/api/public/v1/hunts/stream', 1);
+    // If a ping carried state and one overtook another, a board would jump backwards on stream.
+    assert.deepStrictEqual(Object.keys(events[0].data).sort(), ['event', 'huntId', 'occurredAt']);
+  });
+});
+
+test('another tenant\'s hunt never appears on the discovery stream', async () => {
+  const hunts = {
+    '111': liveHunt({ huntId: 'h_mine' }),
+    '999': liveHunt({ huntId: 'h_theirs', tenantId: 'other', user: { id: '999', displayName: 'Other' } }),
+  };
+  await withServer(makeApp({ hunts }), async base => {
+    const { events } = await readEvents(base, '/api/public/v1/hunts/stream', 1);
+    await new Promise(resolve => setTimeout(resolve, 1200)); // a full tick, in case it leaks late
+    assert.ok(!events.some(e => e.data.huntId === 'h_theirs'), 'cross-tenant hunt leaked');
+  });
+});
+
+test('the discovery stream rejects an unknown param', async () => {
+  await withServer(makeApp({ hunts: {} }), async base => {
+    const r = await get(base, '/api/public/v1/hunts/stream?since=123');
+    assert.strictEqual(r.status, 400);
+    assert.strictEqual((await r.json()).error.code, 'unknown_param');
+  });
+});
