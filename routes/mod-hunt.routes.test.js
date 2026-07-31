@@ -83,7 +83,7 @@ async function call(app, method, pathname, body) {
   try {
     const r = await fetch(`http://127.0.0.1:${server.address().port}${pathname}`, {
       method, headers: { 'Content-Type': 'application/json' },
-      body: method === 'DELETE' ? undefined : JSON.stringify(body === undefined ? {} : body),
+      body: (method === 'DELETE' || method === 'GET') ? undefined : JSON.stringify(body === undefined ? {} : body),
       signal: AbortSignal.timeout(5000),
     });
     return { status: r.status, body: await r.json().catch(() => null) };
@@ -176,4 +176,39 @@ test('affiliate and tenant hunts delete the same way', async () => {
     assert.strictEqual(res.status, 200, `${path} should delete`);
     assert.strictEqual(hunts[key], undefined, `${path} should remove its key`);
   }
+});
+
+test('PUT /api/mod-hunt stores hunt kind and tournament fields', async () => {
+  const hunts = {};
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, io });
+  await call(app, 'PUT', '/api/mod-hunt', {
+    huntKind: 'buy', isTournament: true, tournamentProvider: 'hacksaw',
+    tournamentRound: 'Quarter final 2', targetBonuses: 10, betSize: 500, buySpend: 4200,
+  });
+  const h = await call(app, 'GET', '/api/mod-hunt');
+  assert.strictEqual(h.body.huntKind, 'buy');
+  assert.strictEqual(h.body.isTournament, true);
+  assert.strictEqual(h.body.tournamentProvider, 'hacksaw');
+  assert.strictEqual(h.body.targetBonuses, 10);
+});
+
+test('a save that omits the kind does not clear it', async () => {
+  const hunts = {};
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, io });
+  await call(app, 'PUT', '/api/mod-hunt', { huntKind: 'natty' });
+  await call(app, 'PUT', '/api/mod-hunt', { bonuses: [] });
+  const h = await call(app, 'GET', '/api/mod-hunt');
+  assert.strictEqual(h.body.huntKind, 'natty');
+});
+
+test('an unknown kind is refused silently rather than stored', async () => {
+  const hunts = {};
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, io });
+  await call(app, 'PUT', '/api/mod-hunt', { huntKind: 'natty' });
+  await call(app, 'PUT', '/api/mod-hunt', { huntKind: 'megaways' });
+  const h = await call(app, 'GET', '/api/mod-hunt');
+  assert.strictEqual(h.body.huntKind, 'natty');
 });
