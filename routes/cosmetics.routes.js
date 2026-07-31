@@ -15,7 +15,7 @@ const ITEM_TIERS = {
   card_ashbringer:'free', card_russaldo:'free', card_folo:'free', card_waterbuffalo:'free',
   card_mcflurry:'free', card_tonners:'free', card_itzdec:'free',
   card_briteasyellow:'free', card_mih:'free', card_missingiscool:'free', card_msmoonlight:'free',
-  card_wez:'free', card_blastmynips:'free',
+  card_wez:'free', card_blastmynips:'free', card_shadowstar:'free',
   card_emerald:'basic', card_copper:'basic', card_ocean:'basic',
   card_neon:'pro', card_arctic:'pro', card_toxic:'pro',
   card_holo:'ultimate', card_obsidian:'ultimate', card_celestial:'ultimate',
@@ -97,6 +97,7 @@ const EXCLUSIVE_ITEMS = {
   card_msmoonlight:   '232648350778916864', // Ms Moonlight
   card_wez:           '292040900115300353', // Wezmantooth
   card_blastmynips:   '169602982181076992', // BlastMyNips
+  card_shadowstar:    '612066309622071307', // Shadowstar
 };
 
 const TIER_RANK = { free: 0, basic: 1, pro: 2, ultimate: 3, admin: 99 };
