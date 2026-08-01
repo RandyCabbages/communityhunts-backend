@@ -331,6 +331,13 @@ async function main() {
   // verdicts will be 'unknown'. Iowa: 4,301 of 7,596. Comoros: near zero.
   console.log(`[reconcile] region_blocked=${live.regionBlocked.size} of ${live.liveSlugs.size} listed — these are undecidable by probe from this exit point`);
   console.log(`[reconcile] probed=${verdicts.size} dead=${deadCount} alive=${[...verdicts.values()].filter(v => v === 'alive').length} undecidable=${[...verdicts.values()].filter(v => v === 'unknown').length}`);
+  // Listed but would not start a session. NOT removed — Rainbet's listing decides that — but
+  // reported every run so a real rot problem is visible rather than silent.
+  if (r.advisoryDead.length) {
+    console.log(`[reconcile] ${r.advisoryDead.length} listed entr(ies) would not start a session — KEPT (listing wins), recorded in ${PLAYABILITY_FILE}:`);
+    for (const s of r.advisoryDead.slice(0, 30)) console.log(`[reconcile]   ${s}`);
+    if (r.advisoryDead.length > 30) console.log(`[reconcile]   … and ${r.advisoryDead.length - 30} more`);
+  }
   if (live.failedProviders.length)
     console.log(`[reconcile] providers that did NOT enumerate: ${live.failedProviders.join(', ')}`);
   if (r.skipped)

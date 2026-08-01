@@ -333,9 +333,15 @@ with the job itself, all fixed, none of them safe to undo:
   119, gamomat 92, blueprint 72, push-gaming 61, …) sat in that hole. `providersGateOk` /
   `catalogFloorOk` do NOT catch it — 56 providers and 6,844 games is a healthy-looking crawl that is
   still blind to 11.8% of the catalogue.
-- **Being in the catalogue does not mean the game starts.** `avatarux-majestic-meow` is returned as
-  `type=slots`, `region_blocked=false`, and its player iframe never gets a src. Stage 2 loads the
-  game page and checks for an iframe with a real http(s) src. Verified across two runs: 7/7 correct.
+- **Being in the catalogue does not mean the game starts** — but the listing still decides removal.
+  Stage 2 loads the game page and checks for an iframe with a real http(s) src. **If Rainbet lists a
+  slug it is KEPT, even when the probe gets no session**; `alive` can rescue an unlisted entry,
+  `unknown` defers, and `dead` on a listed entry is advisory only (logged, recorded in
+  `rainbet_playability.json`, never acted on). The asymmetry is deliberate: a probe failure is one
+  observation from one exit point, wrongly keeping a broken game costs a `no-session` the extension
+  already handles, and wrongly removing a live one deletes a game until somebody hand-edits the file.
+  `avatarux-majestic-meow` is therefore deliberately kept despite failing to launch from Iowa, from
+  Comoros and on a live VPN'd session — flipping that is a policy call, not a bug fix.
 
 `region_blocked` is **not** a liveness signal — it reflects the region asked about, and 3 of 5
 hand-confirmed *playable* games are `region_blocked=true`. Those resolve to `unknown`, which can
