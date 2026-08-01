@@ -110,6 +110,30 @@ module.exports = function modHuntRoutes(deps) {
   router.get('/api/affiliate-hunt/activity', requireMod, activityRoute(affiliateHuntKey));
   router.get('/api/vip-hunt/activity', requireMod, activityRoute(vipHuntKey));
 
+  // Who is RUNNING this shared hunt. VIP and Affiliate hunts are owned by the COMMUNITY, so
+  // `user.displayName` is the tenant's host name ("Bean") no matter who opened them — which reads
+  // as flatly wrong on the hub. Stamping the opener's session here gives the card their real name
+  // AND their Discord avatar.
+  //
+  // Server-side on purpose: `runner` is not in the PUT's field whitelist, so a client cannot set
+  // or change it by editing a hunt payload.
+  //
+  // `wasNew` is the honest case — the hunt is being created, so the caller IS the opener. For a
+  // hunt that predates this (already live when it shipped) we backfill ONLY when the saver matches
+  // the `creator_auto` equity row, which carries the opener's display name. Without that guard a
+  // backfill would stamp whichever mod happened to save next, which on a shared hunt is often not
+  // the person running it.
+  function stampRunner(h, req, wasNew) {
+    if (!h || !req.user || (h.runner && h.runner.id)) return;
+    const name = String(req.user.displayName || req.user.username || '').trim();
+    if (!name) return;
+    const me = { id: String(req.user.id), name, avatar: req.user.avatar || null };
+    if (wasNew) { h.runner = me; return; }
+    const row = (h.equity || []).find(e => e && e.id === 'creator_auto');
+    const seeded = row && typeof row.name === 'string' ? row.name.trim().toLowerCase() : '';
+    if (seeded && seeded === name.toLowerCase()) h.runner = me;
+  }
+
   // Apply a { bonuses?, equity?, calls? } patch to the shared hunt through the SAME write path a
   // normal PUT uses, then audit it (so the revert is itself a reversible row). Label per hunt kind.
   function applyRevert(req, key, patch, label) {
@@ -348,7 +372,9 @@ module.exports = function modHuntRoutes(deps) {
     const _before = _h
       ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])], vault: [...(_h.vault || [])] }
       : { bonuses: [], equity: [], calls: [], vault: [] };
+    const _wasNew = !hunts[key];
     if (!hunts[key]) hunts[key] = emptyAffiliateHunt(req.tenant.id);
+    stampRunner(hunts[key], req, _wasNew);
     const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder, title } = req.body;
     // See routes/hunts.routes.js — masked client copies must not clear known identities.
     if (bonuses    !== undefined) hunts[key].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
@@ -378,7 +404,9 @@ module.exports = function modHuntRoutes(deps) {
 
   router.post('/api/affiliate-hunt/golive', requireMod, (req, res) => {
     const key = affiliateHuntKey(req.tenant.id);
+    const _wasNew = !hunts[key];
     if (!hunts[key]) hunts[key] = emptyAffiliateHunt(req.tenant.id);
+    stampRunner(hunts[key], req, _wasNew);
     hunts[key].isLive     = true;
     hunts[key].startedAt  = new Date().toISOString();
     hunts[key].updatedAt  = new Date().toISOString();
@@ -506,7 +534,9 @@ module.exports = function modHuntRoutes(deps) {
     const _before = _h
       ? { bonuses: [...(_h.bonuses || [])], equity: [...(_h.equity || [])], calls: [...(_h.calls || [])], vault: [...(_h.vault || [])] }
       : { bonuses: [], equity: [], calls: [], vault: [] };
+    const _wasNew = !hunts[key];
     if (!hunts[key]) hunts[key] = emptyVipHunt(req.tenant.id);
+    stampRunner(hunts[key], req, _wasNew);
     const { bonuses, equity, gifts, chases, payouts, vault, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot, manualOrder, title } = req.body;
     // See routes/hunts.routes.js — masked client copies must not clear known identities.
     if (bonuses    !== undefined) hunts[key].bonuses    = preserveRowIdentity(_before.bonuses, sanitizeBonusReplayUrls(bonuses), 'callerId');
@@ -536,7 +566,9 @@ module.exports = function modHuntRoutes(deps) {
 
   router.post('/api/vip-hunt/golive', requireMod, (req, res) => {
     const key = vipHuntKey(req.tenant.id);
+    const _wasNew = !hunts[key];
     if (!hunts[key]) hunts[key] = emptyVipHunt(req.tenant.id);
+    stampRunner(hunts[key], req, _wasNew);
     hunts[key].isLive     = true;
     hunts[key].startedAt  = new Date().toISOString();
     hunts[key].updatedAt  = new Date().toISOString();
