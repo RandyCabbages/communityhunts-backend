@@ -212,3 +212,129 @@ test('an unknown kind is refused silently rather than stored', async () => {
   const h = await call(app, 'GET', '/api/mod-hunt');
   assert.strictEqual(h.body.huntKind, 'natty');
 });
+
+// ── The extension writing to a shared hunt (communityhunts-extension, 2026-08-01) ──
+//
+// The extension used to be hardwired to /api/my-hunt and could only ever edit a PERSONAL hunt. It
+// now targets the shared hunts too, which means its save body — huntSaveBody() in
+// communityhunts-extension/src/utils/huntSave.js — hits THESE routes. That body is not identical
+// to the site's: it carries fields this router does not destructure (huntType, publicCalls,
+// publicCallsPin) and omits ones it does (gifts, chases, payouts, currency, title).
+//
+// These tests pin that contract from the backend side. Keep the fixture below in sync with
+// huntSaveBody if it changes — a drift here is a host entering wins into an extension that
+// silently writes nothing.
+
+// Exactly what huntSaveBody() produces, JSON round-tripped (undefined fields drop out, which is
+// how gifts/chases/payouts stay untouched rather than being nulled).
+const extensionSaveBody = (h) => JSON.parse(JSON.stringify({
+  bonuses: h.bonuses,
+  equity: h.equity,
+  vault: h.vault,
+  calls: h.calls,
+  callLimit: h.callLimit,
+  huntMode: h.huntMode,
+  lockTop4: !!h.lockTop4,
+  roundRobin: h.roundRobin,
+  currentSlot: h.currentSlot ?? null,
+  huntType: h.huntType,
+  publicCalls: h.publicCalls,
+  publicCallsPin: h.publicCallsPin ?? null,
+  manualOrder: h.manualOrder ?? false,
+}));
+
+test("the extension's save body lands a win on the VIP hunt", async () => {
+  const hunts = vipHunt();
+  hunts[VIP_KEY].bonuses = [
+    { id: 'b1', slot: 'Gates', bet: 2, win: 400 },
+    { id: 'b2', slot: 'Wanted', bet: 5, win: null },
+  ];
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, io });
+
+  // What the extension does: take server state, apply the win, save the whole body back.
+  const local = JSON.parse(JSON.stringify(hunts[VIP_KEY]));
+  local.bonuses[1].win = 500;
+
+  const res = await call(app, 'PUT', '/api/vip-hunt', extensionSaveBody(local));
+  assert.strictEqual(res.status, 200);
+
+  const after = await call(app, 'GET', '/api/vip-hunt');
+  assert.strictEqual(after.body.bonuses[1].win, 500, 'the win must persist');
+  assert.strictEqual(after.body.bonuses[0].win, 400, 'the untouched bonus must survive');
+});
+
+// The extension sends huntType (it means it for a personal hunt, where solo/community/vip is a real
+// per-hunt field). On a shared hunt the route hardcodes it — so an extension save can never
+// re-label a VIP hunt as something else.
+test("the extension's huntType cannot re-label a shared VIP hunt", async () => {
+  const hunts = vipHunt();
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, io });
+
+  const local = JSON.parse(JSON.stringify(hunts[VIP_KEY]));
+  local.huntType = 'solo'; // what a stale extension copy could carry over from a personal hunt
+
+  await call(app, 'PUT', '/api/vip-hunt', extensionSaveBody(local));
+  const after = await call(app, 'GET', '/api/vip-hunt');
+  assert.strictEqual(after.body.huntType, 'vip');
+});
+
+// Vault = base-game wins. huntSaveBody passes it through as-is and deliberately does NOT coerce it
+// to [] — sending [] would make every extension save an authoritative "vault is empty" write and
+// delete entries added on the site.
+test('an extension save does not wipe vault entries added on the site', async () => {
+  const hunts = vipHunt();
+  hunts[VIP_KEY].vault = [{ id: 'v1', amount: 250, note: 'base game' }];
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, io });
+
+  const local = JSON.parse(JSON.stringify(hunts[VIP_KEY]));
+  local.bonuses[0].win = 999;
+
+  await call(app, 'PUT', '/api/vip-hunt', extensionSaveBody(local));
+  const after = await call(app, 'GET', '/api/vip-hunt');
+  assert.strictEqual(after.body.vault.length, 1);
+  assert.strictEqual(after.body.vault[0].amount, 250);
+});
+
+// Equity carries the identities (discordId) that publicHuntView masks out of a viewer's copy. The
+// route re-attaches them via preserveRowIdentity; this pins that an extension save — built from a
+// possibly-masked copy — cannot blank them.
+test('an extension save preserves equity identities it never saw', async () => {
+  const hunts = vipHunt();
+  hunts[VIP_KEY].equity = [
+    { id: 'bean_auto', name: 'Bean', amount: 1000, discordId: '110983319176384512' },
+  ];
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, io });
+
+  // The masked copy the extension could be holding — no discordId.
+  const local = JSON.parse(JSON.stringify(hunts[VIP_KEY]));
+  delete local.equity[0].discordId;
+
+  await call(app, 'PUT', '/api/vip-hunt', extensionSaveBody(local));
+  const after = await call(app, 'GET', '/api/vip-hunt');
+  assert.strictEqual(after.body.equity[0].discordId, '110983319176384512');
+});
+
+// Same contract on the affiliate hunt — the extension targets all three shared hunts, and they are
+// three separate route blocks that have drifted from each other before.
+test("the extension's save body lands a win on the affiliate hunt", async () => {
+  const hunts = { [AFF_KEY]: {
+    user: { id: AFF_KEY, displayName: 'Bean' }, tenantId: 'bean',
+    isLive: true, archivedAt: null, huntType: 'vip',
+    bonuses: [{ id: 'b1', slot: 'Gates', bet: 2, win: null }],
+    equity: [], calls: [],
+  } };
+  const io = wire(hunts, []);
+  const app = appWith({ hunts, io });
+
+  const local = JSON.parse(JSON.stringify(hunts[AFF_KEY]));
+  local.bonuses[0].win = 750;
+
+  const res = await call(app, 'PUT', '/api/affiliate-hunt', extensionSaveBody(local));
+  assert.strictEqual(res.status, 200);
+  const after = await call(app, 'GET', '/api/affiliate-hunt');
+  assert.strictEqual(after.body.bonuses[0].win, 750);
+});
