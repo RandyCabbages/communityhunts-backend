@@ -74,6 +74,8 @@ package.json
 hunts_data.json        ← persistent hunt storage (auto-generated, don't commit)
 slots_cache.json       ← slot thumbnails cache (auto-generated, 24hr refresh)
 rainbet_slots.json     ← auto-generated AND auto-committed by lib/rainbetSlotSync.js
+rainbet_live_names.json  ← live-catalogue snapshot from the reconcile job (gates the slot.report merge)
+rainbet_playability.json ← per-slug "does the game actually launch" history (see below)
 ```
 
 Unit tests sit beside their module as `*.test.js` (`node:test`).
@@ -306,6 +308,39 @@ overdrop:enabled        → master switch changed ({ enabled })
   exactly one disconnect handler per socket. `leave:hunt` only decrements what this socket
   actually watched.
 - **Sockets stay read-only.** Every mutation goes through a `require*` REST route.
+
+## Rainbet Catalogue Reconciliation — presence ≠ playability
+
+`scripts/reconcile_rainbet.js` (+ `lib/rainbetReconcile.js`, `lib/rainbetPlayability.js`).
+**The daily cron is deliberately still disarmed** — see the comment in
+`.github/workflows/reconcile-rainbet-slots.yml` for the three log lines to check before arming.
+
+The 2026-08-01 investigation into two unplayable slugs (`avatarux-majestic-meow`,
+`voltent-wazdan-bell-wizard`) found the job had **never run** in production: no entry carried a
+`missingSince` stamp and `rainbet_live_names.json` had never been generated, which also means
+`passesLiveGate` in `lib/slots.js` has been failing open the whole time. Three things were wrong
+with the job itself, all fixed, none of them safe to undo:
+
+- **Presence is decided by SLUG, never by name.** The games API returns `url` — the exact Rainbet
+  slug. Name matching let a dead slug ride forever on a live same-name twin: 40 entries were in
+  that state (`pragmatic-play-floating-dragon` masked by `…-floating-dragon-holdspin`,
+  `nolimit-gopnik` by `sneaky-slots-gopnik`), across 57 collision groups covering 124 entries.
+- **A provider that did not enumerate cleanly is NOT sweep-eligible.** The crawl used to `break`
+  silently on a non-200, contributing zero live names for that provider — indistinguishable from
+  "everything from them was delisted". The games query for `voltent` returns **HTTP 400 under every
+  parameter combination the API accepts**, and Wazdan ships only under voltent, so the live set held
+  zero Wazdan games. **900 entries across 13 provider tokens** (wazdan 381, isoftbet 140, gameart
+  119, gamomat 92, blueprint 72, push-gaming 61, …) sat in that hole. `providersGateOk` /
+  `catalogFloorOk` do NOT catch it — 56 providers and 6,844 games is a healthy-looking crawl that is
+  still blind to 11.8% of the catalogue.
+- **Being in the catalogue does not mean the game starts.** `avatarux-majestic-meow` is returned as
+  `type=slots`, `region_blocked=false`, and its player iframe never gets a src. Stage 2 loads the
+  game page and checks for an iframe with a real http(s) src. Verified across two runs: 7/7 correct.
+
+`region_blocked` is **not** a liveness signal — it reflects the region asked about (`region=IA`),
+and 3 of 5 hand-confirmed *playable* games are `region_blocked=true`. Those resolve to `unknown`,
+which can never itself cause a removal; that is 56.6% of the catalogue and the reason the
+extension's authenticated `no-session` telemetry is the right long-term source for them.
 
 ## Slot Autocomplete
 
