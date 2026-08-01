@@ -43,6 +43,58 @@ const PROBE_LIMIT = Number(process.env.RAINBET_PROBE_LIMIT || 250);
 const PROVIDERS_URL = 'https://services.rainbet.com/v1/public/providers/list?country=US';
 const GAMES_URL = 'https://services.rainbet.com/v1/public/games/list';
 
+// ── Where we crawl FROM ──────────────────────────────────────────────────────
+// The games API validates its country/region against the caller's actual geo: from an
+// Iowa IP, `country=US&region=IA` is the ONLY combination that answers — NJ, bare US, CA,
+// GB and no-params all return HTTP 400. So the old hardcoded IA was never a choice, it was
+// a description of one developer's location, and it would 400 from anywhere else
+// (including a GitHub Actions runner, which is why arming the schedule was risky).
+//
+// Iowa is also the WORST vantage to reconcile a global catalogue from. rainbet_slots.json
+// is one shared list serving every tenant's users across many regions, and IA is the most
+// restrictive jurisdiction available: it reports region_blocked for 4,301 of 7,596 entries,
+// all of which are then undecidable. Region-blocking is a per-user display concern, not a
+// question of whether a game belongs in the catalogue — so crawl from the most PERMISSIVE
+// vantage available and let the catalogue be inclusive.
+//
+// Rather than guess the right parameters for whatever exit point we are on, watch the ones
+// Rainbet's own frontend uses on the page we just loaded, and reuse those verbatim.
+// RAINBET_API_PARAMS overrides (e.g. "country=CA"); the IA default is the last resort.
+const DEFAULT_API_PARAMS = process.env.RAINBET_API_PARAMS || 'country=US&region=IA';
+
+function watchApiParams(page) {
+  const seen = [];
+  page.on('request', req => {
+    const u = req.url();
+    if (!u.startsWith(GAMES_URL)) return;
+    try {
+      const q = new URL(u).searchParams;
+      const country = q.get('country');
+      if (!country) return;
+      const region = q.get('region');
+      const params = region ? `country=${country}&region=${region}` : `country=${country}`;
+      if (!seen.includes(params)) seen.push(params);
+    } catch { /* not a URL we can read — ignore */ }
+  });
+  return () => seen;
+}
+
+// A system-wide VPN (the NordVPN desktop app) needs nothing here — it moves every socket,
+// including this Chromium's. The proxy path exists for CI, where there is no desktop app.
+// Credentials come from the environment and are never read or logged by this script.
+function launchOptions() {
+  const server = process.env.RAINBET_PROXY_SERVER;
+  if (!server) return { headless: HEADLESS };
+  return {
+    headless: HEADLESS,
+    proxy: {
+      server,
+      ...(process.env.RAINBET_PROXY_USERNAME ? { username: process.env.RAINBET_PROXY_USERNAME } : {}),
+      ...(process.env.RAINBET_PROXY_PASSWORD ? { password: process.env.RAINBET_PROXY_PASSWORD } : {}),
+    },
+  };
+}
+
 const HEADLESS = process.env.SCRAPE_HEADLESS !== 'false';
 const CF_TITLE_MARKERS = ['just a moment', 'attention required', 'cloudflare', 'checking your browser'];
 const isCfTitle = t => { const s = (t || '').toLowerCase(); return CF_TITLE_MARKERS.some(m => s.includes(m)); };
@@ -80,7 +132,7 @@ async function clearCloudflare(page) {
 // A provider counts as reachable ONLY if its pagination ran to completion. A partial answer
 // (rate-limited out, cursor abandoned mid-way) is treated exactly like no answer, because a
 // half-enumerated provider looks like a half-delisted one.
-async function enumerateLive(page) {
+async function enumerateLive(page, apiParams = DEFAULT_API_PARAMS) {
   const provRes = await apiGet(page, PROVIDERS_URL);
   const providers = ((provRes.body && (provRes.body.providers || provRes.body)) || [])
     .map(p => p.url).filter(Boolean);
@@ -96,7 +148,7 @@ async function enumerateLive(page) {
     let cursor = null, complete = true;
     const batch = [];
     do {
-      const url = `${GAMES_URL}?provider=${encodeURIComponent(prov)}&country=US&region=IA&limit=64`
+      const url = `${GAMES_URL}?provider=${encodeURIComponent(prov)}&${apiParams}&limit=64`
         + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
       let res = await apiGet(page, url);
       // Aggressive rate limit: back off 90s and retry the same page.
@@ -171,7 +223,7 @@ async function main() {
     if (fs.existsSync(PLAYABILITY_FILE)) history = JSON.parse(fs.readFileSync(PLAYABILITY_FILE, 'utf8')).slugs || {};
   } catch (e) { console.error('[reconcile] could not read playability history:', e.message); }
 
-  const browser = await chromium.launch({ headless: HEADLESS });
+  const browser = await chromium.launch(launchOptions());
   let live, cfCleared = true;
   const verdicts = new Map();
   try {
@@ -182,10 +234,16 @@ async function main() {
       viewport: { width: 1280, height: 900 }, locale: 'en-US', timezoneId: 'America/Chicago',
     });
     const page = await ctx.newPage();
+    const observedParams = watchApiParams(page);   // must be attached before the first load
     if (!(await clearCloudflare(page))) {
       cfCleared = false;
     } else {
-      live = await enumerateLive(page);
+      const observed = observedParams();
+      const apiParams = observed[0] || DEFAULT_API_PARAMS;
+      console.log(observed.length
+        ? `[reconcile] crawling as "${apiParams}" (observed from Rainbet's own requests${observed.length > 1 ? `; also saw ${observed.slice(1).join(', ')}` : ''})`
+        : `[reconcile] crawling as "${apiParams}" (no frontend request observed — falling back)`);
+      live = await enumerateLive(page, apiParams);
 
       // Stage 2 — playability. Only meaningful once the listing crawl is healthy, so it
       // runs behind the same gates the sweep does.
