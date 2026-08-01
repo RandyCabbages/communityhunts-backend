@@ -1,4 +1,5 @@
 const express = require('express');
+const { withCallPriority } = require('../lib/callPriority');
 
 // Share-link routes: a STABLE, per-streamer token resolves to that streamer's current
 // (or most recent) hunt as a public, read-only overview. The token lives in an owner-keyed
@@ -6,7 +7,7 @@ const express = require('express');
 // durable handle for "this streamer's hunt" rather than one ephemeral hunt instance.
 module.exports = (deps) => {
   const { requireAuth, canEditHunt, isEquityMember, hunts, archive, publicHuntView,
-          shareTokens, shareLinks, equippedCardsFor, tenantForHunt } = deps;
+          shareTokens, shareLinks, equippedCardsFor, tenantForHunt, badgeRosterFor } = deps;
   const router = express.Router();
 
   // Mint (or return the existing) stable share token for the caller's own hunt. Editor-gated.
@@ -60,10 +61,11 @@ module.exports = (deps) => {
     // — the ids it needs are exactly what publicHuntView strips — then attached to the masked
     // rows. Anonymous members are excluded inside equippedCardsFor and stay excluded here: a card
     // is a name badge. Cosmetic, so a failure degrades to no cards rather than a broken page.
+    const tenant = tenantForHunt ? tenantForHunt(hunt) : null;
     let cards = {};
     if (equippedCardsFor) {
       try {
-        cards = await equippedCardsFor(hunt, tenantForHunt ? tenantForHunt(hunt) : null) || {};
+        cards = await equippedCardsFor(hunt, tenant) || {};
       } catch (e) { console.error('[share] equipped cards lookup failed -', e && e.message); }
     }
     const pv = publicHuntView(hunt);
@@ -71,7 +73,18 @@ module.exports = (deps) => {
       ? pv.equity.map(e => (e && !e.anonymous) ? { ...e, cosmeticCard: cards[e.id] || null } : e)
       : pv.equity;
 
-    res.json({ hunt: { ...pv, equity, canAddCalls }, frozen: !!hunt.archivedAt, ownerId });
+    // Same raw-hunt resolution as the cards above: mark which calls belong to a badged caller so
+    // the public queue orders them the way the host's tracker does. publicHuntView strips
+    // callerId, so the page cannot derive this itself and its "UP NEXT" drifted from the
+    // streamer's. Cosmetic ordering only — a failure degrades to an unprioritized queue.
+    let calls = pv.calls;
+    if (badgeRosterFor) {
+      try {
+        calls = withCallPriority(pv.calls, hunt.calls, badgeRosterFor(tenant));
+      } catch (e) { console.error('[share] call priority lookup failed -', e && e.message); }
+    }
+
+    res.json({ hunt: { ...pv, equity, calls, canAddCalls }, frozen: !!hunt.archivedAt, ownerId });
   });
 
   return router;
