@@ -10,6 +10,17 @@ on:
   # "newly marked" list against rainbet.com before arming the daily schedule. Uncomment
   # the cron below only once a manual run's marked list is verified as genuine delistings
   # (guards against a systematic games-API/catalog name divergence sweeping a real game).
+  #
+  # STILL DISARMED as of 2026-08-01, deliberately. The job now (a) decides presence by slug
+  # rather than name, (b) refuses to sweep any provider it could not enumerate cleanly, and
+  # (c) confirms a removal by loading the game page and checking the player actually starts.
+  # Before arming, run it once by hand and check three lines in the log:
+  #   - "providers that did NOT enumerate" — voltent 400s persistently, so wazdan should
+  #     appear here; anything else in that list is new and worth understanding first.
+  #   - "held back as not sweep-eligible" — expect ~900 entries across ~13 provider tokens.
+  #   - "DEAD (no session)" — these are the confirmed-unplayable ones; spot-check a few.
+  # A first run marks only; nothing can be swept until a stamp is 3 days old, so arming is
+  # reversible for three days.
   # schedule:
   #   - cron: '0 9 * * *'   # daily ~09:00 UTC; grace period tolerates Actions timing drift
 
@@ -45,13 +56,13 @@ jobs:
 
       - name: Commit & push if catalog changed
         run: |
-          if [ -z "$(git status --porcelain rainbet_slots.json rainbet_live_names.json)" ]; then
+          if [ -z "$(git status --porcelain rainbet_slots.json rainbet_live_names.json rainbet_playability.json)" ]; then
             echo "No changes to commit."
             exit 0
           fi
           git config user.name "rainbet-slots-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add rainbet_slots.json rainbet_live_names.json
+          git add rainbet_slots.json rainbet_live_names.json rainbet_playability.json
           git commit -m "auto: reconcile rainbet catalog ($(date -u +%Y-%m-%d))"
           # The Railway live sync may have pushed a new-releases commit meanwhile.
           git pull --rebase origin main || { echo "rebase failed"; exit 1; }

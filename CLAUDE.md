@@ -74,6 +74,8 @@ package.json
 hunts_data.json        ← persistent hunt storage (auto-generated, don't commit)
 slots_cache.json       ← slot thumbnails cache (auto-generated, 24hr refresh)
 rainbet_slots.json     ← auto-generated AND auto-committed by lib/rainbetSlotSync.js
+rainbet_live_names.json  ← live-catalogue snapshot from the reconcile job (gates the slot.report merge)
+rainbet_playability.json ← per-slug "does the game actually launch" history (see below)
 ```
 
 Unit tests sit beside their module as `*.test.js` (`node:test`).
@@ -306,6 +308,79 @@ overdrop:enabled        → master switch changed ({ enabled })
   exactly one disconnect handler per socket. `leave:hunt` only decrements what this socket
   actually watched.
 - **Sockets stay read-only.** Every mutation goes through a `require*` REST route.
+
+## Rainbet Catalogue Reconciliation — presence ≠ playability
+
+`scripts/reconcile_rainbet.js` (+ `lib/rainbetReconcile.js`, `lib/rainbetPlayability.js`).
+**The daily cron is deliberately still disarmed** — see the comment in
+`.github/workflows/reconcile-rainbet-slots.yml` for the three log lines to check before arming.
+
+The 2026-08-01 investigation into two unplayable slugs (`avatarux-majestic-meow`,
+`voltent-wazdan-bell-wizard`) found the job had **never run** in production: no entry carried a
+`missingSince` stamp and `rainbet_live_names.json` had never been generated, which also means
+`passesLiveGate` in `lib/slots.js` has been failing open the whole time. Three things were wrong
+with the job itself, all fixed, none of them safe to undo:
+
+- **Presence is decided by SLUG, never by name.** The games API returns `url` — the exact Rainbet
+  slug. Name matching let a dead slug ride forever on a live same-name twin: 40 entries were in
+  that state (`pragmatic-play-floating-dragon` masked by `…-floating-dragon-holdspin`,
+  `nolimit-gopnik` by `sneaky-slots-gopnik`), across 57 collision groups covering 124 entries.
+- **A provider that did not enumerate cleanly is NOT sweep-eligible.** The crawl used to `break`
+  silently on a non-200, contributing zero live names for that provider — indistinguishable from
+  "everything from them was delisted". The games query for `voltent` returns **HTTP 400 under every
+  parameter combination the API accepts**, and Wazdan ships only under voltent, so the live set held
+  zero Wazdan games. **900 entries across 13 provider tokens** (wazdan 381, isoftbet 140, gameart
+  119, gamomat 92, blueprint 72, push-gaming 61, …) sat in that hole. `providersGateOk` /
+  `catalogFloorOk` do NOT catch it — 56 providers and 6,844 games is a healthy-looking crawl that is
+  still blind to 11.8% of the catalogue.
+- **Being in the catalogue does not mean the game starts** — but the listing still decides removal.
+  Stage 2 loads the game page and checks for an iframe with a real http(s) src. **If Rainbet lists a
+  slug it is KEPT, even when the probe gets no session**; `alive` can rescue an unlisted entry,
+  `unknown` defers, and `dead` on a listed entry is advisory only (logged, recorded in
+  `rainbet_playability.json`, never acted on). The asymmetry is deliberate: a probe failure is one
+  observation from one exit point, wrongly keeping a broken game costs a `no-session` the extension
+  already handles, and wrongly removing a live one deletes a game until somebody hand-edits the file.
+  `avatarux-majestic-meow` is therefore deliberately kept despite failing to launch from Iowa, from
+  Comoros and on a live VPN'd session — flipping that is a policy call, not a bug fix.
+
+`region_blocked` is **not** a liveness signal — it reflects the region asked about, and 3 of 5
+hand-confirmed *playable* games are `region_blocked=true`. Those resolve to `unknown`, which can
+never itself cause a removal.
+
+### Crawl from a PERMISSIVE vantage — the exit point is a real variable
+
+The games API validates `country`/`region` against the caller's **actual geo**. From the dev
+machine (US/Iowa) `country=US&region=IA` was the only combination that answered — NJ, bare US, CA
+and GB all 400. So the old hardcoded IA was not a choice, it was a description of one location, and
+it would have 400'd from a GitHub Actions runner. The script now **observes the parameters
+Rainbet's own frontend sends** and reuses them (`RAINBET_API_PARAMS` overrides). Two things this
+depends on, both learned the hard way when the exit point first changed:
+
+- The frontend issues its `games/list` call *after* the Cloudflare title clears, so the observation
+  must be awaited, not read. Reading it immediately raced and silently fell back to IA.
+- The providers endpoint takes a country and **rejects a region**, so it cannot reuse the games
+  parameter string verbatim — hence `countryOf()`.
+
+**Iowa is the worst possible vantage for this catalogue** and the numbers are stark. `rainbet_slots.json`
+is a single global list serving every tenant's users, so it should be reconciled from the most
+permissive exit available; region-blocking is a per-user display concern, not a question of
+catalogue membership.
+
+| measured 2026-08-01 | US / Iowa | Comoros (NordVPN desktop) |
+|---|---|---|
+| `hacksaw` games `region_blocked` | 64 of 64 | **0 of 64** |
+| 6 elk-studios `region_blocked` games, launcher boots | 0 of 6 | **6 of 6** |
+| catalogue the probe can adjudicate | 28.5% | ~all listed entries |
+
+Those six elk games score a raw `dead` on page evidence from Iowa and are perfectly alive — the
+`regionBlocked → unknown` guard is the only thing that stops the job condemning 4,301 healthy rows,
+so **do not "optimise" it away**. What does NOT change with the exit point is listing *membership*:
+both vantages produce the identical 230 sweep candidates and 900 held-back entries.
+
+A system-wide VPN (NordVPN desktop) moves the crawl; a **browser-extension VPN does not** — the
+script launches its own Chromium. For CI, `RAINBET_PROXY_SERVER` / `_USERNAME` / `_PASSWORD` are
+read from the environment (never logged); without one, an Actions runner crawls from its own US
+region and most verdicts go back to `unknown`.
 
 ## Slot Autocomplete
 
