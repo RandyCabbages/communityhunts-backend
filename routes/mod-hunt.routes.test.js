@@ -57,6 +57,9 @@ function appWith({ hunts, archive = [], audits = [], io, requireMod = pass, pers
     archiveHunt(h) { archive.push(h); },
     unarchiveHunt() {},
     requireMod,
+    // The board gate is exercised for real in the co-edit block at the bottom of this file;
+    // everything above it predates board editors and only cares about the mod path.
+    requireBoardEditor: () => requireMod,
     modHuntKey: () => MOD_KEY,
     affiliateHuntKey: () => AFF_KEY,
     vipHuntKey: () => VIP_KEY,
@@ -338,3 +341,159 @@ test("the extension's save body lands a win on the affiliate hunt", async () => 
   const after = await call(app, 'GET', '/api/affiliate-hunt');
   assert.strictEqual(after.body.bonuses[0].win, 750);
 });
+
+// ── Board editors: co-edit on the two shared singleton hunts ────────────────
+// Affiliate and VIP have no owner id to hang canEditHunt off, so every route was requireMod.
+// A mod can now invite a named helper to run the BOARD without granting the mod role: five
+// routes per surface open up (GET, PUT, activity, undo, restore) and the other nine — delete,
+// reset, end, reopen, reopen-archived, golive, offline, history, overlay-config — do not.
+//
+// These wire the REAL gates from lib/auth rather than the `pass` stub the suite uses elsewhere:
+// the thing worth pinning is the composition (which gate sits on which route), and a stub gate
+// would pin nothing.
+const auth = require('../lib/auth');
+
+function appWithGates({ hunts, archive = [], audits = [], io, user, persisted = { n: 0 } }) {
+  auth.initAuth({
+    ADMIN_IDS: [], VIP_IDS: [], SESSION_SECRET: 'x', MULTI_TENANT: true,
+    tenants: {
+      isPlatformOwnerId: () => false,
+      isTenantAdmin: () => false,
+      isTenantMod: (u) => !!u && u.id === 'modId',
+      BEAN_TENANT: { id: 'bean' },
+    },
+    admins: { isDbAdmin: () => false },
+    hunts, recordKnownUser() {},
+  });
+  const app = express();
+  app.use(express.json());
+  app.use((req, res, next) => { req.user = user; req.tenant = { id: 'bean' }; next(); });
+  app.use(modHuntRoutes({
+    hunts, archive, io,
+    persistHunts() { persisted.n++; },
+    archiveHunt(h) { archive.push(h); },
+    unarchiveHunt() {},
+    requireMod: auth.requireMod,
+    requireBoardEditor: auth.requireBoardEditor,
+    modHuntKey: () => MOD_KEY,
+    affiliateHuntKey: () => AFF_KEY,
+    vipHuntKey: () => VIP_KEY,
+    tenants: { getTenantBySlug: () => ({ displayName: 'Bean', branding: { hostName: 'Bean' } }) },
+    uid: () => 'uid1',
+    touch() {},
+    publicHuntView: (h) => h,
+    emitHuntUpdate: async () => {},
+    emitToHuntRoom: core.emitToHuntRoom,
+    rejectBadHuntInput: () => false,
+    auditLog: {
+      record() {}, recordHuntChange() {},
+      recordFromReq(req, row) { audits.push(row); },
+      query: async () => ({ rows: [] }), getById: async () => null,
+    },
+    getSettings: async () => ({}), saveSettings: async () => {},
+    persistOverlayConfig: async () => ({}),
+  }));
+  return app;
+}
+
+const MOD = { id: 'modId', displayName: 'A Mod' };
+const HELPER = { id: 'helperId', displayName: 'A Helper' };
+
+const sharedHunt = (key) => ({
+  [key]: {
+    user: { id: key, displayName: 'Bean' }, tenantId: 'bean', huntId: 'h1',
+    isLive: true, archivedAt: null, huntType: 'vip',
+    bonuses: [{ id: 'b1', slot: 'Gates', bet: 2, win: null }],
+    equity: [], calls: [], boardEditors: ['helperId'],
+  },
+});
+
+for (const [label, base, key] of [['affiliate', '/api/affiliate-hunt', AFF_KEY], ['vip', '/api/vip-hunt', VIP_KEY]]) {
+  test(`${label}: a board editor can read the hunt`, async () => {
+    const hunts = sharedHunt(key);
+    const app = appWithGates({ hunts, io: wire(hunts, []), user: HELPER });
+    assert.strictEqual((await call(app, 'GET', base)).status, 200);
+  });
+
+  test(`${label}: a board editor can edit the board`, async () => {
+    const hunts = sharedHunt(key);
+    const app = appWithGates({ hunts, io: wire(hunts, []), user: HELPER });
+    const res = await call(app, 'PUT', base, { bonuses: [{ id: 'b1', slot: 'Gates', bet: 2, win: 750 }] });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(hunts[key].bonuses[0].win, 750);
+  });
+
+  test(`${label}: a board editor can read the activity feed and undo`, async () => {
+    const hunts = sharedHunt(key);
+    const app = appWithGates({ hunts, io: wire(hunts, []), user: HELPER });
+    assert.strictEqual((await call(app, 'GET', `${base}/activity`)).status, 200);
+  });
+
+  test(`${label}: a board editor is refused the destructive + history routes`, async () => {
+    const hunts = sharedHunt(key);
+    const app = appWithGates({ hunts, io: wire(hunts, []), user: HELPER });
+    for (const [method, path] of [
+      ['DELETE', base],
+      ['POST', `${base}/reset`],
+      ['POST', `${base}/end`],
+      ['POST', `${base}/reopen`],
+      ['GET', `${base}/history`],
+      ['PUT', `${base}/overlay-config`],
+    ]) {
+      const res = await call(app, method, path);
+      assert.strictEqual(res.status, 403, `${method} ${path} should be mod-only, got ${res.status}`);
+    }
+  });
+
+  test(`${label}: a stranger is refused the board routes`, async () => {
+    const hunts = sharedHunt(key);
+    const app = appWithGates({ hunts, io: wire(hunts, []), user: { id: 'nobody' } });
+    assert.strictEqual((await call(app, 'GET', base)).status, 403);
+    assert.strictEqual((await call(app, 'PUT', base, { calls: [] })).status, 403);
+  });
+
+  test(`${label}: a mod adds and removes a board editor`, async () => {
+    const hunts = sharedHunt(key);
+    delete hunts[key].boardEditors;
+    const app = appWithGates({ hunts, io: wire(hunts, []), user: MOD });
+
+    const add = await call(app, 'POST', `${base}/editors`, { userId: 'helperId' });
+    assert.strictEqual(add.status, 200);
+    assert.deepStrictEqual(add.body.boardEditors, ['helperId']);
+
+    // Idempotent — inviting twice must not duplicate the entry.
+    const again = await call(app, 'POST', `${base}/editors`, { userId: 'helperId' });
+    assert.deepStrictEqual(again.body.boardEditors, ['helperId']);
+
+    const del = await call(app, 'DELETE', `${base}/editors?id=helperId`);
+    assert.strictEqual(del.status, 200);
+    assert.deepStrictEqual(del.body.boardEditors, []);
+  });
+
+  test(`${label}: a board editor cannot invite anyone else`, async () => {
+    const hunts = sharedHunt(key);
+    const app = appWithGates({ hunts, io: wire(hunts, []), user: HELPER });
+    const res = await call(app, 'POST', `${base}/editors`, { userId: 'friendOfHelper' });
+    assert.strictEqual(res.status, 403);
+    assert.deepStrictEqual(hunts[key].boardEditors, ['helperId']);
+  });
+
+  test(`${label}: inviting into an empty slot 404s — there is no hunt to attach to`, async () => {
+    const hunts = {};
+    const app = appWithGates({ hunts, io: wire(hunts, []), user: MOD });
+    assert.strictEqual((await call(app, 'POST', `${base}/editors`, { userId: 'helperId' })).status, 404);
+  });
+
+  test(`${label}: Start New Hunt clears the board editors`, async () => {
+    const hunts = sharedHunt(key);
+    const app = appWithGates({ hunts, io: wire(hunts, []), user: MOD });
+    assert.strictEqual((await call(app, 'POST', `${base}/reset`)).status, 200);
+    assert.deepStrictEqual(hunts[key].boardEditors || [], []);
+  });
+
+  test(`${label}: a signed-out request is 401, not 403`, async () => {
+    const hunts = sharedHunt(key);
+    const app = appWithGates({ hunts, io: wire(hunts, []), user: null });
+    assert.strictEqual((await call(app, 'GET', base)).status, 401);
+  });
+}

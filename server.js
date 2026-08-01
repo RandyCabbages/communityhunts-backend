@@ -165,7 +165,7 @@ const {
   signToken, verifyToken, guildFlags,
   canEditHunt, reqCanAdminHunt, isEquityMember,
   requireAuth, reqIsAdmin, reqIsVipHost, requireAdmin, requirePlatformAdmin,
-  reqIsMod, requireMod, reqIsTenantAdmin, requireTenantAdmin,
+  reqIsMod, requireMod, requireBoardEditor, reqIsTenantAdmin, requireTenantAdmin,
   resolveTenant,
 } = auth;
 
@@ -487,7 +487,7 @@ app.use(require('./routes/hunts.routes')({
 // Mod hunt + Affiliate hunt — two fixed-key shared hunts (routes/mod-hunt.routes.js).
 app.use(require('./routes/mod-hunt.routes')({
   hunts, archive, io, persistHunts, archiveHunt, unarchiveHunt,
-  requireMod, modHuntKey, affiliateHuntKey, vipHuntKey, tenants,
+  requireMod, requireBoardEditor, modHuntKey, affiliateHuntKey, vipHuntKey, tenants,
   uid, touch, publicHuntView, emitHuntUpdate, emitToHuntRoom, rejectBadHuntInput, auditLog,
   getSettings: settings.getSettings, saveSettings: settings.saveSettings,
   persistOverlayConfig: require('./lib/overlayConfig').persistOverlayConfig,

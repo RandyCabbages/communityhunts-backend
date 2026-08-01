@@ -28,11 +28,21 @@ const VIP_HUNT_LABEL = "the VIP Hunt";
 module.exports = function modHuntRoutes(deps) {
   const {
     hunts, archive, io, persistHunts, archiveHunt, unarchiveHunt,
-    requireMod, modHuntKey, affiliateHuntKey, vipHuntKey, tenants,
+    requireMod, requireBoardEditor, modHuntKey, affiliateHuntKey, vipHuntKey, tenants,
     uid, touch, publicHuntView, emitHuntUpdate, emitToHuntRoom, rejectBadHuntInput,
     auditLog, getSettings, saveSettings, persistOverlayConfig,
   } = deps;
   const router = express.Router();
+
+  // ── Board-editor gates (affiliate + VIP only) ──────────────────────
+  // The BOARD routes of these two admit the mod crew plus anyone a mod has invited to co-run
+  // this specific hunt (lib/auth.js requireBoardEditor, reading `boardEditors` off the hunt).
+  // Everything destructive or historical below stays on plain requireMod — see the editors
+  // routes at the bottom of this file for the full split and why.
+  //
+  // Bean's tenant hunt (modHuntKey) is deliberately NOT in this list: it has no co-edit yet.
+  const affiliateBoard = requireBoardEditor(affiliateHuntKey);
+  const vipBoard       = requireBoardEditor(vipHuntKey);
 
   // ── Delete a shared hunt ───────────────────────────────────────────
   // Removes the singleton key OUTRIGHT. These three keys were previously un-removable: /reset
@@ -107,8 +117,8 @@ module.exports = function modHuntRoutes(deps) {
     }
   };
   router.get('/api/mod-hunt/activity', requireMod, activityRoute(modHuntKey));
-  router.get('/api/affiliate-hunt/activity', requireMod, activityRoute(affiliateHuntKey));
-  router.get('/api/vip-hunt/activity', requireMod, activityRoute(vipHuntKey));
+  router.get('/api/affiliate-hunt/activity', affiliateBoard, activityRoute(affiliateHuntKey));
+  router.get('/api/vip-hunt/activity', vipBoard, activityRoute(vipHuntKey));
 
   // Who is RUNNING this shared hunt. VIP and Affiliate hunts are owned by the COMMUNITY, so
   // `user.displayName` is the tenant's host name ("Bean") no matter who opened them — which reads
@@ -175,11 +185,11 @@ module.exports = function modHuntRoutes(deps) {
   };
 
   router.post('/api/mod-hunt/activity/:id/undo', requireMod, undoRoute(modHuntKey, MOD_HUNT_LABEL));
-  router.post('/api/affiliate-hunt/activity/:id/undo', requireMod, undoRoute(affiliateHuntKey, AFFILIATE_HUNT_LABEL));
-  router.post('/api/vip-hunt/activity/:id/undo', requireMod, undoRoute(vipHuntKey, VIP_HUNT_LABEL));
+  router.post('/api/affiliate-hunt/activity/:id/undo', affiliateBoard, undoRoute(affiliateHuntKey, AFFILIATE_HUNT_LABEL));
+  router.post('/api/vip-hunt/activity/:id/undo', vipBoard, undoRoute(vipHuntKey, VIP_HUNT_LABEL));
   router.post('/api/mod-hunt/activity/:id/restore', requireMod, restoreRoute(modHuntKey, MOD_HUNT_LABEL));
-  router.post('/api/affiliate-hunt/activity/:id/restore', requireMod, restoreRoute(affiliateHuntKey, AFFILIATE_HUNT_LABEL));
-  router.post('/api/vip-hunt/activity/:id/restore', requireMod, restoreRoute(vipHuntKey, VIP_HUNT_LABEL));
+  router.post('/api/affiliate-hunt/activity/:id/restore', affiliateBoard, restoreRoute(affiliateHuntKey, AFFILIATE_HUNT_LABEL));
+  router.post('/api/vip-hunt/activity/:id/restore', vipBoard, restoreRoute(vipHuntKey, VIP_HUNT_LABEL));
 
   // Shared with routes/public.routes.js, which opens the same affiliate/VIP runs for the Discord
   // bot. Two copies of "what a fresh affiliate hunt looks like" would drift, and the drifted one
@@ -359,12 +369,12 @@ module.exports = function modHuntRoutes(deps) {
 
   // ── Affiliate hunt — VIP-style hunt run jointly by a community's Mods ──
 
-  router.get('/api/affiliate-hunt', requireMod, (req, res) => {
+  router.get('/api/affiliate-hunt', affiliateBoard, (req, res) => {
     const key = affiliateHuntKey(req.tenant.id);
     res.json(hunts[key] || null);
   });
 
-  router.put('/api/affiliate-hunt', requireMod, (req, res) => {
+  router.put('/api/affiliate-hunt', affiliateBoard, (req, res) => {
     if (rejectBadHuntInput(req, res)) return;
     const key = affiliateHuntKey(req.tenant.id);
     // Snapshot BEFORE any mutation — shared hunt, many mod editors (see the mod-hunt PUT above).
@@ -521,12 +531,12 @@ module.exports = function modHuntRoutes(deps) {
 
   // ── VIP hunt — VIP-style hunt run jointly by a community's Mods ──
 
-  router.get('/api/vip-hunt', requireMod, (req, res) => {
+  router.get('/api/vip-hunt', vipBoard, (req, res) => {
     const key = vipHuntKey(req.tenant.id);
     res.json(hunts[key] || null);
   });
 
-  router.put('/api/vip-hunt', requireMod, (req, res) => {
+  router.put('/api/vip-hunt', vipBoard, (req, res) => {
     if (rejectBadHuntInput(req, res)) return;
     const key = vipHuntKey(req.tenant.id);
     // Snapshot BEFORE any mutation — shared hunt, many mod editors (see the mod-hunt PUT above).
@@ -680,6 +690,59 @@ module.exports = function modHuntRoutes(deps) {
       bonusCount: (h.bonuses || []).length,
     })));
   });
+
+  // ── Board editors: co-edit on the affiliate + VIP hunts ────────────
+  // These two hunts are owned by the COMMUNITY, not a Discord id, so canEditHunt has nothing to
+  // resolve against and every route here was requireMod — "the mod crew, or nobody". A mod can
+  // now invite a named helper to co-run one hunt without granting them the mod role.
+  //
+  // The split: GET / PUT / activity / undo / restore take the board gate above; delete, reset,
+  // end, reopen, reopen-archived, golive, offline, history and overlay-config stay requireMod,
+  // as do these two routes — an invited editor must not be able to invite anyone else.
+  //
+  // Editors are stored in `boardEditors`, deliberately NOT `invitedEditors`: canEditHunt reads
+  // that field and gates the generic /api/hunts/:userId/* family, which would have handed a
+  // board-only helper an unsanitised whole-hunt write plus invite/uninvite and share tokens.
+  //
+  // The list lives ON the hunt, so /reset clearing the slot clears it too — invites last for one
+  // hunt by design. An empty slot therefore has nothing to attach an editor to, hence the 404.
+  const editorsRoute = (keyFor, label) => (req, res) => {
+    const key = keyFor(req.tenant.id);
+    const hunt = hunts[key];
+    if (!hunt) return res.status(404).json({ error: 'No hunt' });
+    // Body on POST, query string on DELETE — fetch/XHR DELETEs routinely carry no body.
+    const raw = req.method === 'DELETE'
+      ? (req.query.id ?? (req.body && req.body.id))
+      : (req.body && (req.body.userId ?? req.body.id));
+    const id = raw == null ? '' : String(raw).trim();
+    if (!id) return res.status(400).json({ error: 'Missing user id' });
+
+    const before = (hunt.boardEditors || []).map(String);
+    // Store as strings: a Discord snowflake exceeds JS's safe integer range, so a numeric id
+    // would silently lose precision and never match its owner again.
+    hunt.boardEditors = req.method === 'DELETE'
+      ? before.filter(e => e !== id)
+      : (before.includes(id) ? before : [...before, id]);   // idempotent — re-inviting is a no-op
+
+    if (hunt.boardEditors.length !== before.length) {
+      touch(key);
+      persistHunts();
+      // Tell open tabs: a revoked editor's board should stop being editable without a reload.
+      emitHuntUpdate(key);
+      auditLog.recordFromReq(req, {
+        category: 'hunt',
+        action: req.method === 'DELETE' ? 'hunt.editor.remove' : 'hunt.editor.add',
+        targetId: key,
+        summary: `${(req.user && req.user.displayName) || 'a mod'} ${req.method === 'DELETE' ? 'removed' : 'added'} a co-editor on ${label}`,
+        detail: { editorId: id },
+      });
+    }
+    res.json({ ok: true, boardEditors: hunt.boardEditors });
+  };
+  router.post('/api/affiliate-hunt/editors', requireMod, editorsRoute(affiliateHuntKey, AFFILIATE_HUNT_LABEL));
+  router.delete('/api/affiliate-hunt/editors', requireMod, editorsRoute(affiliateHuntKey, AFFILIATE_HUNT_LABEL));
+  router.post('/api/vip-hunt/editors', requireMod, editorsRoute(vipHuntKey, VIP_HUNT_LABEL));
+  router.delete('/api/vip-hunt/editors', requireMod, editorsRoute(vipHuntKey, VIP_HUNT_LABEL));
 
   return router;
 };
