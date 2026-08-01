@@ -337,10 +337,44 @@ with the job itself, all fixed, none of them safe to undo:
   `type=slots`, `region_blocked=false`, and its player iframe never gets a src. Stage 2 loads the
   game page and checks for an iframe with a real http(s) src. Verified across two runs: 7/7 correct.
 
-`region_blocked` is **not** a liveness signal — it reflects the region asked about (`region=IA`),
-and 3 of 5 hand-confirmed *playable* games are `region_blocked=true`. Those resolve to `unknown`,
-which can never itself cause a removal; that is 56.6% of the catalogue and the reason the
-extension's authenticated `no-session` telemetry is the right long-term source for them.
+`region_blocked` is **not** a liveness signal — it reflects the region asked about, and 3 of 5
+hand-confirmed *playable* games are `region_blocked=true`. Those resolve to `unknown`, which can
+never itself cause a removal.
+
+### Crawl from a PERMISSIVE vantage — the exit point is a real variable
+
+The games API validates `country`/`region` against the caller's **actual geo**. From the dev
+machine (US/Iowa) `country=US&region=IA` was the only combination that answered — NJ, bare US, CA
+and GB all 400. So the old hardcoded IA was not a choice, it was a description of one location, and
+it would have 400'd from a GitHub Actions runner. The script now **observes the parameters
+Rainbet's own frontend sends** and reuses them (`RAINBET_API_PARAMS` overrides). Two things this
+depends on, both learned the hard way when the exit point first changed:
+
+- The frontend issues its `games/list` call *after* the Cloudflare title clears, so the observation
+  must be awaited, not read. Reading it immediately raced and silently fell back to IA.
+- The providers endpoint takes a country and **rejects a region**, so it cannot reuse the games
+  parameter string verbatim — hence `countryOf()`.
+
+**Iowa is the worst possible vantage for this catalogue** and the numbers are stark. `rainbet_slots.json`
+is a single global list serving every tenant's users, so it should be reconciled from the most
+permissive exit available; region-blocking is a per-user display concern, not a question of
+catalogue membership.
+
+| measured 2026-08-01 | US / Iowa | Comoros (NordVPN desktop) |
+|---|---|---|
+| `hacksaw` games `region_blocked` | 64 of 64 | **0 of 64** |
+| 6 elk-studios `region_blocked` games, launcher boots | 0 of 6 | **6 of 6** |
+| catalogue the probe can adjudicate | 28.5% | ~all listed entries |
+
+Those six elk games score a raw `dead` on page evidence from Iowa and are perfectly alive — the
+`regionBlocked → unknown` guard is the only thing that stops the job condemning 4,301 healthy rows,
+so **do not "optimise" it away**. What does NOT change with the exit point is listing *membership*:
+both vantages produce the identical 230 sweep candidates and 900 held-back entries.
+
+A system-wide VPN (NordVPN desktop) moves the crawl; a **browser-extension VPN does not** — the
+script launches its own Chromium. For CI, `RAINBET_PROXY_SERVER` / `_USERNAME` / `_PASSWORD` are
+read from the environment (never logged); without one, an Actions runner crawls from its own US
+region and most verdicts go back to `unknown`.
 
 ## Slot Autocomplete
 

@@ -40,7 +40,7 @@ const PLAYABILITY_FILE = path.join(ROOT, 'rainbet_playability.json');
 // How many game pages to load per run. Each costs ~10s, and the job has a 30-minute budget.
 const PROBE_LIMIT = Number(process.env.RAINBET_PROBE_LIMIT || 250);
 
-const PROVIDERS_URL = 'https://services.rainbet.com/v1/public/providers/list?country=US';
+const PROVIDERS_BASE = 'https://services.rainbet.com/v1/public/providers/list';
 const GAMES_URL = 'https://services.rainbet.com/v1/public/games/list';
 
 // ── Where we crawl FROM ──────────────────────────────────────────────────────
@@ -62,6 +62,10 @@ const GAMES_URL = 'https://services.rainbet.com/v1/public/games/list';
 // RAINBET_API_PARAMS overrides (e.g. "country=CA"); the IA default is the last resort.
 const DEFAULT_API_PARAMS = process.env.RAINBET_API_PARAMS || 'country=US&region=IA';
 
+// The listener must be attached before the first navigation, but the frontend issues its
+// games/list call some time AFTER the Cloudflare title clears — reading `seen` immediately
+// raced it and silently fell back to the Iowa default (which then 400s from anywhere else).
+// So this returns a waiter, not a getter.
 function watchApiParams(page) {
   const seen = [];
   page.on('request', req => {
@@ -76,8 +80,19 @@ function watchApiParams(page) {
       if (!seen.includes(params)) seen.push(params);
     } catch { /* not a URL we can read — ignore */ }
   });
-  return () => seen;
+  return async ({ timeoutMs = 20000, pollMs = 500 } = {}) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!seen.length && Date.now() < deadline) await sleep(pollMs);
+    return seen;
+  };
 }
+
+// The providers endpoint takes a country and rejects a region, so it cannot reuse the games
+// parameter string verbatim.
+const countryOf = params => {
+  const m = /(?:^|&)country=([^&]*)/.exec(params || '');
+  return m ? m[1] : 'US';
+};
 
 // A system-wide VPN (the NordVPN desktop app) needs nothing here — it moves every socket,
 // including this Chromium's. The proxy path exists for CI, where there is no desktop app.
@@ -133,7 +148,7 @@ async function clearCloudflare(page) {
 // (rate-limited out, cursor abandoned mid-way) is treated exactly like no answer, because a
 // half-enumerated provider looks like a half-delisted one.
 async function enumerateLive(page, apiParams = DEFAULT_API_PARAMS) {
-  const provRes = await apiGet(page, PROVIDERS_URL);
+  const provRes = await apiGet(page, `${PROVIDERS_BASE}?country=${encodeURIComponent(countryOf(apiParams))}`);
   const providers = ((provRes.body && (provRes.body.providers || provRes.body)) || [])
     .map(p => p.url).filter(Boolean);
 
@@ -234,11 +249,11 @@ async function main() {
       viewport: { width: 1280, height: 900 }, locale: 'en-US', timezoneId: 'America/Chicago',
     });
     const page = await ctx.newPage();
-    const observedParams = watchApiParams(page);   // must be attached before the first load
+    const awaitObservedParams = watchApiParams(page);   // attach before the first load
     if (!(await clearCloudflare(page))) {
       cfCleared = false;
     } else {
-      const observed = observedParams();
+      const observed = await awaitObservedParams();
       const apiParams = observed[0] || DEFAULT_API_PARAMS;
       console.log(observed.length
         ? `[reconcile] crawling as "${apiParams}" (observed from Rainbet's own requests${observed.length > 1 ? `; also saw ${observed.slice(1).join(', ')}` : ''})`
@@ -311,6 +326,10 @@ async function main() {
 
   const deadCount = [...verdicts.values()].filter(v => v === 'dead').length;
   console.log(`[reconcile] providers=${live.providerCount} games=${live.gameCount} liveSlugs=${live.liveSlugs.size} | marked=${r.marked} cleared=${r.cleared} swept=${r.swept} skipped=${r.skipped}`);
+  // The single number that decides how much of the catalogue the playability probe can even
+  // adjudicate — a high count means we are crawling from a restrictive jurisdiction and most
+  // verdicts will be 'unknown'. Iowa: 4,301 of 7,596. Comoros: near zero.
+  console.log(`[reconcile] region_blocked=${live.regionBlocked.size} of ${live.liveSlugs.size} listed — these are undecidable by probe from this exit point`);
   console.log(`[reconcile] probed=${verdicts.size} dead=${deadCount} alive=${[...verdicts.values()].filter(v => v === 'alive').length} undecidable=${[...verdicts.values()].filter(v => v === 'unknown').length}`);
   if (live.failedProviders.length)
     console.log(`[reconcile] providers that did NOT enumerate: ${live.failedProviders.join(', ')}`);
