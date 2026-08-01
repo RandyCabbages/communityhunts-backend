@@ -650,6 +650,14 @@ app.use(require('./routes/share.routes')({
   // HUNT, not req.tenant — a share link is opened by outsiders and may carry no slug at all.
   equippedCardsFor: require('./lib/shareCards').equippedCardsFor,
   tenantForHunt: h => tenants.getTenantBySlug(huntsCore.tenantOf(h)) || tenants.BEAN_TENANT,
+  // The badge roster for that tenant — the same four sources GET /api/badges publishes. Lets the
+  // public share page order badged callers the way the host's tracker does (lib/callPriority.js).
+  badgeRosterFor: t => ({
+    owners: tenants.PLATFORM_OWNER_IDS || [],
+    king: (t && t.hostDiscordId) || null,
+    mods: (t && t.modIds) || [],
+    supporters: supporters.getSupporterIds(),
+  }),
 }));
 
 // ── Stale-hunt janitor ─────────────────────────────────────────────
