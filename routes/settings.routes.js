@@ -50,13 +50,25 @@ module.exports = function settingsRoutes(deps) {
     res.json(s);
   });
 
-  // GET /api/my-stats — the caller's own all-time hunt stats for the active tenant.
+  // GET /api/my-stats — the caller's own all-time hunt stats.
+  //
+  // Defaults to the ACTIVE tenant (the account-dropdown StatsBox wants "your stats here").
+  // `?scope=all` unions every community the caller has hunted in, which is what the personal
+  // stats page at /tracker/stats needs — that route carries no tenant, so the default would
+  // quietly resolve to Bean and under-report anyone who hunts in more than one community.
+  //
+  // The no-statsStore branch is the local-dev path (no Postgres); it stays tenant-scoped because
+  // there is only ever one tenant's hunts in memory to compute from.
   router.get('/api/my-stats', requireAuth, async (req, res) => {
     try {
       const tenantId = req.tenant?.id || 'bean';
+      const userId = String(req.user.id);
+      const allTenants = String(req.query.scope || '') === 'all';
       const stats = statsStore
-        ? await statsStore.getUserStats(tenantId, String(req.user.id))
-        : computeUserHuntStats(rawTenantHunts(tenantId), String(req.user.id));
+        ? (allTenants
+          ? await statsStore.getUserStatsAllTenants(userId)
+          : await statsStore.getUserStats(tenantId, userId))
+        : computeUserHuntStats(rawTenantHunts(tenantId), userId);
       res.json(stats || {});
     } catch (e) {
       console.error('[my-stats] failed:', e.message);
@@ -394,8 +406,13 @@ module.exports = function settingsRoutes(deps) {
         fullExtension: { ...fullExtension, discordVipUndetermined: guildConfigured && !guildRoles },
         cosmetics: (userSettings.cosmetics && typeof userSettings.cosmetics === 'object') ? userSettings.cosmetics : {},
         cosmeticsOwned: Array.isArray(userSettings.cosmeticsOwned) ? userSettings.cosmeticsOwned : [],
+        // The statsStore path builds its own name list inside recomputeUser; this is the
+        // local-dev fallback (no Postgres), which has the handles right here already.
         stats: statsStore ? await statsStore.getUserStats(tenantId, userId)
-                          : computeUserHuntStats(rawTenantHunts(tenantId), userId),
+                          : computeUserHuntStats(rawTenantHunts(tenantId), userId, {
+                            names: [identity.displayName, identity.username,
+                              userSettings.rainbetName, userSettings.twitchName].filter(Boolean),
+                          }),
       });
     } catch (e) {
       console.error('[admin] user profile failed:', e.message);
