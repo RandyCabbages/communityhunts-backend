@@ -144,6 +144,58 @@ test('an invited editor still receives the request list', async () => {
   assert.strictEqual(got(editor, 'calls:request:new').length, 1, 'co-editors run the hunt too');
 });
 
+// The affiliate and VIP hunts belong to the community, so their co-editors live in `boardEditors`
+// and deliberately NOT in `invitedEditors` (lib/auth.js requireBoardEditor — that other list gates
+// a wider set of routes). Nobody is ever the "owner" of a shared hunt either: `hunt.user.id` is the
+// singleton key, which no Discord id equals. So a non-mod helper invited to run the board matched
+// none of the three branches, and the panel these events are the ONLY source for stayed empty for
+// exactly the people the feature exists to invite.
+test('a shared-hunt board editor receives the request list', async () => {
+  const SHARED = '__affiliate_hunt__';
+  const hunts = {
+    [SHARED]: {
+      user: { id: SHARED }, tenantId: 'bean', isLive: true,
+      equity: [], calls: [], bonuses: [], boardEditors: ['helperId'],
+    },
+  };
+  const helper = {
+    id: 's-helper', rooms: new Set([`hunt:${SHARED}`]), received: [],
+    data: { userId: 'helperId', tenantSlug: 'bean' },
+    emit(ev, payload) { this.received.push({ ev, payload }); },
+  };
+  const io = wire(hunts, [helper]);
+
+  const app = appWith({ hunts, callerRef: { current: { id: 'requester', displayName: 'Requester' } }, io });
+  await call(app, 'POST', `/api/hunts/${SHARED}/request-calls`);
+
+  assert.strictEqual(
+    got(helper, 'calls:request:new').length, 1,
+    'an invited board editor runs the shared hunt and must see who asked to call',
+  );
+});
+
+// The other half of the same rule: widening for board editors must not widen for anyone else.
+test('a plain viewer of a shared hunt still sees no request list', async () => {
+  const SHARED = '__affiliate_hunt__';
+  const hunts = {
+    [SHARED]: {
+      user: { id: SHARED }, tenantId: 'bean', isLive: true,
+      equity: [], calls: [], bonuses: [], boardEditors: ['helperId'],
+    },
+  };
+  const viewer = {
+    id: 's-viewer', rooms: new Set([`hunt:${SHARED}`]), received: [],
+    data: { userId: 'randomViewer', tenantSlug: 'bean' },
+    emit(ev, payload) { this.received.push({ ev, payload }); },
+  };
+  const io = wire(hunts, [viewer]);
+
+  const app = appWith({ hunts, callerRef: { current: { id: 'requester', displayName: 'Requester' } }, io });
+  await call(app, 'POST', `/api/hunts/${SHARED}/request-calls`);
+
+  assert.deepStrictEqual(got(viewer, 'calls:request:new'), [], 'not an editor, not a mod, not the host');
+});
+
 test('a mod with authority over the hunt still receives the request list', async () => {
   const hunts = liveHunt();
   const mod = makeSocket('s-mod', 'bean', 'modId');

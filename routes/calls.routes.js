@@ -38,11 +38,21 @@ module.exports = function callsRoutes(deps) {
   // `canEdit`): host, admin/mod with authority over this hunt, invited co-editor. That is slightly
   // wider than the REST gate, which omits co-editors — narrowing to REST's exact set would blank
   // the panel for people who legitimately co-run the hunt, and these events are its ONLY source.
+  //
+  // BOTH editor lists, because the two shared surfaces use the other one. On the affiliate and VIP
+  // hunts co-editors live in `boardEditors` and deliberately not in `invitedEditors` (lib/auth.js
+  // requireBoardEditor — that list gates a wider set of routes), and nobody is ever the "owner" of
+  // a shared hunt: `hunt.user.id` is the singleton key, which no Discord id equals. So a non-mod
+  // helper invited to run that board matched none of the branches and got an empty panel, which is
+  // the whole feature for the only people it was built for.
   const seesRequests = (hunt, ownerId) => (s) => {
     const viewerId = s.data && s.data.userId;          // verified handshake token, never client-set
     if (!viewerId) return false;                       // anonymous socket: never
     if (String(viewerId) === String(ownerId)) return true;
-    if ((hunt.invitedEditors || []).includes(String(viewerId))) return true;
+    // ID-only and String()-normalised on both sides, per the repo rule: a display name must never
+    // match, and legacy number-typed entries still compare equal to a real user.id.
+    const editors = [...(hunt.invitedEditors || []), ...(hunt.boardEditors || [])];
+    if (editors.some(e => String(e) === String(viewerId))) return true;
     return typeof isPrivilegedViewer === 'function' ? !!isPrivilegedViewer(viewerId, hunt) : false;
   };
 
