@@ -196,6 +196,50 @@ test('a plain viewer of a shared hunt still sees no request list', async () => {
   assert.deepStrictEqual(got(viewer, 'calls:request:new'), [], 'not an editor, not a mod, not the host');
 });
 
+// Seeing a request you cannot action is half a fix. On a shared hunt the grant/deny gate is
+// `req.user.id !== userId && !reqCanAdminHunt(...)`, and no Discord id equals the singleton key,
+// so a non-mod board editor was refused the button the panel had just shown them.
+//
+// Only `boardEditors` is added here, NOT `invitedEditors`: a normal hunt has a host who can always
+// action its requests, and the REST gate omitting its co-editors is long-standing and deliberate.
+// A shared hunt has no host at all, which is what makes mods-only a dead end rather than a choice.
+const sharedHunt = (key) => ({
+  [key]: {
+    user: { id: key }, tenantId: 'bean', isLive: true,
+    equity: [], calls: [], bonuses: [], boardEditors: ['helperId'],
+  },
+});
+
+test('a shared-hunt board editor can grant a pending request', async () => {
+  const SHARED = '__affiliate_hunt__';
+  const hunts = sharedHunt(SHARED);
+  const io = wire(hunts, []);
+  const callerRef = { current: { id: 'requester', displayName: 'Requester' } };
+  const app = appWith({ hunts, callerRef, io });
+
+  await call(app, 'POST', `/api/hunts/${SHARED}/request-calls`);
+
+  callerRef.current = { id: 'helperId', displayName: 'Helper' };
+  const res = await call(app, 'POST', `/api/hunts/${SHARED}/call-requests/req1`, { action: 'grant' });
+
+  assert.strictEqual(res.status, 200, 'the editor running the board must be able to answer it');
+});
+
+test('a plain viewer of a shared hunt cannot grant a pending request', async () => {
+  const SHARED = '__affiliate_hunt__';
+  const hunts = sharedHunt(SHARED);
+  const io = wire(hunts, []);
+  const callerRef = { current: { id: 'requester', displayName: 'Requester' } };
+  const app = appWith({ hunts, callerRef, io });
+
+  await call(app, 'POST', `/api/hunts/${SHARED}/request-calls`);
+
+  callerRef.current = { id: 'randomViewer', displayName: 'Nobody' };
+  const res = await call(app, 'POST', `/api/hunts/${SHARED}/call-requests/req1`, { action: 'grant' });
+
+  assert.strictEqual(res.status, 403, 'widening for editors must not widen for the audience');
+});
+
 test('a mod with authority over the hunt still receives the request list', async () => {
   const hunts = liveHunt();
   const mod = makeSocket('s-mod', 'bean', 'modId');
