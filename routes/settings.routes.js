@@ -198,6 +198,12 @@ module.exports = function settingsRoutes(deps) {
   // POST /api/admin/grandfather-full-extension — one-time backfill granting Full-extension
   // access to all existing users (run once at Sub-project B launch so updates don't cut
   // anyone off). Idempotent.
+  //
+  // DO NOT RUN THIS AGAIN. It grants a $14.99/mo product to EVERY row in known_users — which is
+  // everyone who has ever signed in, affiliates included. Its output was deliberately revoked
+  // (scripts/revoke-grandfather-full-extension.js); re-running it undoes that in one request and
+  // re-grants everybody, and untangling it a second time means telling real payers apart from
+  // freeloaders again via Stripe. It is kept only because it is referenced by that history.
   router.post('/api/admin/grandfather-full-extension', requireAuth, requirePlatformAdmin, async (req, res) => {
     if (!featureGrants?.grandfatherGrant) return res.status(503).json({ error: 'grants unavailable' });
     try {
