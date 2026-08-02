@@ -384,15 +384,12 @@ module.exports = function settingsRoutes(deps) {
       const asTarget = { user: { id: userId }, tenant };
       const guildRoles = refreshGuildRoles ? await refreshGuildRoles(userId, tenant, { detailed: true }) : null;
       const guildConfigured = !!(tenant?.discordGuildId && tenant?.discordBotToken);
+      // No tenant plan / membership inputs: the Partner "free for ALL your members" source was
+      // removed 2026-08-02, so only roles, an individual sub and grants decide this now.
       const fullExtension = await fullExtensionFor(userId, {
-        tenantPlan:     tenant?.plan,
-        tenantId:       tenant?.id,
         isVipHost:      reqIsVipHost ? reqIsVipHost(asTarget) : false,
         isCommunityMod: reqIsMod ? reqIsMod(asTarget) : false,
         isDiscordVip:   !!guildRoles?.isDiscordVip,
-        // This route already does the live { detailed: true } lookup, so it reads the flag
-        // directly rather than re-deriving guild presence from notGuildMember.
-        isGuildMember:  !!guildRoles?.isGuildMember,
       });
 
       // Redact an anonymous user's rainbet/twitch handles unless the caller is a platform admin or

@@ -406,15 +406,10 @@ async function reqHasFullExtension(req) {
   // code short-circuited the same way; dropping it would add a per-load query for every VIP.
   // Only the boolean is needed here, so the unreported sources cost nothing.
   if (reqIsVipHost(req) || reqIsMod(req) || !!req.user.isDiscordVip) return true;
-  // tenantId as well as tenantPlan: the Partner perk requires membership of THAT tenant, and
-  // req.tenant is only ever "the community this request is scoped to". See computeFullExtension.
-  // isGuildMember comes from the cached session/token flag (guildFlags) — this runs on every
-  // extension load, so it must not add a live Discord call.
-  return (await features.fullExtensionFor(req.user.id, {
-    tenantPlan:    req.tenant?.plan,
-    tenantId:      req.tenant?.id,
-    isGuildMember: !!req.user.isGuildMember,
-  })).access;
+  // Nothing tenant-scoped is passed any more: the Partner "free for ALL your members" perk was
+  // removed 2026-08-02 (see computeFullExtension), so no community plan grants this. What
+  // reaches here is only the individual sub / grant check.
+  return (await features.fullExtensionFor(req.user.id)).access;
 }
 
 // Hard ban gate. A banned user is refused everywhere — website, extension, API, any tenant —
