@@ -38,12 +38,44 @@ module.exports = function callsRoutes(deps) {
   // `canEdit`): host, admin/mod with authority over this hunt, invited co-editor. That is slightly
   // wider than the REST gate, which omits co-editors — narrowing to REST's exact set would blank
   // the panel for people who legitimately co-run the hunt, and these events are its ONLY source.
+  //
+  // BOTH editor lists, because the two shared surfaces use the other one. On the affiliate and VIP
+  // hunts co-editors live in `boardEditors` and deliberately not in `invitedEditors` (lib/auth.js
+  // requireBoardEditor — that list gates a wider set of routes), and nobody is ever the "owner" of
+  // a shared hunt: `hunt.user.id` is the singleton key, which no Discord id equals. So a non-mod
+  // helper invited to run that board matched none of the branches and got an empty panel, which is
+  // the whole feature for the only people it was built for.
   const seesRequests = (hunt, ownerId) => (s) => {
     const viewerId = s.data && s.data.userId;          // verified handshake token, never client-set
     if (!viewerId) return false;                       // anonymous socket: never
     if (String(viewerId) === String(ownerId)) return true;
-    if ((hunt.invitedEditors || []).includes(String(viewerId))) return true;
+    // ID-only and String()-normalised on both sides, per the repo rule: a display name must never
+    // match, and legacy number-typed entries still compare equal to a real user.id.
+    const editors = [...(hunt.invitedEditors || []), ...(hunt.boardEditors || [])];
+    if (editors.some(e => String(e) === String(viewerId))) return true;
     return typeof isPrivilegedViewer === 'function' ? !!isPrivilegedViewer(viewerId, hunt) : false;
+  };
+
+  // May this caller ACT on the pending requests — read the list, grant, deny?
+  //
+  // The REST gate is `host OR admin/mod with authority`, which on a shared hunt resolves to
+  // mods-only: `hunt.user.id` is the singleton key, so no Discord id is ever its host. That left a
+  // board co-editor seeing requests the socket had just delivered and being refused the button.
+  //
+  // `boardEditors` only, deliberately — NOT `invitedEditors`. A normal hunt has a host who can
+  // always answer its own requests, and the REST gate omitting that hunt's co-editors is
+  // long-standing and deliberate. A shared hunt has no host at all, which is what makes mods-only
+  // a dead end rather than a decision. The field is trustworthy: it is written solely by the
+  // requireMod editors routes, and every hunt PUT destructures a fixed allowlist that excludes it,
+  // so it cannot be set from a request body.
+  const canActionRequests = (req, ownerId) => {
+    if (!req.user) return false;
+    if (String(req.user.id) === String(ownerId)) return true;
+    if (reqCanAdminHunt(req, ownerId)) return true;
+    const hunt = hunts[ownerId];
+    // ID-only, String()-normalised on both sides, per the repo rule.
+    const editors = (hunt && hunt.boardEditors) || [];
+    return editors.some(e => String(e) === String(req.user.id));
   };
 
   // See the twin in routes/hunts.routes.js — an editor's save is vetted the same way an owner's is.
@@ -239,7 +271,7 @@ module.exports = function callsRoutes(deps) {
 
   // Get pending requests (hunt owner only)
   router.get('/api/hunts/:userId/call-requests', requireAuth, (req, res) => {
-    if (req.user.id !== req.params.userId && !reqCanAdminHunt(req, req.params.userId)) return res.status(403).json({ error: 'Forbidden' });
+    if (!canActionRequests(req, req.params.userId)) return res.status(403).json({ error: 'Forbidden' });
     res.json(huntCallRequests[req.params.userId] || []);
   });
 
@@ -247,7 +279,7 @@ module.exports = function callsRoutes(deps) {
   router.post('/api/hunts/:userId/call-requests/:requestId', requireAuth, (req, res) => {
     const { userId, requestId } = req.params;
     const { action } = req.body; // 'grant' or 'deny'
-    if (req.user.id !== userId && !reqCanAdminHunt(req, userId)) return res.status(403).json({ error: 'Forbidden' });
+    if (!canActionRequests(req, userId)) return res.status(403).json({ error: 'Forbidden' });
 
     const requests = huntCallRequests[userId] || [];
     const reqItem = requests.find(r => r.id === requestId);
