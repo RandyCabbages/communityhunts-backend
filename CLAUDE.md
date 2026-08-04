@@ -415,9 +415,18 @@ scrape that *did* finish could still lose its work to a deploy landing before th
   undone one layer up when the next container seeds from the bad snapshot.
 - `GITHUB_PAT` is **no longer load-bearing**. Without it the repo snapshot goes stale; the
   catalogue is safe.
-- **`scripts/reconcile_rainbet.js` has NOT been migrated** and still prunes only the file. Harmless
-  today (its cron is commented out), but it must write through the store before it is armed or
-  arming it will change nothing in production. See the note at the top of that script.
+- **`scripts/reconcile_rainbet.js` writes through the store too**, and **fails closed without
+  `DATABASE_URL`** — a file-only run would compute a good sweep, commit it, report success and
+  change nothing in production, which is the quietest way this job can fail. `--file-only` opts
+  into that deliberately. Its workflow passes `secrets.DATABASE_URL`; **that secret must exist
+  before the schedule is armed.**
+- **The reconcile job applies TARGETED deletes/marks, not a whole-catalogue replace.** It crawls
+  for ~20 minutes while the in-process 10-minute sync keeps adding new releases; a replace built
+  from its own read would delete every one of them. Against the file that race was at least loud
+  (a git rebase conflict failed the job) — in Postgres it would have been silent.
+- **`missing_since` is a column, not just a JSON key.** The mark-then-sweep grace is 3 days, so a
+  store that dropped the stamp would have the 10-minute sync erase every mark within 10 minutes and
+  nothing would ever be swept — while looking exactly like "no stale slots found".
 
 ## Hunt Persistence
 
