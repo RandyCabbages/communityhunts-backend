@@ -6,12 +6,18 @@
 // in lib/slots.js). Runs headed under xvfb in GitHub Actions — a bare fetch/curl 403s
 // (Cloudflare), so the API is called from a CF-cleared patchright page via page.evaluate.
 //
-// KNOWN GAP since the catalogue moved into Postgres (2026-08-04, lib/rainbetSlotStore.js): this
-// job still prunes the FILE, and production no longer reads the file except to seed an empty
-// table. So its sweeps would land in the repo and never reach the live catalogue. That costs
-// nothing today — the daily cron is still commented out in the workflow, so the job does not run
-// at all — but it must be given a DATABASE_URL and made to write through the store BEFORE it is
-// armed, or arming it will look like it worked and change nothing.
+// STORAGE (since the catalogue moved into Postgres — lib/rainbetSlotStore.js). Production reads
+// the catalogue from the database, not from rainbet_slots.json, so this job needs DATABASE_URL and
+// writes there; the files it also writes are the repo snapshot. Three rules hold it together:
+//
+//   1. It FAILS CLOSED without a database. A file-only run would compute a perfectly good sweep,
+//      commit it, report success, and change nothing anybody sees — the exact silence this job is
+//      most likely to fail with. Pass --file-only to opt into that deliberately.
+//   2. It reads from whatever it will write to, never one and then the other (the same pairing
+//      rule check_new_slots documents), or the sweep is computed against a stale base.
+//   3. It applies TARGETED deletes and marks, not a whole-catalogue replace. This crawl takes
+//      ~20 minutes and the in-process 10-minute sync keeps adding new releases throughout; a
+//      replace built from our read would delete every one of them.
 //
 // Two stages, because appearing in the catalogue is not the same as being playable:
 //
@@ -38,6 +44,7 @@ const path = require('path');
 const { reconcile, nameKey, providerOf, providersGateOk, catalogFloorOk } = require('../lib/rainbetReconcile');
 const { canonKey } = require('../lib/slotSlugCanon');
 const { classify, selectProbeTargets, mergeHistory } = require('../lib/rainbetPlayability');
+const slotStore = require('../lib/rainbetSlotStore');
 
 const ROOT = process.cwd();
 const SLOTS_FILE = path.join(ROOT, 'rainbet_slots.json');
@@ -235,11 +242,45 @@ async function probeSlug(page, slug) {
   return { navError: lastErr };
 }
 
+// Connect to the catalogue's real home. The pool is kept at module scope so it can be closed on
+// EVERY exit path — this is a script, and an open pool keeps the process (and therefore the
+// Actions job) alive long after the work is done.
+let pgPoolRef = null;
+async function openStore() {
+  if (!process.env.DATABASE_URL) return null;
+  const { Pool } = require('pg');
+  const { makePoolConfig } = require('../lib/pgConfig');
+  pgPoolRef = new Pool(makePoolConfig(process.env.DATABASE_URL));
+  pgPoolRef.on('error', e => console.error('[reconcile] pg pool error:', e.message));
+  await slotStore.initRainbetSlotStore({ pgPool: pgPoolRef });
+  return pgPoolRef;
+}
+
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
+  // Escape hatch for working on the committed snapshot alone (local experiments, regenerating the
+  // repo copy). Never what a scheduled run wants — see the fail-closed check below.
+  const fileOnly = process.argv.includes('--file-only');
   const { chromium } = require('patchright');
 
-  const entries = JSON.parse(fs.readFileSync(SLOTS_FILE, 'utf8'));
+  // FAIL CLOSED. Production reads the catalogue from Postgres, not from this file, so a run
+  // without a database would compute a perfectly good sweep, write it to the repo, report success
+  // — and change nothing that anybody sees. That silence is the exact failure mode this job was
+  // rewritten to avoid, so refuse rather than mislead.
+  const pool = fileOnly ? null : await openStore();
+  if (!pool && !fileOnly) {
+    console.error('[reconcile] DATABASE_URL is not set. The live catalogue lives in Postgres, so a');
+    console.error('[reconcile] file-only run would prune the repo snapshot and leave production');
+    console.error('[reconcile] untouched. Set DATABASE_URL, or pass --file-only if that is really');
+    console.error('[reconcile] what you want.');
+    process.exit(1);
+  }
+
+  // Read from wherever we are going to write. Reading the file while writing the database would
+  // compute the sweep against a stale base — the same pairing rule check_new_slots documents.
+  const stored = pool ? await slotStore.loadAll() : null;
+  const entries = (stored && stored.length) ? stored : JSON.parse(fs.readFileSync(SLOTS_FILE, 'utf8'));
+  console.log(`[reconcile] catalogue source: ${(stored && stored.length) ? `Postgres (${entries.length} entries)` : `${SLOTS_FILE} (${entries.length} entries)`}`);
   let history = {};
   try {
     if (fs.existsSync(PLAYABILITY_FILE)) history = JSON.parse(fs.readFileSync(PLAYABILITY_FILE, 'utf8')).slugs || {};
@@ -353,8 +394,26 @@ async function main() {
   if (r.sweptNames.length) console.log(`[reconcile] swept: ${r.sweptNames.slice(0, 30).join(', ')}${r.sweptNames.length > 30 ? ' …' : ''}`);
 
   if (dryRun) {
-    console.log('[reconcile] --dry-run: no files written');
+    const d = slotStore.diffReconcile(entries, r.entries);
+    console.log(`[reconcile] --dry-run: nothing written (would remove ${d.removed.length}, `
+      + `mark ${d.marked.length}, clear ${d.cleared.length})`);
     return;
+  }
+
+  // Postgres FIRST and awaited — it is the live catalogue; the files below are the repo snapshot.
+  // Applied as targeted deletes/marks rather than a whole-catalogue replace, because this crawl
+  // takes ~20 minutes and the in-process 10-minute sync keeps adding new releases the entire time.
+  // A replace built from our read would delete every one of them. See lib/rainbetSlotStore.js.
+  if (pool) {
+    const diff = slotStore.diffReconcile(entries, r.entries);
+    const applied = await slotStore.applyReconcile(diff);
+    if (applied.skipped) {
+      console.error(`[reconcile] REFUSED by the store (${applied.skipped}) — offered ${applied.offered} `
+        + `removals against a catalogue of ${applied.total}. Nothing written, anywhere.`);
+      process.exitCode = 1;
+      return;   // no file mirror either: a sweep the store rejected must not reach the repo
+    }
+    console.log(`[reconcile] Postgres: removed ${applied.removed}, marked ${applied.marked}, cleared ${applied.cleared}`);
   }
 
   fs.writeFileSync(PLAYABILITY_FILE, JSON.stringify({
@@ -372,4 +431,8 @@ async function main() {
   console.log(`[reconcile] wrote ${SLOTS_FILE} (${r.entries.length} entries) + ${LIVE_NAMES_FILE} (${live.liveNames.size} names) + ${PLAYABILITY_FILE}`);
 }
 
-main().catch(e => { console.error('[reconcile] fatal:', e); process.exit(1); });
+main()
+  // exitCode rather than exit(): the pool still has to be drained, and process.exit() would cut
+  // the finally below off mid-close, leaving the connection to time out server-side.
+  .catch(e => { console.error('[reconcile] fatal:', e); process.exitCode = 1; })
+  .finally(async () => { if (pgPoolRef) await pgPoolRef.end().catch(() => {}); });

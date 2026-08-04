@@ -21,6 +21,10 @@ on:
   #   - "DEAD (no session)" — these are the confirmed-unplayable ones; spot-check a few.
   # A first run marks only; nothing can be swept until a stamp is 3 days old, so arming is
   # reversible for three days.
+  #
+  # ALSO REQUIRED BEFORE ARMING: a repository secret named DATABASE_URL (the Railway Postgres
+  # connection string). The live catalogue is the `rainbet_slots` table, not the committed JSON,
+  # so without it the job exits 1 rather than pruning the snapshot and silently changing nothing.
   # schedule:
   #   - cron: '0 9 * * *'   # daily ~09:00 UTC; grace period tolerates Actions timing drift
 
@@ -52,6 +56,11 @@ jobs:
       - name: Run reconciliation
         env:
           SCRAPE_HEADLESS: 'false'
+          # The live catalogue lives in Postgres; rainbet_slots.json is only the repo snapshot.
+          # The script FAILS CLOSED without this, rather than pruning the snapshot and leaving
+          # production untouched while reporting success. Add the Railway connection string as a
+          # repository secret named DATABASE_URL before arming the schedule below.
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: xvfb-run -a node scripts/reconcile_rainbet.js
 
       - name: Commit & push if catalog changed
