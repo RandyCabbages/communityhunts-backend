@@ -297,14 +297,33 @@ module.exports = function settingsRoutes(deps) {
     const q = String(req.query.q || '').trim().toLowerCase();
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    // Hoisted: it gates BOTH the search predicate below and the per-row redaction further down,
+    // and those two must agree — see the Rainbet clause.
+    const callerIsPlatformAdmin = isPlatformAdmin(req.user);
     try {
       const params = [];
       const conds = [];
       if (q) {
         params.push(`%${q}%`);
-        conds.push(`(LOWER(ku.display_name) LIKE $${params.length}
-                  OR LOWER(ku.username) LIKE $${params.length}
-                  OR ku.user_id LIKE $${params.length})`);
+        const like = `$${params.length}`;
+        // The Rainbet handle is searchable because the box has always promised it is ("Search by
+        // name, Discord ID, or Rainbet handle…") while the SQL only ever matched the three
+        // known_users columns — so typing a handle returned "No users found".
+        //
+        // A HIT leaks as much as the value does, so this clause carries the SAME anonymity gate
+        // the redaction below applies (security audit 2026-07-18 #3). Without it a community mod
+        // could confirm an anonymous user's handle a character at a time while the column they
+        // can actually read still said `null`.
+        let rainbet = `LOWER(us.settings->>'rainbetName') LIKE ${like}`;
+        if (!callerIsPlatformAdmin) {
+          params.push(String(req.user.id));
+          rainbet = `(${rainbet} AND (COALESCE(us.settings->>'anonymous', 'false') <> 'true'
+                                   OR ku.user_id = $${params.length}))`;
+        }
+        conds.push(`(LOWER(ku.display_name) LIKE ${like}
+                  OR LOWER(ku.username) LIKE ${like}
+                  OR ku.user_id LIKE ${like}
+                  OR ${rainbet})`);
       }
       // ?unlinked=1 — rows that are NOT a real Discord login (legacy `manual:<name>` rows).
       // Deliberately opt-in: this list is the one place the junk SHOULD stay visible, because
@@ -326,7 +345,6 @@ module.exports = function settingsRoutes(deps) {
       // Anonymous users' rainbet/twitch handles are redacted from this list unless the caller is a
       // platform admin or the user themselves (security audit 2026-07-18 #3): community mods pass
       // requireAdmin but must not harvest handles of users who marked themselves anonymous.
-      const callerIsPlatformAdmin = isPlatformAdmin(req.user);
       const users = r.rows.map(row => {
         const s = row.settings || {};
         const seeIdentity = !s.anonymous || callerIsPlatformAdmin || String(row.user_id) === String(req.user.id);
@@ -335,6 +353,11 @@ module.exports = function settingsRoutes(deps) {
           avatar: row.avatar, lastSeen: row.last_seen,
           rainbetName: seeIdentity ? (s.rainbetName || null) : null,
           twitchName:  seeIdentity ? (s.twitchName  || null) : null,
+          // The FLAG, never the handle. It lets the UI say "hidden" instead of "not set" — a null
+          // handle otherwise reads identically whether the user has none or opted out of showing
+          // one, and telling an admin "no Rainbet on file" about someone who has one is the bug
+          // this whole change exists to fix.
+          anonymous: !!s.anonymous,
           slotPickCount: Array.isArray(s.preferredSlots) ? s.preferredSlots.length : 0,
         };
       });
@@ -403,6 +426,7 @@ module.exports = function settingsRoutes(deps) {
         ...identity,
         rainbetName: seeIdentity ? (userSettings.rainbetName || null) : null,
         twitchName:  seeIdentity ? (userSettings.twitchName  || null) : null,
+        anonymous: !!userSettings.anonymous, // the flag only — see the list route above
         preferredSlots: Array.isArray(userSettings.preferredSlots) ? userSettings.preferredSlots : [],
         communities,
         featureGrants: featureGrants ? featureGrants.getGrantsForUser(userId) : [],
