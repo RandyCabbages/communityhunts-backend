@@ -73,7 +73,8 @@ package.json
 .env.example           ← config template
 hunts_data.json        ← persistent hunt storage (auto-generated, don't commit)
 slots_cache.json       ← slot thumbnails cache (auto-generated, 24hr refresh)
-rainbet_slots.json     ← auto-generated AND auto-committed by lib/rainbetSlotSync.js
+rainbet_slots.json     ← repo SNAPSHOT + first-boot seed of the slot catalogue, whose real home
+                         is Postgres (lib/rainbetSlotStore.js). Auto-committed by rainbetSlotSync.
 rainbet_live_names.json  ← live-catalogue snapshot from the reconcile job (gates the slot.report merge)
 rainbet_playability.json ← per-slug "does the game actually launch" history (see below)
 ```
@@ -389,6 +390,35 @@ region and most verdicts go back to `unknown`.
 - Returns: `{ name, slug, provider, thumb }` objects
 - Thumbnail URL: `https://slot.report/images/games/{provider}/{slug}.webp`
 
+## Slot Catalogue Persistence — Postgres, not the file (2026-08-04)
+
+The Rainbet catalogue lives in the **`rainbet_slots` table** (`lib/rainbetSlotStore.js`).
+`rainbet_slots.json` is now only the repo-readable snapshot and the seed for a fresh database.
+
+**Why it moved.** The scrape takes **5–7 minutes** and restarts from zero on every deploy, because
+the file is reset by the Railway image. That made the catalogue hostage to deploy timing: across
+**2026-08-01/02**, the two heaviest merge days on record (PRs #160–#167, containers living 2, 5, 9
+and 13 minutes), the catalogue got **zero** updates, while quiet days either side managed 1–2. A
+scrape that *did* finish could still lose its work to a deploy landing before the GitHub commit.
+
+- **Boot is still the file, synchronously** (`lib/slots.js`), so the picker works from the first
+  request; `adoptRainbetSlotStore({ pgPool })` swaps in the durable copy a moment later. If
+  Postgres is unreachable the process simply stays on the file — the old behaviour.
+- **`seedIfEmpty` only fires on an empty table**, so the committed snapshot can never overwrite a
+  live catalogue that has moved ahead of it.
+- **`runCheck` takes injected storage hooks** (`readExisting` / `writeResult`), defaulting to the
+  file for the CLI and GitHub Actions. **They must be passed as a pair** — reading the file while
+  writing the database computes the merge from a stale base, and since the write replaces the whole
+  catalogue that would delete every row the file hasn't caught up with.
+- **`saveAll` has a shrink floor** (50%): a run that would halve the catalogue writes nothing. A
+  rejected write is also NOT mirrored to the file, committed, or made live — otherwise the guard is
+  undone one layer up when the next container seeds from the bad snapshot.
+- `GITHUB_PAT` is **no longer load-bearing**. Without it the repo snapshot goes stale; the
+  catalogue is safe.
+- **`scripts/reconcile_rainbet.js` has NOT been migrated** and still prunes only the file. Harmless
+  today (its cron is commented out), but it must write through the store before it is armed or
+  arming it will change nothing in production. See the note at the top of that script.
+
 ## Hunt Persistence
 
 - Postgres is the durable store. **Hunts live in `hunts_rows` and archived hunts in `archive_rows`,
@@ -538,7 +568,10 @@ ADMIN_IDS                      # comma-separated Discord IDs (defaults to owner)
 ADMINS                         # legacy display-name list (less reliable, kept for compat)
 VIP_HOSTS                      # comma-separated display names for VIP access
 CHROMIUM_PATH                  # optional: path to system Chromium binary (Railway sets via nixpacks)
-GITHUB_PAT                     # repo contents:write PAT — lets lib/rainbetSlotSync.js commit+push rainbet_slots.json
+GITHUB_PAT                     # repo contents:write PAT — lets lib/rainbetSlotSync.js commit+push
+                               # rainbet_slots.json. NO LONGER load-bearing (2026-08-04): the slot
+                               # catalogue lives in Postgres, so without this the repo snapshot goes
+                               # stale but the catalogue itself is safe.
 GITHUB_REPO                    # optional: owner/repo for the push above (defaults to RandyCabbages/communityhunts-backend)
 ```
 
