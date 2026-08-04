@@ -819,6 +819,11 @@ app.use(require('./routes/integrations.routes')({
 // Routes are mounted via routes/slots.routes.js. Pre-fetch the slot list on startup.
 const slots = require('./lib/slots');
 slots.prefetchSlots();
+// Move the Rainbet catalogue onto Postgres, seeding the table from the committed file the first
+// time. Fire-and-forget on purpose: the module already loaded the file synchronously, so the
+// picker works from the first request and this only swaps in the durable copy. A failure logs and
+// leaves the file-backed pool in place.
+slots.adoptRainbetSlotStore({ pgPool }).catch(e => console.error('[slots] adopt failed:', e.message));
 app.use(require('./routes/slots.routes')({ slots, getSlotCallCounts }));
 
 // Checks Rainbet for newly-released slots every 10 min in-process (replaces the

@@ -6,6 +6,13 @@
 // in lib/slots.js). Runs headed under xvfb in GitHub Actions — a bare fetch/curl 403s
 // (Cloudflare), so the API is called from a CF-cleared patchright page via page.evaluate.
 //
+// KNOWN GAP since the catalogue moved into Postgres (2026-08-04, lib/rainbetSlotStore.js): this
+// job still prunes the FILE, and production no longer reads the file except to seed an empty
+// table. So its sweeps would land in the repo and never reach the live catalogue. That costs
+// nothing today — the daily cron is still commented out in the workflow, so the job does not run
+// at all — but it must be given a DATABASE_URL and made to write through the store BEFORE it is
+// armed, or arming it will look like it worked and change nothing.
+//
 // Two stages, because appearing in the catalogue is not the same as being playable:
 //
 //   1. LISTING. Enumerate every provider and match catalogue rows by SLUG. A provider whose

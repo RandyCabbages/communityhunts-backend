@@ -21,6 +21,18 @@ const SLOTS_URL = 'https://rainbet.com/casino/slots';
 const SLOTS_FILE = path.join(process.cwd(), 'rainbet_slots.json');
 const MAX_RETRIES = 3;
 
+// Default storage: the committed file. runCheck() takes overrides — see its header.
+function readSlotsFile() {
+  if (!fs.existsSync(SLOTS_FILE)) {
+    throw new Error(`${SLOTS_FILE} not found — run from backend repo root`);
+  }
+  return JSON.parse(fs.readFileSync(SLOTS_FILE, 'utf8'));
+}
+
+function writeSlotsFile(entries) {
+  fs.writeFileSync(SLOTS_FILE, JSON.stringify(entries, null, 2) + '\n');
+}
+
 // Ghost guard (2026-07-22): confirm a candidate's thumbnail actually resolves before
 // writing it to the file. This stops dead SoftSwiss *guesses* (and thumbless rows) for
 // games Rainbet doesn't carry from entering the catalog — those rendered as missing-thumb
@@ -485,7 +497,15 @@ async function scrapeBrowser() {
 
 // Runs the full scrape + merge + write pipeline once. Returns a summary instead
 // of exiting the process, so it's safe to call from a long-running server.
-async function runCheck() {
+//
+// Storage is INJECTED. Both hooks default to rainbet_slots.json, which is what the CLI and the
+// GitHub Actions run want; the in-process sync on Railway passes Postgres-backed ones instead
+// (lib/rainbetSlotSync.js), because a file the deploy resets could not keep the catalogue alive.
+//
+// They must be passed as a PAIR. Reading the file while writing the database would compute `kept`
+// from a stale base, and since the write replaces the whole catalogue that would delete every row
+// the file has not caught up with yet.
+async function runCheck({ readExisting, writeResult } = {}) {
   // Strategy 1: Rainbet new releases page (targeted, fast)
   const newReleases = await scrapeNewReleases().catch(e => {
     console.error('[new-releases] failed:', e.message);
@@ -539,10 +559,10 @@ async function runCheck() {
   }
   console.log(`[check] got ${games.length} slots total`);
 
-  if (!fs.existsSync(SLOTS_FILE)) {
-    throw new Error(`${SLOTS_FILE} not found — run from backend repo root`);
+  const existing = readExisting ? await readExisting() : readSlotsFile();
+  if (!Array.isArray(existing)) {
+    throw new Error('could not read the existing slot catalogue — refusing to rebuild it from scratch');
   }
-  const existing = JSON.parse(fs.readFileSync(SLOTS_FILE, 'utf8'));
 
   // Entries with a real thumb are done. Null-thumb entries stay eligible to be
   // reconsidered each cycle — the frontend already renders a branded fallback tile
@@ -668,15 +688,19 @@ async function runCheck() {
 
   const changed = addedCount > 0 || upgradedCount > 0 || removed.length > 0;
   if (changed) {
-    fs.writeFileSync(SLOTS_FILE, JSON.stringify(kept, null, 2) + '\n');
+    if (writeResult) await writeResult(kept);
+    else writeSlotsFile(kept);
   } else {
-    console.log('[check] no new slots, upgrades, or removals — DB already up to date');
+    console.log('[check] no new slots, upgrades, or removals — catalogue already up to date');
   }
-  console.log(`[check] done — file now has ${kept.length} slots (was ${existing.length})`);
-  return { changed, added: addedCount, upgraded: upgradedCount, removed: removed.length, total: kept.length };
+  console.log(`[check] done — catalogue now has ${kept.length} slots (was ${existing.length})`);
+  // `entries` rides along so a caller that persists elsewhere doesn't have to re-read what it
+  // just wrote to refresh its own in-memory copy.
+  return { changed, added: addedCount, upgraded: upgradedCount, removed: removed.length,
+    total: kept.length, entries: kept };
 }
 
-module.exports = { runCheck };
+module.exports = { runCheck, readSlotsFile, writeSlotsFile };
 
 if (require.main === module) {
   runCheck().catch(err => {
