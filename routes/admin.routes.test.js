@@ -222,3 +222,105 @@ test('banned-user routes are platform-admin gated (403 for non-platform-admin)',
   const app = banApp({ platformAdmin: false, bansImpl: { listBans: async () => [] } });
   assert.strictEqual((await req(app, 'GET', '/api/admin/banned-users')).status, 403);
 });
+
+// ── Hunt reassignment ───────────────────────────────────────────────
+// The ROUTE wiring: the admin gate, tenant scoping, where the new owner's name comes from, and
+// the durable-stats handoff. Which records move (and every refusal rule) is pinned separately in
+// lib/huntReassign.test.js.
+const WALKER = '110983319176384511';
+const MCFLURRY = '220983319176384522';
+
+const mkHunt = (over = {}) => ({
+  user: { id: WALKER, displayName: 'TheOnlyWalker' }, huntId: 'H1', tenantId: 'bean',
+  startedAt: 'T0', isLive: true, equity: [],
+  bonuses: [{ slot: 'Miami Mayhem', bet: 1.6, win: 24000 }],
+  ...over,
+});
+
+function reassignApp({ hunts, archive = [], admin = true, known, statsStore, spies = {} } = {}) {
+  const app = express();
+  app.use(express.json());
+  app.use((req, res, next) => { req.user = { id: 'admin1', displayName: 'Admin' }; req.tenant = BEAN; next(); });
+  const pass = (req, res, next) => next();
+  const adminGate = admin ? pass : (req, res, next) => res.status(403).json({ error: 'admin' });
+  app.use(adminRoutes({
+    requireAuth: pass, requireAdmin: adminGate, requirePlatformAdmin: pass, requireTenantAdmin: pass,
+    getAllHunts: () => [], getArchivedHunts: () => [], getGotInLog: () => [], getHuntsFullExport: () => [], getHuntStats: () => ({}),
+    pgPool: null, admins: {}, ADMIN_IDS: [],
+    statsStore: statsStore === undefined ? { reassignHuntOwner: async () => ({ ok: true }) } : statsStore,
+    tenants: { BEAN_TENANT: BEAN },
+    hunts, archive, archiveHunt() {}, unarchiveHunt() {},
+    persistArchive() { spies.archivePersisted = true; },
+    persistHunts() { spies.huntsPersisted = true; },
+    emitHubUpdate() { spies.hubEmitted = true; },
+    emitHuntUpdate(id) { (spies.huntEmits = spies.huntEmits || []).push(id); },
+    publicHuntView: h => h, io: { emit() {} }, uid: () => 'x', cleanupStaleHunts() {},
+    subscriptions: {},
+    auditLog: { recordFromReq(_req, e) { spies.audit = e; } },
+    isKnownAccount: known || (async (id) =>
+      (id === MCFLURRY ? { id: MCFLURRY, displayName: 'Mcflurry', avatar: 'mcf.png' } : null)),
+  }));
+  return app;
+}
+
+test('POST /api/admin/hunts/reassign moves the hunt, persists it, and hands off to the stats store', async () => {
+  const hunt = mkHunt();
+  const hunts = { [WALKER]: hunt };
+  const spies = {};
+  const statsCalls = [];
+  const app = reassignApp({
+    hunts, spies,
+    statsStore: { reassignHuntOwner: async (t, k, o) => { statsCalls.push({ t, k, o }); return { ok: true }; } },
+  });
+
+  const res = await req(app, 'POST', '/api/admin/hunts/reassign', { userId: WALKER, newOwnerId: MCFLURRY });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body.movedCurrent, true);
+  assert.strictEqual(res.body.stats, 'moved');
+  assert.strictEqual(hunts[WALKER], undefined, 'old key freed so the row is DELETEd on flush');
+  assert.strictEqual(hunts[MCFLURRY].user.displayName, 'Mcflurry');
+  // The name/avatar are the known_users values, not anything the client sent.
+  assert.deepStrictEqual(statsCalls,
+    [{ t: 'bean', k: 'H1', o: { id: MCFLURRY, displayName: 'Mcflurry', avatar: 'mcf.png' } }]);
+  assert.ok(spies.huntsPersisted, 'hunts flushed');
+  assert.ok(spies.hubEmitted, 'hub refreshed');
+  assert.deepStrictEqual(spies.huntEmits, [MCFLURRY], 'only the new key has a hunt to broadcast');
+  assert.strictEqual(spies.audit.action, 'admin.reassign_hunt');
+  assert.strictEqual(spies.audit.detail.from, WALKER);
+});
+
+test('reassign refuses a new owner with no account and leaves the hunt where it is', async () => {
+  const hunt = mkHunt();
+  const hunts = { [WALKER]: hunt };
+  const app = reassignApp({ hunts, known: async () => null });
+  const res = await req(app, 'POST', '/api/admin/hunts/reassign', { userId: WALKER, newOwnerId: MCFLURRY });
+  assert.strictEqual(res.status, 404);
+  assert.strictEqual(hunts[WALKER], hunt, 'nothing moved');
+  assert.strictEqual(hunts[MCFLURRY], undefined);
+});
+
+test("reassign cannot reach another community's hunt", async () => {
+  const hunts = { [WALKER]: mkHunt({ tenantId: 'trashguy' }) };
+  const app = reassignApp({ hunts });
+  const res = await req(app, 'POST', '/api/admin/hunts/reassign', { userId: WALKER, newOwnerId: MCFLURRY });
+  assert.strictEqual(res.status, 404);
+  assert.strictEqual(hunts[WALKER].user.id, WALKER);
+});
+
+test('reassign reports a failed stats handoff instead of pretending it worked', async () => {
+  const hunts = { [WALKER]: mkHunt() };
+  const app = reassignApp({
+    hunts,
+    statsStore: { reassignHuntOwner: async () => { throw new Error('pg down'); } },
+  });
+  const res = await req(app, 'POST', '/api/admin/hunts/reassign', { userId: WALKER, newOwnerId: MCFLURRY });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body.stats, 'failed');
+  assert.strictEqual(hunts[MCFLURRY].user.id, MCFLURRY, 'the records still moved — only the rollups did not');
+});
+
+test('reassign is admin-gated', async () => {
+  const app = reassignApp({ hunts: {}, admin: false });
+  const res = await req(app, 'POST', '/api/admin/hunts/reassign', { userId: WALKER, newOwnerId: MCFLURRY });
+  assert.strictEqual(res.status, 403);
+});

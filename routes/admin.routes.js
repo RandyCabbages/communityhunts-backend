@@ -20,6 +20,7 @@
 //   DELETE /api/admin/platform-admins/:id                — remove a DB platform admin
 //   POST   /api/admin/hunts/cleanup                      — manual stale-hunt sweep
 //   POST   /api/admin/hunts/retag-currency               — fix a hunt's currency tag (single or all-untagged)
+//   POST   /api/admin/hunts/reassign                     — move a hunt to a different owner
 //   PATCH  /api/admin/hunt-history/:huntKey/currency     — correct a stored hunt's currency (+recompute)
 //   DELETE /api/admin/hunt-history/:huntKey              — delete a stored hunt (+recompute)
 //   POST   /api/admin/hunts/:userId/end                  — force-end + archive a hunt
@@ -29,12 +30,12 @@
 
 const express = require('express');
 const { buildGotInWorkbook, ymdInTz } = require('../lib/gotin-export');
-const { CURRENCIES, inTenant, MOD_HUNT_ID, AFFILIATE_HUNT_ID, VIP_HUNT_ID } = require('../lib/hunts-core');
+const { CURRENCIES, inTenant } = require('../lib/hunts-core');
 // The mod/affiliate/vip hunts are persistent fixed-key shared hunts — always `isLive`, and they
 // stay live (empty) even after a reset. They have their own hub panels, so they must NOT clutter
-// the admin "live hunts" panel (a per-tenant key looks like `__mod_hunt__:<tenant>`, hence prefix).
-const isSharedHuntKey = (id) => typeof id === 'string' &&
-  (id.startsWith(MOD_HUNT_ID) || id.startsWith(AFFILIATE_HUNT_ID) || id.startsWith(VIP_HUNT_ID));
+// the admin "live hunts" panel (a per-tenant key looks like `__vip_hunt__:<tenant>`, hence prefix).
+// Definition lives in lib/huntReassign.js, which needs the same test to refuse reassigning one.
+const { planReassign, applyReassign, isSharedHuntKey } = require('../lib/huntReassign');
 const { computeOverviewMetrics, groupHuntsByCurrency } = require('../lib/adminMetrics');
 const { collectUnlinkedNames, applyNameLinks, unlinkNameLinks } = require('../lib/identityLink');
 const confirmedAliases = require('../lib/confirmedAliases');
@@ -915,6 +916,67 @@ module.exports = function adminRoutes(deps) {
     persistArchive();
     emitHubUpdate(tid); // also persists current hunts
     res.json({ ok: true, updated });
+  });
+
+  // Move a hunt to a different owner. The fix for a hunt that was RUN by one person under another
+  // person's account: every surface that credits a hunt — the Hall of Fame ticket, the hub's
+  // Archived tab, /:slug/hunt/:userId, the stats rollups — reads the same `h.user`, so there is no
+  // per-surface override to correct. The record itself has to move.
+  //
+  // Targeting mirrors retag-currency above so the admin UI can pass the same row identifiers:
+  //   { userId, newOwnerId }              — that user's current hunt
+  //   { userId, archivedAt, newOwnerId }  — one archived snapshot
+  // Either form moves the WHOLE hunt instance; a half-move reverts itself the next time the hunt
+  // is ended (see the header of lib/huntReassign.js).
+  router.post('/api/admin/hunts/reassign', requireAuth, requireAdmin, async (req, res) => {
+    const { userId, archivedAt, newOwnerId } = req.body || {};
+    const tid = req.tenant?.id || 'bean';
+
+    const plan = planReassign({ hunts, archive, tenantId: tid, userId, archivedAt, newOwnerId });
+    if (plan.error) return res.status(plan.status).json({ error: plan.error });
+
+    // Name and avatar come from known_users, never from the request body. The display name is what
+    // every surface renders, so accepting a typed one would let two hunts credit "the same" person
+    // under two spellings, and an id with no known_users row is an account nobody has signed into.
+    const owner = isKnownAccount ? await isKnownAccount(plan.toId) : null;
+    if (!owner) return res.status(404).json({ error: 'No account found for that user — they need to have signed in at least once.' });
+
+    const moved = applyReassign({ hunts, plan, owner });
+    if (moved.movedArchived) persistArchive();
+    if (moved.movedCurrent) {
+      // Re-keyed in `hunts`, so the next flush DELETEs the old row and INSERTs the new one.
+      persistHunts();
+      // Only the NEW key can be broadcast: emitHuntUpdate reads hunts[id] and returns early on a
+      // miss, and the old key is now empty by design. Anyone sitting on the old hunt page reloads
+      // into the redirect — the same thing that already happens after an admin delete.
+      emitHuntUpdate(plan.toId);
+    }
+    emitHubUpdate(tid);
+
+    // Durable stats live in a separate store, so this cannot be one transaction. Best-effort for
+    // the same reason the archiveHunt → recordHunt handoff is: the hunt has already moved
+    // everywhere else, and failing the request would tell the admin nothing happened. The outcome
+    // is returned so the UI can say the names moved but the numbers need another go.
+    let stats = 'skipped';
+    if (statsStore) {
+      try {
+        const r = await statsStore.reassignHuntOwner(tid, plan.statsKey, owner);
+        stats = r && r.ok ? 'moved' : 'no-history';
+      } catch (e) {
+        stats = 'failed';
+        console.error('[admin] reassign hunt stats failed:', e.message);
+      }
+    }
+
+    auditLog.recordFromReq(req, {
+      category: 'admin', action: 'admin.reassign_hunt', targetId: plan.toId,
+      summary: moved.resync
+        ? `${req.user.displayName || 'admin'} re-synced ${owner.displayName || plan.toId}'s hunt stats`
+        : `${req.user.displayName || 'admin'} moved ${plan.fromName}'s hunt to ${owner.displayName || plan.toId}`,
+      detail: { from: plan.fromId, fromName: plan.fromName, to: plan.toId,
+        archivedAt: archivedAt || null, statsKey: plan.statsKey, ...moved, stats },
+    });
+    res.json({ ok: true, ...moved, stats, owner: { id: owner.id, displayName: owner.displayName } });
   });
 
   // Correct a past hunt's currency in the DURABLE stats store (hunt_history) and recompute the
