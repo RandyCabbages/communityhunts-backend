@@ -22275,6 +22275,11 @@
     "thumb": "https://cdn.rainbet.com/slots/Monsters Getaway.png"
   },
   {
+    "rainbetSlug": "popiplay-mummy-x-riches",
+    "name": "Mummy X Riches",
+    "thumb": "https://usercontent.cc/i/s3/popiplay/MummyXRiches.png"
+  },
+  {
     "rainbetSlug": "popiplay-mythos",
     "name": "Mythos",
     "thumb": "https://cdn.rainbet.com/slots/popiplay-mythos.jpg"
@@ -29518,6 +29523,11 @@
     "rainbetSlug": "retro-gaming-777-oktoberfest",
     "name": "777 Oktoberfest",
     "thumb": "https://cdn.rainbet.com/slots/retro-gaming-777-oktoberfest.jpg"
+  },
+  {
+    "rainbetSlug": "retro-gaming-777-sands-of-magic",
+    "name": "777 - Sands Of Magic",
+    "thumb": "https://usercontent.cc/i/s3/spnmnl/777SandsOfMagic.png"
   },
   {
     "rainbetSlug": "retro-gaming-777-santas-fortune",
@@ -38030,13 +38040,8 @@
     "thumb": "https://cdn.rainbet.com/slots/Zeus Treasures.png"
   },
   {
-    "rainbetSlug": "popiplay-mummy-x-riches",
-    "name": "Mummy X Riches",
-    "thumb": "https://usercontent.cc/i/s3/popiplay/MummyXRiches.png"
-  },
-  {
-    "rainbetSlug": "retro-gaming-777-sands-of-magic",
-    "name": "777 - Sands Of Magic",
-    "thumb": "https://usercontent.cc/i/s3/spnmnl/777SandsOfMagic.png"
+    "rainbetSlug": "peter-sons-lucky-caiman",
+    "name": "Lucky Caiman",
+    "thumb": "https://assets.rbgcdn.com/223k2P3/max-w-3840/slots/peter-sons-lucky-caiman.png"
   }
 ]
