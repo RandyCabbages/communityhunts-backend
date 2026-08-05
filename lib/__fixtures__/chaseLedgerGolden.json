@@ -183,6 +183,26 @@
         "plNet": { "alice": 50, "bob": 30, "carol": 20 },
         "totalPaid": 1130
       }
+    },
+    {
+      "name": "all-zero-equity recipients fall back to an even split",
+      "input": {
+        "equity": [
+          { "id": "alice", "name": "Alice", "amount": 500 },
+          { "id": "zed", "name": "Zed", "amount": 0 },
+          { "id": "yan", "name": "Yan", "amount": 0 }
+        ],
+        "gifts": [],
+        "chases": [
+          { "id": "r1", "createdAt": 1, "endBalance": 700, "participants": [{ "id": "alice", "deposit": 0 }], "recipients": ["zed", "yan"] }
+        ],
+        "totalWon": 400
+      },
+      "expect": {
+        "finalPayout": { "alice": 400, "zed": 150, "yan": 150 },
+        "plNet": { "alice": -100, "zed": 150, "yan": 150 },
+        "totalPaid": 700
+      }
     }
   ]
 }
