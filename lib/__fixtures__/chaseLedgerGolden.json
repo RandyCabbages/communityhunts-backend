@@ -62,6 +62,127 @@
         "plNet": { "alice": -250, "bob": -180, "carol": 50 },
         "totalPaid": 620
       }
+    },
+    {
+      "name": "recipients: stake back, profit by equity share, chaser included",
+      "input": {
+        "equity": [
+          { "id": "alice", "name": "Alice", "amount": 500 },
+          { "id": "bob", "name": "Bob", "amount": 300 },
+          { "id": "carol", "name": "Carol", "amount": 200 }
+        ],
+        "gifts": [],
+        "chases": [
+          { "id": "r1", "createdAt": 1, "endBalance": 700, "participants": [{ "id": "alice", "deposit": 0 }], "recipients": ["alice", "bob", "carol"] }
+        ],
+        "totalWon": 400
+      },
+      "expect": {
+        "finalPayout": { "alice": 450, "bob": 270, "carol": 180 },
+        "plNet": { "alice": -50, "bob": -30, "carol": -20 },
+        "totalPaid": 900
+      }
+    },
+    {
+      "name": "empty recipients falls through to the classic by-stake split",
+      "input": {
+        "equity": [
+          { "id": "alice", "name": "Alice", "amount": 500 },
+          { "id": "bob", "name": "Bob", "amount": 300 },
+          { "id": "carol", "name": "Carol", "amount": 200 }
+        ],
+        "gifts": [],
+        "chases": [
+          { "id": "r1", "createdAt": 1, "endBalance": 700, "participants": [{ "id": "alice", "deposit": 0 }, { "id": "bob", "deposit": 0 }], "recipients": [] }
+        ],
+        "totalWon": 400
+      },
+      "expect": {
+        "finalPayout": { "alice": 437.5, "bob": 262.5, "carol": 80 },
+        "plNet": { "alice": -62.5, "bob": -37.5, "carol": -120 },
+        "totalPaid": 780
+      }
+    },
+    {
+      "name": "losing chase with recipients pays nobody but the chasers",
+      "input": {
+        "equity": [
+          { "id": "alice", "name": "Alice", "amount": 500 },
+          { "id": "bob", "name": "Bob", "amount": 300 },
+          { "id": "carol", "name": "Carol", "amount": 200 }
+        ],
+        "gifts": [],
+        "chases": [
+          { "id": "r1", "createdAt": 1, "endBalance": 200, "participants": [{ "id": "alice", "deposit": 0 }, { "id": "bob", "deposit": 0 }], "recipients": ["alice", "bob", "carol"] }
+        ],
+        "totalWon": 400
+      },
+      "expect": {
+        "finalPayout": { "alice": 125, "bob": 75, "carol": 80 },
+        "plNet": { "alice": -375, "bob": -225, "carol": -120 },
+        "totalPaid": 280
+      }
+    },
+    {
+      "name": "unknown recipient id is dropped without disturbing the other shares",
+      "input": {
+        "equity": [
+          { "id": "alice", "name": "Alice", "amount": 500 },
+          { "id": "bob", "name": "Bob", "amount": 300 },
+          { "id": "carol", "name": "Carol", "amount": 200 }
+        ],
+        "gifts": [],
+        "chases": [
+          { "id": "r1", "createdAt": 1, "endBalance": 700, "participants": [{ "id": "alice", "deposit": 0 }], "recipients": ["alice", "bob", "ghost"] }
+        ],
+        "totalWon": 400
+      },
+      "expect": {
+        "finalPayout": { "alice": 512.5, "bob": 307.5, "carol": 80 },
+        "plNet": { "alice": 12.5, "bob": 7.5, "carol": -120 },
+        "totalPaid": 900
+      }
+    },
+    {
+      "name": "equal split is ignored once recipients are present",
+      "input": {
+        "equity": [
+          { "id": "alice", "name": "Alice", "amount": 500 },
+          { "id": "bob", "name": "Bob", "amount": 300 },
+          { "id": "carol", "name": "Carol", "amount": 200 }
+        ],
+        "gifts": [],
+        "chases": [
+          { "id": "r1", "createdAt": 1, "endBalance": 700, "split": "equal", "participants": [{ "id": "alice", "deposit": 0 }, { "id": "bob", "deposit": 0 }], "recipients": ["alice", "bob", "carol"] }
+        ],
+        "totalWon": 400
+      },
+      "expect": {
+        "finalPayout": { "alice": 390, "bob": 234, "carol": 156 },
+        "plNet": { "alice": -110, "bob": -66, "carol": -44 },
+        "totalPaid": 780
+      }
+    },
+    {
+      "name": "two shared rounds, the second re-bases off the first",
+      "input": {
+        "equity": [
+          { "id": "alice", "name": "Alice", "amount": 500 },
+          { "id": "bob", "name": "Bob", "amount": 300 },
+          { "id": "carol", "name": "Carol", "amount": 200 }
+        ],
+        "gifts": [],
+        "chases": [
+          { "id": "r1", "createdAt": 1, "endBalance": 700, "participants": [{ "id": "alice", "deposit": 0 }], "recipients": ["alice", "bob", "carol"] },
+          { "id": "r2", "createdAt": 2, "endBalance": 500, "participants": [{ "id": "bob", "deposit": 30 }], "recipients": ["alice", "bob", "carol"] }
+        ],
+        "totalWon": 400
+      },
+      "expect": {
+        "finalPayout": { "alice": 550, "bob": 360, "carol": 220 },
+        "plNet": { "alice": 50, "bob": 30, "carol": 20 },
+        "totalPaid": 1130
+      }
     }
   ]
 }
