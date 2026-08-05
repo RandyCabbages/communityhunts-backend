@@ -27,7 +27,9 @@ require('dotenv/config');
 const { Pool } = require('pg');
 const makeFxRates = require('../lib/fxRates');
 const makeStatsStore = require('../lib/statsStore');
-const { sumVault } = require('../lib/hunts-core');
+const huntsCore = require('../lib/hunts-core');
+const settings = require('../lib/settings');
+const { sumVault } = huntsCore;
 
 const APPLY = process.argv.includes('--apply');
 const TENANT = 'bean';
@@ -58,6 +60,26 @@ const wonOf = (s) =>
 (async () => {
   const connectionString = process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL;
   const pgPool = new Pool({ connectionString, ssl: { rejectUnauthorized: false } });
+
+  // The stats rollup now stores member NAMES, so the anonymity predicate has to be live in any
+  // process that writes it. hunts-core's default masks nothing — a script that skips this bakes
+  // real names into the cache permanently, at the current version stamp, with no self-heal.
+  // correctHuntCurrency recomputes every participant of a retagged hunt, so it writes rollups.
+  // And it has to fail LOUDLY: the load swallows a pg error and falls back to a file this process
+  // does not have, so a transient failure would arm nothing, log "0 anonymous user(s)" and exit 0.
+  settings.initSettings({ pgPool });
+  const anon = await settings.loadAnonymousUsers();
+  if (!anon.ok) {
+    console.error('[currency] refusing to write rollups: the anonymity set could not be loaded, ' +
+      'so anonymous members would be cached under their real names. Fix the database read and re-run.');
+    process.exit(1);
+  }
+  huntsCore.initHuntsCore({
+    hunts: {}, archive: [], viewers: {}, io: null,
+    isAnonymousUser: settings.isAnonymousUser,
+    shouldMaskIdentity: settings.shouldMaskIdentity,
+  });
+
   const fxRates = makeFxRates({ pgPool });
   const store = makeStatsStore({ pgPool, fxRates });
 

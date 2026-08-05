@@ -25,12 +25,34 @@ const makeFxRates = require('../lib/fxRates');
 const makeStatsStore = require('../lib/statsStore');
 const { planBackfill } = require('../lib/backfillPlan');
 const { makePoolConfig } = require('../lib/pgConfig');
+const settings = require('../lib/settings');
+const huntsCore = require('../lib/hunts-core');
 
 const APPLY = process.argv.includes('--apply');
 
 (async () => {
   if (!process.env.DATABASE_URL) { console.error('[backfill] DATABASE_URL is not set'); process.exit(1); }
   const pgPool = new Pool(makePoolConfig(process.env.DATABASE_URL));
+
+  // The stats rollup now stores member NAMES, so the anonymity predicate has to be live in any
+  // process that writes it. hunts-core's default masks nothing — a script that skips this bakes
+  // real names into the cache permanently, at the current version stamp, with no self-heal.
+  // (recordHunt below refreshes every participant's rollup, so this must precede the store.)
+  // And it has to fail LOUDLY: the load swallows a pg error and falls back to a file this process
+  // does not have, so a transient failure would arm nothing, log "0 anonymous user(s)" and exit 0.
+  settings.initSettings({ pgPool });
+  const anon = await settings.loadAnonymousUsers();
+  if (!anon.ok) {
+    console.error('[backfill] refusing to write rollups: the anonymity set could not be loaded, ' +
+      'so anonymous members would be cached under their real names. Fix the database read and re-run.');
+    process.exit(1);
+  }
+  huntsCore.initHuntsCore({
+    hunts: {}, archive: [], viewers: {}, io: null,
+    isAnonymousUser: settings.isAnonymousUser,
+    shouldMaskIdentity: settings.shouldMaskIdentity,
+  });
+
   const fxRates = makeFxRates({ pgPool });
   const statsStore = makeStatsStore({ pgPool, fxRates });
   await statsStore.ensureTables();
