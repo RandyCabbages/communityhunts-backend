@@ -16,7 +16,7 @@ const ITEM_TIERS = {
   card_mcflurry:'free', card_tonners:'free', card_itzdec:'free',
   card_briteasyellow:'free', card_mih:'free', card_missingiscool:'free', card_msmoonlight:'free',
   card_wez:'free', card_blastmynips:'free', card_shadowstar:'free', card_landlord:'free',
-  card_ranel:'free',
+  card_ranel:'free', card_lukeydx:'free',
   card_emerald:'basic', card_copper:'basic', card_ocean:'basic',
   card_neon:'pro', card_arctic:'pro', card_toxic:'pro',
   card_holo:'ultimate', card_obsidian:'ultimate', card_celestial:'ultimate',
@@ -101,6 +101,7 @@ const EXCLUSIVE_ITEMS = {
   card_shadowstar:    '612066309622071307', // Shadowstar
   card_landlord:      '110983319176384512', // Bean (2nd card, pairs with card_bean)
   card_ranel:         '114175081260777472', // Ranel
+  card_lukeydx:       '305445780775370764', // LukeyDx
 };
 
 const TIER_RANK = { free: 0, basic: 1, pro: 2, ultimate: 3, admin: 99 };
