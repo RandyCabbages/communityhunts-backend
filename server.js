@@ -312,7 +312,9 @@ setInterval(() => confirmedAliases.refresh().catch(e => console.error('[aliases]
 const makeFxRates = require('./lib/fxRates');
 const makeStatsStore = require('./lib/statsStore');
 const fxRates = makeFxRates({ pgPool });
-const statsStore = makeStatsStore({ pgPool, fxRates });
+// whenReady gates every rollup COMPUTE on the anonymous-user set being hydrated (the last link of
+// the init chain below, while server.listen() is already serving). The rollup stores member names.
+const statsStore = makeStatsStore({ pgPool, fxRates, whenReady: () => settings.whenAnonymousReady() });
 
 // One-time tenant-hunt OBS rebrand migration (__mod_hunt__ → __tenant_hunt__). Runs after hunts
 // are loaded (initPersistence) so it can re-key live state; the settings copy self-ensures its
