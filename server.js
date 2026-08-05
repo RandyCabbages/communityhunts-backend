@@ -292,6 +292,19 @@ const { hunts, archive, shareTokens, persistHunts, persistArchive, persistShareT
 // tables, the name-lookup helpers, and the startup backfill. Needs hunts (by reference) for backfill.
 const settings = require('./lib/settings');
 settings.initSettings({ pgPool, hunts });
+// Arm the anonymity gate HERE, not only at the end of the init chain below. `anonReady` is null
+// until loadAnonymousUsers is INVOKED, and while it is null whenAnonymousReady() resolves
+// instantly — so everything from server.listen() (which runs synchronously, far below) until the
+// chain's fifth link was ungated. That window is the whole of initPersistence (~2.63s per boot),
+// migrateSharedHuntKeys and ensureTables' DDL round-trips, and STATS_VERSION forces a recompute on
+// the first read of every cached row: one stats request in there caches an anonymous member's real
+// name at the current version stamp, where nothing ever recomputes it. Every deploy, not a rare race.
+//
+// The chain's later call stays and is NOT redundant: initSettings fires its
+// `CREATE TABLE IF NOT EXISTS user_settings` asynchronously, so on a FRESH database this early read
+// races that DDL and degrades to the empty fallback. The later one runs after the table exists and
+// re-hydrates. Never rejects; the catch is belt-and-braces.
+settings.loadAnonymousUsers().catch(() => {});
 const { recordKnownUser } = settings;  // called from the auth callback / Bearer middleware
 
 // Admin-confirmed name→account decisions, held in memory so the hunt save path can replay them
@@ -324,6 +337,8 @@ persistence.initPersistence({ pgPool, normalizeSlot, statsStore })
   .then(() => migrateSharedHuntKeys({ hunts, pgPool, persistHunts }))
   .then(() => statsStore.ensureTables())
   .then(() => settings.startupBackfill())
+  // Second hydration on purpose — the gate is already armed next to initSettings above; this one
+  // re-reads once user_settings is guaranteed to exist (fresh database). See the note up there.
   .then(() => settings.loadAnonymousUsers())   // hydrate the anonymous-user set for name redaction
   .catch(e => console.error('[persist] init error:', e.message));
 
