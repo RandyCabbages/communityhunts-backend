@@ -21640,6 +21640,11 @@
     "thumb": "https://cdn.rainbet.com/slots/play-n-go-sticky-joker.jpg"
   },
   {
+    "rainbetSlug": "play-n-go-stompin-gold",
+    "name": "Stompin' Gold",
+    "thumb": "https://cdn.softswiss.net/i/s4/playngo/StompinGold.webp"
+  },
+  {
     "rainbetSlug": "playn-go-street-magic",
     "name": "Street Magic",
     "thumb": "https://cdn.rainbet.com/slots/play-n-go-street-magic.jpg"
@@ -38050,8 +38055,53 @@
     "thumb": "https://cdn.rainbet.com/slots/Zeus Treasures.png"
   },
   {
-    "rainbetSlug": "play-n-go-stompin-gold",
-    "name": "Stompin' Gold",
-    "thumb": "https://cdn.softswiss.net/i/s4/playngo/StompinGold.webp"
+    "rainbetSlug": "belatra-yo-ho-ho-2048",
+    "name": "Yo-ho-ho 2048",
+    "thumb": "https://thumbs.alea.com/1cd238d9_belatra_yohoho-2048_400x400.webp"
+  },
+  {
+    "rainbetSlug": "amigo-gaming-royal-invaders",
+    "name": "Royal Invaders",
+    "thumb": "https://thumbs.alea.com/bd744b92_amigo-gaming_royal-invaders_400x400.webp"
+  },
+  {
+    "rainbetSlug": "mascot-gaming-poseidon-the-deep-king",
+    "name": "Poseidon the Deep King",
+    "thumb": "https://usercontent.cc/i/s3/mascot/poseidon_the_deep_king.png"
+  },
+  {
+    "rainbetSlug": "1spin4win-burning-spins-243",
+    "name": "Burning Spins 243",
+    "thumb": "https://usercontent.cc/i/s3/1spin4win/BurningSpins243.png"
+  },
+  {
+    "rainbetSlug": "platipus-volcano-coins",
+    "name": "Volcano Coins",
+    "thumb": "https://usercontent.cc/i/s3/platipus/volcanocoins.png"
+  },
+  {
+    "rainbetSlug": "3-oaks-coin-up-volcano",
+    "name": "Coin UP Volcano",
+    "thumb": "https://usercontent.cc/i/s3/3oaks/coinup_volcano.png"
+  },
+  {
+    "rainbetSlug": "peter-sons-bear-patrol",
+    "name": "Bear Patrol",
+    "thumb": "https://usercontent.cc/i/s3/peterandsons/BearPatrol.png"
+  },
+  {
+    "rainbetSlug": "clawbuster-midnight-vault-holdwin",
+    "name": "Midnight Vault: Hold&Win",
+    "thumb": "https://usercontent.cc/i/s3/clawbuster/MIDNIGHT_VAULT.png"
+  },
+  {
+    "rainbetSlug": "spinomenal-majestic-kong",
+    "name": "Majestic Kong",
+    "thumb": "https://usercontent.cc/i/s3/spnmnl/MajesticKong.png"
+  },
+  {
+    "rainbetSlug": "zillion-joker-crazy-wheel",
+    "name": "Joker Crazy Wheel",
+    "thumb": "https://usercontent.cc/i/s3/zillion/JokerCrazyWheel.png"
   }
 ]
