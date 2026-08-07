@@ -395,10 +395,26 @@ function isPrivilegedViewer(viewerId, hunt) {
   const tenant = tenants.getTenantBySlug(huntsCore.tenantOf(hunt)) || tenants.BEAN_TENANT;
   return tenants.isTenantMod(u, tenant);
 }
+// The badge roster for a hunt — the same four sources GET /api/badges publishes. publicHuntView
+// uses it to order badged callers ahead of the pack on EVERY public surface (share page, live
+// watchers over REST and socket, overlay). The tenant comes from the HUNT, never req.tenant: a
+// share link is opened by outsiders and a socket frame has no request at all. A lazy closure, so
+// it reads whatever tenants/supporters hold at call time rather than at wiring time.
+const badgeRosterForHunt = (h) => {
+  const t = tenants.getTenantBySlug(huntsCore.tenantOf(h)) || tenants.BEAN_TENANT;
+  return {
+    owners: tenants.PLATFORM_OWNER_IDS || [],
+    king: (t && t.hostDiscordId) || null,
+    mods: (t && t.modIds) || [],
+    supporters: supporters.getSupporterIds(),
+  };
+};
+
 huntsCore.initHuntsCore({
   hunts, archive, viewers, io, persistHunts,
   isAnonymousUser: settings.isAnonymousUser, isPrivilegedViewer,
   shouldMaskIdentity: settings.shouldMaskIdentity,
+  badgeRosterFor: badgeRosterForHunt,
 });
 const {
   MOD_HUNT_ID, AFFILIATE_HUNT_ID, VIP_HUNT_ID, modHuntKey, affiliateHuntKey, vipHuntKey,
@@ -662,14 +678,6 @@ app.use(require('./routes/share.routes')({
   // HUNT, not req.tenant — a share link is opened by outsiders and may carry no slug at all.
   equippedCardsFor: require('./lib/shareCards').equippedCardsFor,
   tenantForHunt: h => tenants.getTenantBySlug(huntsCore.tenantOf(h)) || tenants.BEAN_TENANT,
-  // The badge roster for that tenant — the same four sources GET /api/badges publishes. Lets the
-  // public share page order badged callers the way the host's tracker does (lib/callPriority.js).
-  badgeRosterFor: t => ({
-    owners: tenants.PLATFORM_OWNER_IDS || [],
-    king: (t && t.hostDiscordId) || null,
-    mods: (t && t.modIds) || [],
-    supporters: supporters.getSupporterIds(),
-  }),
 }));
 
 // ── Stale-hunt janitor ─────────────────────────────────────────────
