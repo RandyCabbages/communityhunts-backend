@@ -140,6 +140,11 @@
     "thumb": "https://cdn.rainbet.com/slots/Buffalo’s Wealth Win Spins.jpg"
   },
   {
+    "rainbetSlug": "1spin4win-burning-spins-243",
+    "name": "Burning Spins 243",
+    "thumb": "https://usercontent.cc/i/s3/1spin4win/BurningSpins243.png"
+  },
+  {
     "rainbetSlug": "1spin4win-cash-amplifier-243",
     "name": "Cash Amplifier 243",
     "thumb": "https://cdn.rainbet.com/slots/Cash Amplifier 243.jpg"
@@ -1335,6 +1340,11 @@
     "thumb": "https://cdn.rainbet.com/slots/Coin UP_ Lightning 333.png"
   },
   {
+    "rainbetSlug": "3-oaks-coin-up-volcano",
+    "name": "Coin UP Volcano",
+    "thumb": "https://usercontent.cc/i/s3/3oaks/coinup_volcano.png"
+  },
+  {
     "rainbetSlug": "3-oaks-coin-volcano",
     "name": "Coin Volcano",
     "thumb": "https://cdn.rainbet.com/slots/Coin Volcano.jpg"
@@ -2403,6 +2413,11 @@
     "rainbetSlug": "amigo-gaming-regal-fruits-5",
     "name": "Regal Fruits 5",
     "thumb": "https://cdn.rainbet.com/slots/Regal Fruits 5.png"
+  },
+  {
+    "rainbetSlug": "amigo-gaming-royal-invaders",
+    "name": "Royal Invaders",
+    "thumb": "https://thumbs.alea.com/bd744b92_amigo-gaming_royal-invaders_400x400.webp"
   },
   {
     "rainbetSlug": "amigo-gaming-samurai-cats",
@@ -3813,6 +3828,11 @@
     "rainbetSlug": "belatra-x-towers",
     "name": "X Towers",
     "thumb": "https://cdn.rainbet.com/slots/X Towers0000.jpg"
+  },
+  {
+    "rainbetSlug": "belatra-yo-ho-ho-2048",
+    "name": "Yo-ho-ho 2048",
+    "thumb": "https://thumbs.alea.com/1cd238d9_belatra_yohoho-2048_400x400.webp"
   },
   {
     "rainbetSlug": "belatra-zombie-town",
@@ -7628,6 +7648,11 @@
     "rainbetSlug": "clawbuster-lucky-tiger-claw",
     "name": "Lucky Tiger Claw",
     "thumb": "https://cdn.rainbet.com/slots/Lucky Tiger Claw 9999.png"
+  },
+  {
+    "rainbetSlug": "clawbuster-midnight-vault-holdwin",
+    "name": "Midnight Vault: Hold&Win",
+    "thumb": "https://usercontent.cc/i/s3/clawbuster/MIDNIGHT_VAULT.png"
   },
   {
     "rainbetSlug": "clawbuster-olympus-bonanza-claw",
@@ -14615,6 +14640,11 @@
     "thumb": "https://cdn.rainbet.com/slots/Plinko Pop x.png"
   },
   {
+    "rainbetSlug": "mascot-gaming-poseidon-the-deep-king",
+    "name": "Poseidon the Deep King",
+    "thumb": "https://usercontent.cc/i/s3/mascot/poseidon_the_deep_king.png"
+  },
+  {
     "rainbetSlug": "mascot-gaming-primal-bet-rockways",
     "name": "Primal Bet. Rockways",
     "thumb": "https://cdn.rainbet.com/slots/Primal Bet. Rockways x.png"
@@ -17905,6 +17935,11 @@
     "thumb": "https://cdn.rainbet.com/slots/Barbarossa Revengeax.png"
   },
   {
+    "rainbetSlug": "peter-sons-bear-patrol",
+    "name": "Bear Patrol",
+    "thumb": "https://usercontent.cc/i/s3/peterandsons/BearPatrol.png"
+  },
+  {
     "rainbetSlug": "peter-sons-big-bounty-bandits-3-pots",
     "name": "Big Bounty Bandits: 3 Pots",
     "thumb": "https://cdn.rainbet.com/slots/Big%20Bounty%20Bandits_%203%20Pots.png"
@@ -19528,6 +19563,11 @@
     "rainbetSlug": "platipus-un-dia-de-muertos",
     "name": "Un Dia de Muertos",
     "thumb": "https://usercontent.cc/i/s3/platipus/undiademuertos.png"
+  },
+  {
+    "rainbetSlug": "platipus-volcano-coins",
+    "name": "Volcano Coins",
+    "thumb": "https://usercontent.cc/i/s3/platipus/volcanocoins.png"
   },
   {
     "rainbetSlug": "platipus-ways-of-the-gauls",
@@ -32425,6 +32465,11 @@
     "thumb": "https://cdn.rainbet.com/slots/spinomenal-majestic-king-sunset.jpg"
   },
   {
+    "rainbetSlug": "spinomenal-majestic-kong",
+    "name": "Majestic Kong",
+    "thumb": "https://usercontent.cc/i/s3/spnmnl/MajesticKong.png"
+  },
+  {
     "rainbetSlug": "spinomenal-majestic-lemure",
     "name": "Majestic Lemure",
     "thumb": "https://cdn.rainbet.com/slots/Majestic Lemure.png"
@@ -37860,6 +37905,11 @@
     "thumb": "https://cdn.rainbet.com/slots/zillion-jasmines-treasures.jpg"
   },
   {
+    "rainbetSlug": "zillion-joker-crazy-wheel",
+    "name": "Joker Crazy Wheel",
+    "thumb": "https://usercontent.cc/i/s3/zillion/JokerCrazyWheel.png"
+  },
+  {
     "rainbetSlug": "zillion-jurassic-fight",
     "name": "Jurassic Fight",
     "thumb": "https://cdn.rainbet.com/slots/zillion-jurassic-fight.jpg"
@@ -38055,53 +38105,28 @@
     "thumb": "https://cdn.rainbet.com/slots/Zeus Treasures.png"
   },
   {
-    "rainbetSlug": "belatra-yo-ho-ho-2048",
-    "name": "Yo-ho-ho 2048",
-    "thumb": "https://thumbs.alea.com/1cd238d9_belatra_yohoho-2048_400x400.webp"
+    "rainbetSlug": "novomatic-phoenix-hit-hotfire-hold-win-buy-bonus",
+    "name": "Phoenix HIT Hotfire Hold & Win Buy Bonus",
+    "thumb": "https://usercontent.cc/i/s3/n2games/PhoenixHITHotfireHoldAndWinBuyBonus.png"
   },
   {
-    "rainbetSlug": "amigo-gaming-royal-invaders",
-    "name": "Royal Invaders",
-    "thumb": "https://thumbs.alea.com/bd744b92_amigo-gaming_royal-invaders_400x400.webp"
+    "rainbetSlug": "toucan-royale-burning-riches-hold-win",
+    "name": "Burning Riches: Hold & Win",
+    "thumb": "https://usercontent.cc/i/s3/n2games/BurningRichesHoldAndWin.png"
   },
   {
-    "rainbetSlug": "mascot-gaming-poseidon-the-deep-king",
-    "name": "Poseidon the Deep King",
-    "thumb": "https://usercontent.cc/i/s3/mascot/poseidon_the_deep_king.png"
+    "rainbetSlug": "happy-duck-big-catch-cluck",
+    "name": "Big Catch Cluck",
+    "thumb": "https://usercontent.cc/i/s3/n2games/BigCatchCluck.png"
   },
   {
-    "rainbetSlug": "1spin4win-burning-spins-243",
-    "name": "Burning Spins 243",
-    "thumb": "https://usercontent.cc/i/s3/1spin4win/BurningSpins243.png"
+    "rainbetSlug": "penguin-king-piggy-bankroll-vault-smash",
+    "name": "Piggy Bankroll: Vault Smash",
+    "thumb": "https://usercontent.cc/i/s3/penguinking/PiggyBankrollVaultSmash.png"
   },
   {
-    "rainbetSlug": "platipus-volcano-coins",
-    "name": "Volcano Coins",
-    "thumb": "https://usercontent.cc/i/s3/platipus/volcanocoins.png"
-  },
-  {
-    "rainbetSlug": "3-oaks-coin-up-volcano",
-    "name": "Coin UP Volcano",
-    "thumb": "https://usercontent.cc/i/s3/3oaks/coinup_volcano.png"
-  },
-  {
-    "rainbetSlug": "peter-sons-bear-patrol",
-    "name": "Bear Patrol",
-    "thumb": "https://usercontent.cc/i/s3/peterandsons/BearPatrol.png"
-  },
-  {
-    "rainbetSlug": "clawbuster-midnight-vault-holdwin",
-    "name": "Midnight Vault: Hold&Win",
-    "thumb": "https://usercontent.cc/i/s3/clawbuster/MIDNIGHT_VAULT.png"
-  },
-  {
-    "rainbetSlug": "spinomenal-majestic-kong",
-    "name": "Majestic Kong",
-    "thumb": "https://usercontent.cc/i/s3/spnmnl/MajesticKong.png"
-  },
-  {
-    "rainbetSlug": "zillion-joker-crazy-wheel",
-    "name": "Joker Crazy Wheel",
-    "thumb": "https://usercontent.cc/i/s3/zillion/JokerCrazyWheel.png"
+    "rainbetSlug": "avatarux-3-chili-charms",
+    "name": "3 Chili Charms",
+    "thumb": "https://usercontent.cc/i/s3/avatarux/3ChiliCharms.png"
   }
 ]
