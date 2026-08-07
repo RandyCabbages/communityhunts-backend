@@ -1,5 +1,4 @@
 const express = require('express');
-const { withCallPriority } = require('../lib/callPriority');
 
 // Share-link routes: a STABLE, per-streamer token resolves to that streamer's current
 // (or most recent) hunt as a public, read-only overview. The token lives in an owner-keyed
@@ -7,7 +6,7 @@ const { withCallPriority } = require('../lib/callPriority');
 // durable handle for "this streamer's hunt" rather than one ephemeral hunt instance.
 module.exports = (deps) => {
   const { requireAuth, canEditHunt, isEquityMember, hunts, archive, publicHuntView,
-          shareTokens, shareLinks, equippedCardsFor, tenantForHunt, badgeRosterFor } = deps;
+          shareTokens, shareLinks, equippedCardsFor, tenantForHunt } = deps;
   const router = express.Router();
 
   // Mint (or return the existing) stable share token for the caller's own hunt. Editor-gated.
@@ -73,18 +72,12 @@ module.exports = (deps) => {
       ? pv.equity.map(e => (e && !e.anonymous) ? { ...e, cosmeticCard: cards[e.id] || null } : e)
       : pv.equity;
 
-    // Same raw-hunt resolution as the cards above: mark which calls belong to a badged caller so
-    // the public queue orders them the way the host's tracker does. publicHuntView strips
-    // callerId, so the page cannot derive this itself and its "UP NEXT" drifted from the
-    // streamer's. Cosmetic ordering only — a failure degrades to an unprioritized queue.
-    let calls = pv.calls;
-    if (badgeRosterFor) {
-      try {
-        calls = withCallPriority(pv.calls, hunt.calls, badgeRosterFor(tenant));
-      } catch (e) { console.error('[share] call priority lookup failed -', e && e.message); }
-    }
-
-    res.json({ hunt: { ...pv, equity, calls, canAddCalls }, frozen: !!hunt.archivedAt, ownerId });
+    // Call ordering (`priority` + `callerKey`) is attached inside publicHuntView — see
+    // publicCallRows in lib/hunts-core.js. It used to be zipped on HERE, which covered the share
+    // page and nothing else: a live watcher on /hunt/:userId gets the same masked calls over
+    // REST *and* over the hunt:update socket, and neither passed through this route. Doing it in
+    // one place is also what stops the two from drifting again.
+    res.json({ hunt: { ...pv, equity, calls: pv.calls, canAddCalls }, frozen: !!hunt.archivedAt, ownerId });
   });
 
   return router;
